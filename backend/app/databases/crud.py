@@ -5,6 +5,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
+import io
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
@@ -13,8 +14,12 @@ import numpy as np
 from fastapi import HTTPException
 try:  # pragma: no cover - optional dependency
     from matplotlib import cm
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
 except ImportError:  # pragma: no cover - optional dependency
     cm = None  # type: ignore[assignment]
+    FigureCanvasAgg = None  # type: ignore[assignment]
+    Figure = None  # type: ignore[assignment]
 
 DATABASE_DIR = Path(__file__).resolve().parent
 TIFF_STORAGE_DIR = Path(__file__).resolve().parents[1] / "tiff_manager"
@@ -257,6 +262,52 @@ def _apply_jet_colormap(png_blob: bytes) -> bytes:
     bgr_uint8 = cv2.cvtColor(rgb_uint8, cv2.COLOR_RGB2BGR)
     ok, buf = cv2.imencode(".png", bgr_uint8)
     return bytes(buf) if ok else png_blob
+
+
+def render_histogram_png(db_name: str, record_id: int, bins: int = 256) -> bytes:
+    """Generate a histogram PNG for the specified ROI using matplotlib."""
+    if Figure is None or FigureCanvasAgg is None:
+        raise HTTPException(status_code=500, detail="ヒストグラム描画にはmatplotlibが必要です。")
+    if record_id <= 0:
+        raise HTTPException(status_code=400, detail="record_id は1以上で指定してください。")
+    if bins < 2 or bins > 1024:
+        raise HTTPException(status_code=400, detail="bins は2以上1024以下で指定してください。")
+
+    db_path = _resolve_db_path(db_name)
+    png_blob: bytes | None = None
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT png_blob FROM roi_records WHERE id = ?", (record_id,)).fetchone()
+            if row:
+                png_blob = row["png_blob"]
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=f"データベース読込中にエラー: {exc}") from exc
+
+    if not png_blob:
+        raise HTTPException(status_code=404, detail="指定されたレコードが見つかりません。")
+
+    array = np.frombuffer(png_blob, dtype=np.uint8)
+    if array.size == 0:
+        raise HTTPException(status_code=500, detail="ROI画像データが壊れています。")
+    gray = cv2.imdecode(array, cv2.IMREAD_GRAYSCALE)
+    if gray is None:
+        raise HTTPException(status_code=500, detail="ROI画像を読み込めませんでした。")
+
+    flat = gray.flatten()
+    fig = Figure(figsize=(4.5, 2.5), dpi=200, facecolor="white")
+    canvas = FigureCanvasAgg(fig)
+    ax = fig.add_subplot(1, 1, 1)
+    ax.hist(flat, bins=bins, range=(0, 255), color="#4F46E5", edgecolor="none")
+    ax.set_xlim(0, 255)
+    ax.set_xlabel("Intensity (0-255)", fontsize=10)
+    ax.set_ylabel("Frequency", fontsize=10)
+    ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.35)
+    fig.tight_layout(pad=0.6)
+
+    buffer = io.BytesIO()
+    canvas.print_png(buffer)
+    return buffer.getvalue()
 
 
 def _render_png_blob(png_blob: bytes, render_mode: RenderMode) -> bytes:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import Literal
@@ -96,6 +96,17 @@ async def list_roi_records(
 ) -> list[ROIRecordResponse]:
     """Return ROI record PNGs stored inside the selected SQLite database."""
     return crud.list_roi_record_images(db_name=db_name, skip=skip, limit=limit, render_mode=render_mode)
+
+
+@router.get("/{db_name}/records/{record_id}/histogram", response_class=Response, responses={200: {"content": {"image/png": {}}}})
+async def get_roi_histogram(
+    db_name: str,
+    record_id: int,
+    bins: int = Query(256, ge=2, le=1024, description="Number of histogram bins to render"),
+) -> Response:
+    """Render a brightness histogram for the specified ROI record using matplotlib."""
+    png_bytes = crud.render_histogram_png(db_name=db_name, record_id=record_id, bins=bins)
+    return Response(content=png_bytes, media_type="image/png")
 
 
 @router.get("/{db_name}")

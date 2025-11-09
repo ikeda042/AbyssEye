@@ -59,7 +59,7 @@ const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 const RECORD_BATCH_SIZE = 60;
 const PAGE_SCALE = 1.1;
 const PAGE_SCALE_WIDTH_PERCENT = `${100 / PAGE_SCALE}%`;
-type PreviewMode = "normalized" | "jet" | "inference";
+type PreviewMode = "normalized" | "jet" | "histogram" | "inference";
 
 type InferenceModelEntry = {
   name: string;
@@ -273,12 +273,19 @@ const deriveRoiBounds = (meta: NormalizedRoiMeta | null): RoiBounds | null => {
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
+type ProcessedPreviewsState = {
+  normalized: string | null;
+  jet: string | null;
+  isProcessing: boolean;
+  error: string | null;
+};
+
 const useProcessedPreviews = (imageSrc: string | null) => {
-  const [state, setState] = useState({
-    normalized: null as string | null,
-    jet: null as string | null,
+  const [state, setState] = useState<ProcessedPreviewsState>({
+    normalized: null,
+    jet: null,
     isProcessing: false,
-    error: null as string | null,
+    error: null,
   });
 
   useEffect(() => {
@@ -476,8 +483,19 @@ const SingleCellPage = () => {
   const [isInferenceLoading, setIsInferenceLoading] = useState(false);
   const [inferenceError, setInferenceError] = useState<string | null>(null);
   const inferenceCacheRef = useRef(new Map<string, InferenceResultPayload>());
+  const [histogramSrc, setHistogramSrc] = useState<string | null>(null);
+  const [histogramError, setHistogramError] = useState<string | null>(null);
+  const [isHistogramLoading, setIsHistogramLoading] = useState(false);
+  const histogramUrlRef = useRef<string | null>(null);
+  const revokeHistogramUrl = useCallback(() => {
+    if (histogramUrlRef.current) {
+      URL.revokeObjectURL(histogramUrlRef.current);
+      histogramUrlRef.current = null;
+    }
+  }, []);
 
   const currentRecord = records[currentIndex] ?? null;
+  const currentRecordId = currentRecord?.record_id ?? null;
   const totalCount = overview?.record_count ?? records.length;
   const rawImageSrc = useMemo(() => (currentRecord ? `data:image/png;base64,${currentRecord.png_base64}` : null), [currentRecord]);
   const processedPreviews = useProcessedPreviews(rawImageSrc);
@@ -493,10 +511,20 @@ const SingleCellPage = () => {
   const canUseInference = Boolean(
     hasInferenceModels && selectedModelPath && isRecordReady && !isActivatingModel && !isModelsLoading,
   );
-  const drawModeDescription =
-    drawMode === "inference"
-      ? "選択したモデルでROIを推論し、結果を表示します。"
-      : "raw画像を正規化またはJetカラーマップで表示します。";
+  const drawModeDescription = useMemo(() => {
+    switch (drawMode) {
+      case "normalized":
+        return "raw画像の輝度をmin-max正規化して表示します。";
+      case "jet":
+        return "raw画像をJetカラーマップでカラー表示します。";
+      case "histogram":
+        return "0-255の輝度分布をヒストグラムとして表示します。";
+      case "inference":
+        return "選択したモデルでROIを推論し、結果を表示します。";
+      default:
+        return "";
+    }
+  }, [drawMode]);
   const previewContainerSx = useMemo(
     () => ({
       flex: 1,
@@ -701,6 +729,13 @@ const SingleCellPage = () => {
     setInferenceError(null);
   }, [dbName]);
 
+  useEffect(
+    () => () => {
+      revokeHistogramUrl();
+    },
+    [revokeHistogramUrl],
+  );
+
   useEffect(() => {
     if (drawMode === "inference" && !hasInferenceModels) {
       setDrawMode("normalized");
@@ -779,6 +814,69 @@ const SingleCellPage = () => {
       controller.abort();
     };
   }, [drawMode, dbName, currentRecord?.record_id, selectedModelPath, hasInferenceModels, isActivatingModel]);
+
+  useEffect(() => {
+    if (drawMode !== "histogram" || !dbName || !currentRecordId) {
+      revokeHistogramUrl();
+      setHistogramSrc(null);
+      setHistogramError(null);
+      setIsHistogramLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setIsHistogramLoading(true);
+    setHistogramError(null);
+    setHistogramSrc(null);
+    const requestUrl = endpoint(`databases/${encodeURIComponent(dbName)}/records/${currentRecordId}/histogram`);
+    fetch(requestUrl, {
+      headers: { Accept: "image/png" },
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          let message = "ヒストグラムの取得に失敗しました。";
+          try {
+            const payload: { detail?: string } = await response.json();
+            if (payload?.detail) {
+              message = payload.detail;
+            }
+          } catch {
+            // ignore JSON errors
+          }
+          throw new Error(message);
+        }
+        return response.blob();
+      })
+      .then((blob) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        if (blob.size === 0) {
+          throw new Error("ヒストグラム画像が空でした。");
+        }
+        const url = URL.createObjectURL(blob);
+        revokeHistogramUrl();
+        histogramUrlRef.current = url;
+        setHistogramSrc(url);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setHistogramSrc(null);
+        setHistogramError(err instanceof Error ? err.message : "ヒストグラムの取得に失敗しました。");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsHistogramLoading(false);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [drawMode, dbName, currentRecordId, revokeHistogramUrl]);
 
   useEffect(() => {
     if (!dbName) {
@@ -997,6 +1095,9 @@ const SingleCellPage = () => {
                     <ToggleButton value="jet" disabled={!isRecordReady || (!processedPreviews.jet && !processedPreviews.isProcessing)}>
                       Jet
                     </ToggleButton>
+                    <ToggleButton value="histogram" disabled={!isRecordReady}>
+                      8bit
+                    </ToggleButton>
                     <ToggleButton value="inference" disabled={!canUseInference}>
                       推論
                     </ToggleButton>
@@ -1126,6 +1227,37 @@ const SingleCellPage = () => {
                         )}
                     </Box>
                   </Stack>
+                ) : drawMode === "histogram" ? (
+                  <>
+                    <Box sx={previewContainerSx}>
+                      {!isRecordReady && (
+                        <Typography variant="body2" color="text.secondary">
+                          レコードを読み込み中です…
+                        </Typography>
+                      )}
+                      {isRecordReady && isHistogramLoading && (
+                        <CircularProgress size={32} sx={{ position: "absolute" }} />
+                      )}
+                      {isRecordReady && !isHistogramLoading && histogramSrc && (
+                        <Box
+                          component="img"
+                          src={histogramSrc}
+                          alt={`Record ${currentRecord?.record_id ?? ""} histogram`}
+                          sx={{ maxHeight: 420, width: "100%", objectFit: "contain" }}
+                        />
+                      )}
+                      {isRecordReady && !isHistogramLoading && histogramError && (
+                        <Typography variant="body2" color="error" textAlign="center">
+                          {histogramError}
+                        </Typography>
+                      )}
+                      {isRecordReady && !isHistogramLoading && !histogramSrc && !histogramError && (
+                        <Typography variant="body2" color="text.secondary">
+                          ヒストグラムを生成できませんでした。
+                        </Typography>
+                      )}
+                    </Box>
+                  </>
                 ) : (
                   <>
                     <Box sx={previewContainerSx}>
@@ -1151,12 +1283,12 @@ const SingleCellPage = () => {
                         </Typography>
                       )}
                     </Box>
-                    {isRecordReady && processedPreviews.error && (
-                      <Typography variant="caption" color="error">
-                        {processedPreviews.error}
-                      </Typography>
-                    )}
                   </>
+                )}
+                {drawMode !== "inference" && drawMode !== "histogram" && isRecordReady && processedPreviews.error && (
+                  <Typography variant="caption" color="error">
+                    {processedPreviews.error}
+                  </Typography>
                 )}
               </Box>
             </Stack>
