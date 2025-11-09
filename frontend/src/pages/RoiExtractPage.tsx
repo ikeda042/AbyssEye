@@ -13,6 +13,7 @@ import {
 } from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import DoneAllIcon from "@mui/icons-material/DoneAll";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 
 import { API_BASE_URL } from "../config";
 
@@ -311,6 +312,18 @@ const RoiExtractPage = () => {
                     />
                     <ResultRow label="DBファイルサイズ" value={formatFileSize(result.db_size_bytes)} />
                     <ResultRow label="保存時刻" value={formatDateTime(result.saved_at)} />
+                    <Box sx={{ pt: 1.5 }}>
+                      <Button
+                        variant="contained"
+                        color="primary"
+                        endIcon={<OpenInNewIcon />}
+                        component={RouterLink}
+                        to={`/databases?db_name=${encodeURIComponent(result.db_name)}`}
+                        sx={{ borderRadius: 0 }}
+                      >
+                        データベース一覧で確認
+                      </Button>
+                    </Box>
                   </Stack>
                 </Box>
               )}
