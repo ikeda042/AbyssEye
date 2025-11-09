@@ -32,6 +32,7 @@ class RoiRecord(Base):
     image_width_px = Column(Integer, nullable=False)
     image_height_px = Column(Integer, nullable=False)
     png_blob = Column(LargeBinary, nullable=False)
+    manual_label = Column(String, nullable=True)
 
 
 class ROIExtractor:
@@ -185,6 +186,7 @@ class ROIExtractor:
                     png_blob=png_bytes,
                     image_width_px=int(resolved_width),
                     image_height_px=int(resolved_height),
+                    manual_label=None,
                 )
                 session.add(record)
 
