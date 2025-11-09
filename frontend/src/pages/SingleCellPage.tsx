@@ -475,15 +475,6 @@ const SingleCellPage = () => {
           </Typography>
         </Breadcrumbs>
 
-        <Box>
-          <Typography variant="h5" fontWeight={600}>
-            Single Cell Viewer
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {dbName} 内のROIレコードを1件ずつ確認できます。Enterで次へ、Spaceで前へ移動します。
-          </Typography>
-        </Box>
-
         {overviewError && (
           <Alert severity="error" variant="outlined">
             {overviewError}
