@@ -41,6 +41,19 @@ const AppHeader = () => {
     >
       <Toolbar sx={{ px: { xs: 1, sm: 2, md: 3, lg: 4 }, gap: 1.5 }}>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexGrow: 1 }}>
+          <Box
+            component="img"
+            src="/logo.png"
+            alt="AbyssEye logo"
+            title="Go to home"
+            onClick={handleHomeClick}
+            sx={{
+              height: 32,
+              width: "auto",
+              cursor: isHome ? "default" : "pointer",
+              userSelect: "none",
+            }}
+          />
           {!isHome && (
             <IconButton
               edge="start"
