@@ -6,6 +6,7 @@ import RoiExtractPage from "./pages/RoiExtractPage";
 import DatabasesPage from "./pages/DatabasesPage";
 import DatabaseOverviewPage from "./pages/DatabaseOverviewPage";
 import SingleCellPage from "./pages/SingleCellPage";
+import InferencePage from "./pages/InferencePage";
 import AppHeader from "./AppHeader";
 
 const theme = createTheme({
@@ -48,6 +49,7 @@ const App = () => {
             <Route path="/databases" element={<DatabasesPage />} />
             <Route path="/databases/overview" element={<DatabaseOverviewPage />} />
             <Route path="/databases/single-cell" element={<SingleCellPage />} />
+            <Route path="/inference" element={<InferencePage />} />
           </Routes>
         </Box>
       </BrowserRouter>

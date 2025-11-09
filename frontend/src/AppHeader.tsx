@@ -16,6 +16,9 @@ const AppHeader = () => {
     "/tiff-manager": "TIFF Manager",
     "/roi-extract": "ROI Extractor",
     "/databases": "ROI Databases",
+    "/databases/overview": "Database Overview",
+    "/databases/single-cell": "Single Cell Viewer",
+    "/inference": "Bulk Inference",
   };
 
   const currentTitle = routeTitles[location.pathname] ?? "JAMSTEC Console";

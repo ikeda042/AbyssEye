@@ -26,6 +26,7 @@ import SearchIcon from "@mui/icons-material/Search";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import SlideshowIcon from "@mui/icons-material/Slideshow";
+import ScienceIcon from "@mui/icons-material/Science";
 import { API_BASE_URL } from "../config";
 
 type DatabaseEntry = {
@@ -174,6 +175,11 @@ const DatabasesPage = () => {
     navigate(`/databases/single-cell?${params.toString()}`);
   };
 
+  const handleOpenInference = (dbName: string) => {
+    const params = new URLSearchParams({ db_name: dbName });
+    navigate(`/inference?${params.toString()}`);
+  };
+
   return (
     <Container
       maxWidth={false}
@@ -270,6 +276,7 @@ const DatabasesPage = () => {
                     <TableCell>サイズ</TableCell>
                     <TableCell>最終更新</TableCell>
                     <TableCell align="right">ダウンロード</TableCell>
+                    <TableCell align="center">Inference</TableCell>
                     <TableCell align="center">Single Cell</TableCell>
                     <TableCell align="center">overview</TableCell>
                   </TableRow>
@@ -302,6 +309,16 @@ const DatabasesPage = () => {
                           onClick={() => handleDownload(db.name)}
                         >
                           DL
+                        </Button>
+                      </TableCell>
+                      <TableCell align="center">
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          startIcon={<ScienceIcon fontSize="small" />}
+                          onClick={() => handleOpenInference(db.name)}
+                        >
+                          Inference
                         </Button>
                       </TableCell>
                       <TableCell align="center">
