@@ -199,11 +199,20 @@ const AnnotationPage = () => {
       if (event.key === "Enter") {
         event.preventDefault();
         handleNext();
+        return;
+      }
+      if (LABEL_OPTIONS.includes(event.key as typeof LABEL_OPTIONS[number])) {
+        event.preventDefault();
+        setRecords((prev) =>
+          prev.map((record, index) =>
+            index === currentIndex ? { ...record, manual_label: event.key } : record,
+          ),
+        );
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [currentRecord, handleNext]);
+  }, [currentRecord, currentIndex, handleNext]);
 
   if (!dbName) {
     return (
