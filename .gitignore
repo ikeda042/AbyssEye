@@ -3,6 +3,7 @@
 /Test_data
 *.tif
 *.png
+!frontend/public/logo.png
 *.db
 *.pyc
 __pycache__/
