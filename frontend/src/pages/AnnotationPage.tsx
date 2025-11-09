@@ -199,16 +199,11 @@ const AnnotationPage = () => {
       if (event.key === "Enter") {
         event.preventDefault();
         handleNext();
-        return;
-      }
-      if (["0", "1", "2", "3"].includes(event.key)) {
-        event.preventDefault();
-        handleAssignLabel(event.key, true);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [currentRecord, handleAssignLabel, handleNext]);
+  }, [currentRecord, handleNext]);
 
   if (!dbName) {
     return (
@@ -259,7 +254,7 @@ const AnnotationPage = () => {
             DB: {dbName}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Enterで次に進み、キーボードの 0 / 1 / 2 / 3 で manual_label を更新できます。
+            Enterで次に進み、ラベルは下のボタンから更新してください。（数字キーでは保存されません）
           </Typography>
         </Stack>
 
