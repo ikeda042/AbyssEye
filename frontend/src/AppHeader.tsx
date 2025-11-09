@@ -39,8 +39,8 @@ const AppHeader = () => {
         borderBottom: `1px solid ${HEADER_BORDER}`,
       }}
     >
-      <Toolbar sx={{ px: { xs: 1.5, sm: 2.5, md: 4, lg: 5 }, gap: 2 }}>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexGrow: 1 }}>
+      <Toolbar sx={{ px: { xs: 1, sm: 2, md: 3, lg: 4 }, gap: 1.5 }}>
+        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexGrow: 1 }}>
           {!isHome && (
             <IconButton
               edge="start"
@@ -49,7 +49,7 @@ const AppHeader = () => {
               onClick={handleHomeClick}
               sx={{
                 borderRadius: 0,
-                mr: 0.5,
+                mr: 0.25,
               }}
             >
               <HomeIcon fontSize="small" />
