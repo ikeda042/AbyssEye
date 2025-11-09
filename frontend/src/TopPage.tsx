@@ -66,9 +66,14 @@ const TopPage = () => {
           </Typography>
         </Box>
 
-        <Grid container spacing={3}>
+        <Grid
+          container
+          spacing={3}
+          justifyContent={{ xs: "stretch", md: "center" }}
+          alignItems="stretch"
+        >
           {cards.map((card) => (
-            <Grid item xs={12} sm={6} md={4} key={card.title}>
+            <Grid item xs={12} sm={6} md={5} key={card.title} sx={{ display: "flex" }}>
               <Card
                 elevation={5}
                 sx={{
