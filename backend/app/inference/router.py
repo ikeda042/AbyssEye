@@ -8,6 +8,17 @@ from . import crud
 router = APIRouter(prefix="/inference", tags=["inference"])
 
 
+class ModelInfo(BaseModel):
+    name: str = Field(..., description="models/ 配下での表示名")
+    relative_path: str = Field(..., description="models/ からの相対パス")
+    kind: str = Field(..., description="モデル形式 (saved_model, h5 など)")
+    is_active: bool = Field(False, description="現在選択中のモデルかどうか")
+
+
+class SetActiveModelRequest(BaseModel):
+    relative_path: str = Field(..., description="models/ 配下のパス（例: MyModel/export）")
+
+
 class InferenceRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded 48x48 ROI (data URL 形式も可)")
     model_path: str | None = Field(
@@ -30,6 +41,38 @@ class InferenceResponse(BaseModel):
     confidence: float = Field(..., description="predicted_class に対応する確信度 (0-1)")
     probabilities: list[float] = Field(..., description="各クラスの確率分布")
     model_path: str = Field(..., description="使用したモデルパス")
+
+
+def _serialize_model(model: crud.AvailableModel) -> ModelInfo:
+    return ModelInfo(
+        name=model.name,
+        relative_path=model.relative_path,
+        kind=model.kind,
+        is_active=model.is_active,
+    )
+
+
+@router.get("/models", response_model=list[ModelInfo])
+async def list_models() -> list[ModelInfo]:
+    """List SavedModels / weight files under the models/ directory."""
+    models = crud.list_available_models()
+    return [_serialize_model(model) for model in models]
+
+
+@router.get("/models/active", response_model=ModelInfo | None)
+async def get_active_model() -> ModelInfo | None:
+    """Return the currently selected model, if any."""
+    model = crud.get_active_model()
+    if not model:
+        return None
+    return _serialize_model(model)
+
+
+@router.put("/models/active", response_model=ModelInfo)
+async def set_active_model(request: SetActiveModelRequest) -> ModelInfo:
+    """Update the active model path (stored in-process)."""
+    model = crud.set_active_model(request.relative_path)
+    return _serialize_model(model)
 
 
 @router.post("/predict", response_model=InferenceResponse)
