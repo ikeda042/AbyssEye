@@ -276,9 +276,9 @@ const DatabasesPage = () => {
                     <TableCell>サイズ</TableCell>
                     <TableCell>最終更新</TableCell>
                     <TableCell align="right">ダウンロード</TableCell>
-                    <TableCell align="center">Inference</TableCell>
-                    <TableCell align="center">Single Cell</TableCell>
-                    <TableCell align="center">overview</TableCell>
+                    <TableCell align="center">推論</TableCell>
+                    <TableCell align="center">単細胞ビュー</TableCell>
+                    <TableCell align="center">概要</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -318,7 +318,7 @@ const DatabasesPage = () => {
                           startIcon={<ScienceIcon fontSize="small" />}
                           onClick={() => handleOpenInference(db.name)}
                         >
-                          Inference
+                          推論
                         </Button>
                       </TableCell>
                       <TableCell align="center">
@@ -328,7 +328,7 @@ const DatabasesPage = () => {
                           startIcon={<SlideshowIcon fontSize="small" />}
                           onClick={() => handleOpenSingleCell(db.name)}
                         >
-                          Viewer
+                          ビュー
                         </Button>
                       </TableCell>
                       <TableCell align="center">
@@ -338,7 +338,7 @@ const DatabasesPage = () => {
                           startIcon={<InfoOutlinedIcon fontSize="small" />}
                           onClick={() => handleOpenOverview(db.name)}
                         >
-                          overview
+                          概要
                         </Button>
                       </TableCell>
                     </TableRow>
