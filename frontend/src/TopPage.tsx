@@ -56,13 +56,13 @@ const TopPage = () => {
       <Container maxWidth="lg" sx={{ p: 0 }}>
         <Box textAlign="center" mb={6}>
           <Typography variant="overline" sx={{ letterSpacing: 4, color: "text.secondary" }}>
-            JAMSTEC Imaging Toolkit
+            AbyssEye Platform
           </Typography>
           <Typography variant="h3" sx={{ fontWeight: 600, mt: 1 }}>
-            Pick the tool you need
+            Image Analysis Starts Here
           </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
-            Select one of the available modules below to jump into the matching workflow.
+            Choose the module you need for ROI extraction, inference, or database management.
           </Typography>
         </Box>
 
