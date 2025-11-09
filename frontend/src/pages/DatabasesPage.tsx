@@ -191,7 +191,7 @@ const DatabasesPage = () => {
             Databases
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            生成済みのROI SQLiteファイルを検索し、詳細画面に遷移して中身を確認できます。
+            生成済みのROI SQLiteファイルを検索し、overview画面に遷移して中身を確認できます。
           </Typography>
         </Box>
 
@@ -265,7 +265,7 @@ const DatabasesPage = () => {
                     <TableCell>最終更新</TableCell>
                     <TableCell align="right">ダウンロード</TableCell>
                     <TableCell align="center">Single Cell</TableCell>
-                    <TableCell align="center">詳細</TableCell>
+                    <TableCell align="center">overview</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -315,7 +315,7 @@ const DatabasesPage = () => {
                           startIcon={<InfoOutlinedIcon fontSize="small" />}
                           onClick={() => handleOpenOverview(db.name)}
                         >
-                          詳細
+                          overview
                         </Button>
                       </TableCell>
                     </TableRow>

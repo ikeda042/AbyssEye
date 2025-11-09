@@ -252,7 +252,7 @@ const DatabaseOverviewPage = () => {
             データベースが指定されていません
           </Typography>
           <Typography color="text.secondary">
-            一覧ページからデータベースを選択し、「詳細」ボタンを押してこの画面に戻ってください。
+            一覧ページからデータベースを選択し、「overview」ボタンを押してこの画面に戻ってください。
           </Typography>
           <Button variant="contained" component={RouterLink} to="/databases" startIcon={<ArrowBackIcon />}>
             データベース一覧へ
