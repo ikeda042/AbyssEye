@@ -565,7 +565,7 @@ const InferencePage = () => {
                   <Box
                     sx={{
                       display: "grid",
-                      gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+                      gridTemplateColumns: "repeat(5, 1fr)",
                       gap: 1.5,
                     }}
                   >
