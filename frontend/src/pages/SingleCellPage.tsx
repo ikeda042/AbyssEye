@@ -50,6 +50,8 @@ type NormalizedRoiMeta = {
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 const RECORD_BATCH_SIZE = 60;
+const PAGE_SCALE = 1.1;
+const PAGE_SCALE_WIDTH_PERCENT = `${100 / PAGE_SCALE}%`;
 
 const formatBytes = (value?: number) => {
   if (typeof value !== "number" || Number.isNaN(value) || value <= 0) return "-";
@@ -427,8 +429,23 @@ const SingleCellPage = () => {
   const canGoPrev = currentIndex > 0;
   const canGoNext = currentIndex < records.length - 1 || hasMoreRecords;
 
+  const renderScaled = (content: ReactNode) => (
+    <Box sx={{ width: "100%", display: "flex", justifyContent: "center" }}>
+      <Box
+        sx={{
+          width: PAGE_SCALE_WIDTH_PERCENT,
+          transform: `scale(${PAGE_SCALE})`,
+          transformOrigin: "top center",
+          maxWidth: "100%",
+        }}
+      >
+        {content}
+      </Box>
+    </Box>
+  );
+
   if (!dbName) {
-    return (
+    return renderScaled(
       <Container maxWidth={false} sx={{ py: 3, px: { xs: 2, sm: 3, md: 4 } }}>
         <Stack spacing={2}>
           <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
@@ -456,11 +473,11 @@ const SingleCellPage = () => {
             </Stack>
           </Paper>
         </Stack>
-      </Container>
+      </Container>,
     );
   }
 
-  return (
+  return renderScaled(
     <Container maxWidth={false} sx={{ py: 3, px: { xs: 2, sm: 3, md: 4 } }}>
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
