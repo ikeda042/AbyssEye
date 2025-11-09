@@ -563,10 +563,6 @@ const SingleCellPage = () => {
     fetchRecords(dbName, 0);
   }, [dbName, fetchOverview, fetchRecords]);
 
-  useEffect(() => {
-    setDrawMode("normalized");
-  }, [rawImageSrc]);
-
   const handlePrev = useCallback(() => {
     setCurrentIndex((prev) => (prev > 0 ? prev - 1 : prev));
   }, []);
