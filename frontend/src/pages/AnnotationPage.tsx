@@ -461,9 +461,17 @@ const AnnotationPage = () => {
                   bgcolor: "#f8fafc",
                 }}
               >
-                <Typography variant="subtitle2" color="text.secondary">
-                  Rawプレビュー
-                </Typography>
+                <Stack
+                  direction="row"
+                  justifyContent="space-between"
+                  alignItems="center"
+                  sx={{ minHeight: 40 }}
+                >
+                  <Typography variant="subtitle2" color="text.secondary">
+                    Rawプレビュー
+                  </Typography>
+                  <Box sx={{ width: 120, height: 28 }} />
+                </Stack>
                 <Box
                   sx={{
                     flex: 1,
@@ -506,7 +514,12 @@ const AnnotationPage = () => {
                   bgcolor: "#f1f5f9",
                 }}
               >
-                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Stack
+                  direction="row"
+                  justifyContent="space-between"
+                  alignItems="center"
+                  sx={{ minHeight: 40 }}
+                >
                   <Typography variant="subtitle2" color="text.secondary">
                     加工プレビュー
                   </Typography>
