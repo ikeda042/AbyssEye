@@ -223,7 +223,7 @@ const RoiExtractPage = () => {
               </Stack>
 
               <Stack spacing={2}>
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems="stretch">
                   <Button
                     variant="contained"
                     fullWidth
@@ -231,6 +231,8 @@ const RoiExtractPage = () => {
                     onClick={handleRunExtraction}
                     disabled={!selectedTif || isSubmitting || isTargetMissing}
                     sx={{
+                      flex: { xs: "unset", sm: 1.4 },
+                      minHeight: 56,
                       bgcolor: "#0f172a",
                       "&:hover": { bgcolor: "#1f2933" },
                     }}
@@ -238,14 +240,22 @@ const RoiExtractPage = () => {
                     {isSubmitting ? "抽出中..." : "ROI抽出を実行"}
                   </Button>
                   <Button
-                    variant="text"
+                    variant="outlined"
+                    fullWidth
                     startIcon={<DoneAllIcon />}
                     onClick={() => {
                       setResult(null);
                       setInfo(null);
                     }}
                     disabled={!result && !info}
-                    sx={{ color: "#0f172a" }}
+                    sx={{
+                      flex: { xs: "unset", sm: 1 },
+                      minHeight: 56,
+                      color: "#0f172a",
+                      borderColor: colors.border,
+                      bgcolor: "#fff",
+                      "&:hover": { bgcolor: "rgba(148,163,184,0.1)", borderColor: "#cbd5f5" },
+                    }}
                   >
                     リセット
                   </Button>
