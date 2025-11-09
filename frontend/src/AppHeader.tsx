@@ -42,10 +42,11 @@ const AppHeader = () => {
             }}
           />
           <Typography
-            variant="h6"
+            variant="h5"
             onClick={handleHomeClick}
             sx={{
-              fontWeight: 600,
+              fontWeight: 700,
+              fontSize: { xs: "1.35rem", sm: "1.5rem" },
               cursor: isHome ? "default" : "pointer",
               userSelect: "none",
             }}
