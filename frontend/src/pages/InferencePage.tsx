@@ -17,6 +17,8 @@ import {
   Paper,
   Select,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import type { SelectChangeEvent } from "@mui/material/Select";
@@ -50,18 +52,127 @@ type InferenceResultPayload = {
   model_path: string;
 };
 
+type ProcessedVariants = {
+  normalized: string | null;
+  jet: string | null;
+};
+
+type DisplayMode = "raw" | "normalized" | "jet";
+
 type InferredRecord = {
   record: ROIRecord;
   result: InferenceResultPayload;
+  previews: ProcessedVariants | null;
+};
+
+const generateProcessedVariants = async (pngBase64: string): Promise<ProcessedVariants | null> => {
+  try {
+    const src = `data:image/png;base64,${pngBase64}`;
+    const image = await loadImage(src);
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    if (!width || !height) {
+      return null;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      return null;
+    }
+    context.drawImage(image, 0, 0, width, height);
+    const imageData = context.getImageData(0, 0, width, height);
+    const { min, max } = computeIntensityRange(imageData.data);
+    const normalizedPixels = buildNormalizedPixels(imageData.data, min, max);
+    const jetPixels = buildJetPixels(imageData.data, min, max);
+    const normalized = pixelsToDataUrl(normalizedPixels, width, height);
+    const jet = pixelsToDataUrl(jetPixels, width, height);
+    return { normalized, jet };
+  } catch {
+    return null;
+  }
 };
 
 const loadImage = (src: string) =>
   new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
+    image.decoding = "async";
     image.onload = () => resolve(image);
     image.onerror = (event) => reject(event);
     image.src = src;
   });
+
+const clampUnit = (value: number) => Math.max(0, Math.min(1, value));
+
+const computeIntensityRange = (data: Uint8ClampedArray) => {
+  let min = 255;
+  let max = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const value = data[i];
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  return { min, max };
+};
+
+const buildNormalizedPixels = (data: Uint8ClampedArray, min: number, max: number) => {
+  if (max <= min) {
+    return new Uint8ClampedArray(data);
+  }
+  const range = max - min;
+  const result = new Uint8ClampedArray(data.length);
+  for (let i = 0; i < data.length; i += 4) {
+    const normalizedValue = clampUnit((data[i] - min) / range);
+    const channel = Math.round(normalizedValue * 255);
+    result[i] = channel;
+    result[i + 1] = channel;
+    result[i + 2] = channel;
+    result[i + 3] = data[i + 3];
+  }
+  return result;
+};
+
+const jetColorMap = (value: number) => {
+  const v = clampUnit(value);
+  const fourValue = 4 * v;
+  const red = clampUnit(Math.min(fourValue - 1.5, -fourValue + 4.5));
+  const green = clampUnit(Math.min(fourValue - 0.5, -fourValue + 3.5));
+  const blue = clampUnit(Math.min(fourValue + 0.5, -fourValue + 2.5));
+  return {
+    r: Math.round(red * 255),
+    g: Math.round(green * 255),
+    b: Math.round(blue * 255),
+  };
+};
+
+const buildJetPixels = (data: Uint8ClampedArray, min: number, max: number) => {
+  if (max <= min) {
+    return new Uint8ClampedArray(data);
+  }
+  const range = max - min;
+  const result = new Uint8ClampedArray(data.length);
+  for (let i = 0; i < data.length; i += 4) {
+    const normalizedValue = clampUnit((data[i] - min) / range);
+    const { r, g, b } = jetColorMap(normalizedValue);
+    result[i] = r;
+    result[i + 1] = g;
+    result[i + 2] = b;
+    result[i + 3] = data[i + 3];
+  }
+  return result;
+};
+
+const pixelsToDataUrl = (pixels: Uint8ClampedArray, width: number, height: number) => {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const imageData = new ImageData(pixels as unknown as ImageDataArray, width, height);
+  context.putImageData(imageData, 0, 0);
+  return canvas.toDataURL("image/png");
+};
 
 const InferencePage = () => {
   const [searchParams] = useSearchParams();
@@ -82,6 +193,7 @@ const InferencePage = () => {
   const [isRunningInference, setIsRunningInference] = useState(false);
   const [inferenceError, setInferenceError] = useState<string | null>(null);
   const [processedCount, setProcessedCount] = useState(0);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>("raw");
 
   useEffect(() => {
     setRecords([]);
@@ -268,7 +380,8 @@ const InferencePage = () => {
             const message = (payload as { detail?: string } | null)?.detail ?? "推論に失敗しました。";
             throw new Error(message);
           }
-          results.push({ record, result: payload });
+          const previews = await generateProcessedVariants(record.png_base64);
+          results.push({ record, result: payload, previews });
           setProcessedCount(results.length);
           setInferenceResults([...results]);
         }
@@ -299,6 +412,20 @@ const InferencePage = () => {
     });
     return { buckets, others };
   }, [inferenceResults]);
+
+  const getDisplaySrc = useCallback(
+    (item: InferredRecord) => {
+      const raw = `data:image/png;base64,${item.record.png_base64}`;
+      if (displayMode === "normalized") {
+        return item.previews?.normalized ?? raw;
+      }
+      if (displayMode === "jet") {
+        return item.previews?.jet ?? raw;
+      }
+      return raw;
+    },
+    [displayMode],
+  );
 
   const handleDownloadComposite = useCallback(
     async (classIndex: number) => {
@@ -459,7 +586,7 @@ const InferencePage = () => {
               </Typography>
             </Box>
 
-            <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+            <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "flex-end" }}>
               <FormControl size="small" sx={{ minWidth: 240 }}>
                 <InputLabel id="bulk-model-select-label">モデル</InputLabel>
                 <Select
@@ -476,6 +603,27 @@ const InferencePage = () => {
                   ))}
                 </Select>
               </FormControl>
+
+              <Stack spacing={0.5}>
+                <Typography variant="caption" color="text.secondary">
+                  描画モード
+                </Typography>
+                <ToggleButtonGroup
+                  size="small"
+                  color="primary"
+                  exclusive
+                  value={displayMode}
+                  onChange={(_, value) => {
+                    if (value) {
+                      setDisplayMode(value);
+                    }
+                  }}
+                >
+                  <ToggleButton value="raw">Raw</ToggleButton>
+                  <ToggleButton value="normalized">Normalized</ToggleButton>
+                  <ToggleButton value="jet">Jet</ToggleButton>
+                </ToggleButtonGroup>
+              </Stack>
 
               <Box sx={{ flexGrow: 1 }} />
 
@@ -569,24 +717,27 @@ const InferencePage = () => {
                       gap: 1.5,
                     }}
                   >
-                    {bucket.map((item) => (
-                      <Card key={`${item.record.record_id}-${classIndex}`} variant="outlined" sx={{ borderRadius: 0 }}>
-                        <CardContent sx={{ p: 1.5, display: "flex", flexDirection: "column", gap: 1 }}>
-                          <Typography variant="caption" color="text.secondary">
-                            record #{item.record.record_id}
-                          </Typography>
-                          <Box
-                            component="img"
-                            src={`data:image/png;base64,${item.record.png_base64}`}
-                            alt={`record ${item.record.record_id} class ${classIndex}`}
-                            sx={{ width: "100%", height: 120, objectFit: "contain", border: "1px solid #e2e8f0" }}
-                          />
-                          <Typography variant="caption" color="text.secondary">
-                            確信度 {(item.result.confidence * 100).toFixed(1)}%
-                          </Typography>
-                        </CardContent>
-                      </Card>
-                    ))}
+                    {bucket.map((item) => {
+                      const imageSrc = getDisplaySrc(item);
+                      return (
+                        <Card key={`${item.record.record_id}-${classIndex}`} variant="outlined" sx={{ borderRadius: 0 }}>
+                          <CardContent sx={{ p: 1.5, display: "flex", flexDirection: "column", gap: 1 }}>
+                            <Typography variant="caption" color="text.secondary">
+                              record #{item.record.record_id}
+                            </Typography>
+                            <Box
+                              component="img"
+                              src={imageSrc ?? `data:image/png;base64,${item.record.png_base64}`}
+                              alt={`record ${item.record.record_id} class ${classIndex}`}
+                              sx={{ width: "100%", height: 120, objectFit: "contain", border: "1px solid #e2e8f0" }}
+                            />
+                            <Typography variant="caption" color="text.secondary">
+                              確信度 {(item.result.confidence * 100).toFixed(1)}%
+                            </Typography>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
                   </Box>
                 )}
               </Paper>
