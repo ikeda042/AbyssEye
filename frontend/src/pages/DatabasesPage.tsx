@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -118,11 +118,17 @@ const normalizeDatabasesResponse = (payload: unknown): DatabaseEntry[] => {
 
 const DatabasesPage = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const urlSearch = searchParams.get("db_name") ?? "";
   const [databases, setDatabases] = useState<DatabaseEntry[]>([]);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => urlSearch);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSearch(urlSearch);
+  }, [urlSearch]);
 
   const fetchDatabases = useCallback(async () => {
     setIsLoading(true);
