@@ -264,7 +264,7 @@ def _apply_jet_colormap(png_blob: bytes) -> bytes:
     return bytes(buf) if ok else png_blob
 
 
-def render_histogram_png(db_name: str, record_id: int, bins: int = 256) -> bytes:
+def render_histogram_png(db_name: str, record_id: int, bins: int = 256, normalize: bool = False) -> bytes:
     """Generate a histogram PNG for the specified ROI using matplotlib."""
     if Figure is None or FigureCanvasAgg is None:
         raise HTTPException(status_code=500, detail="ヒストグラム描画にはmatplotlibが必要です。")
@@ -294,13 +294,28 @@ def render_histogram_png(db_name: str, record_id: int, bins: int = 256) -> bytes
     if gray is None:
         raise HTTPException(status_code=500, detail="ROI画像を読み込めませんでした。")
 
-    flat = gray.flatten()
+    if normalize:
+        gray_float = gray.astype(np.float32)
+        min_val = float(gray_float.min())
+        max_val = float(gray_float.max())
+        if max_val > min_val:
+            data = (gray_float - min_val) / (max_val - min_val)
+        else:
+            data = np.zeros_like(gray_float, dtype=np.float32)
+        hist_range = (0.0, 1.0)
+        xlabel = "Normalized Intensity (0-1)"
+    else:
+        data = gray.astype(np.float32)
+        hist_range = (0.0, 255.0)
+        xlabel = "Intensity (0-255)"
+
+    flat = data.flatten()
     fig = Figure(figsize=(4.5, 2.5), dpi=200, facecolor="white")
     canvas = FigureCanvasAgg(fig)
     ax = fig.add_subplot(1, 1, 1)
-    ax.hist(flat, bins=bins, range=(0, 255), color="#4F46E5", edgecolor="none")
-    ax.set_xlim(0, 255)
-    ax.set_xlabel("Intensity (0-255)", fontsize=10)
+    ax.hist(flat, bins=bins, range=hist_range, color="#4F46E5", edgecolor="none")
+    ax.set_xlim(*hist_range)
+    ax.set_xlabel(xlabel, fontsize=10)
     ax.set_ylabel("Frequency", fontsize=10)
     ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.35)
     fig.tight_layout(pad=0.6)

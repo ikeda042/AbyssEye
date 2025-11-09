@@ -103,9 +103,10 @@ async def get_roi_histogram(
     db_name: str,
     record_id: int,
     bins: int = Query(256, ge=2, le=1024, description="Number of histogram bins to render"),
+    normalize: bool = Query(False, description="True にすると輝度を0-1に正規化してからヒストグラム化"),
 ) -> Response:
     """Render a brightness histogram for the specified ROI record using matplotlib."""
-    png_bytes = crud.render_histogram_png(db_name=db_name, record_id=record_id, bins=bins)
+    png_bytes = crud.render_histogram_png(db_name=db_name, record_id=record_id, bins=bins, normalize=normalize)
     return Response(content=png_bytes, media_type="image/png")
 
 

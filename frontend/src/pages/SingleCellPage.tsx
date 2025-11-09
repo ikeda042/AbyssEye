@@ -60,6 +60,7 @@ const RECORD_BATCH_SIZE = 60;
 const PAGE_SCALE = 1.1;
 const PAGE_SCALE_WIDTH_PERCENT = `${100 / PAGE_SCALE}%`;
 type PreviewMode = "normalized" | "jet" | "histogram" | "inference";
+type HistogramScale = "raw" | "normalized";
 
 type InferenceModelEntry = {
   name: string;
@@ -486,6 +487,7 @@ const SingleCellPage = () => {
   const [histogramSrc, setHistogramSrc] = useState<string | null>(null);
   const [histogramError, setHistogramError] = useState<string | null>(null);
   const [isHistogramLoading, setIsHistogramLoading] = useState(false);
+  const [histogramScale, setHistogramScale] = useState<HistogramScale>("raw");
   const histogramUrlRef = useRef<string | null>(null);
   const revokeHistogramUrl = useCallback(() => {
     if (histogramUrlRef.current) {
@@ -518,7 +520,7 @@ const SingleCellPage = () => {
       case "jet":
         return "raw画像をJetカラーマップでカラー表示します。";
       case "histogram":
-        return "0-255の輝度分布をヒストグラムとして表示します。";
+        return "輝度分布をヒストグラムで表示します（0-255 / 0-1 正規化を切替可能）。";
       case "inference":
         return "選択したモデルでROIを推論し、結果を表示します。";
       default:
@@ -827,7 +829,15 @@ const SingleCellPage = () => {
     setIsHistogramLoading(true);
     setHistogramError(null);
     setHistogramSrc(null);
-    const requestUrl = endpoint(`databases/${encodeURIComponent(dbName)}/records/${currentRecordId}/histogram`);
+    const params = new URLSearchParams();
+    if (histogramScale === "normalized") {
+      params.set("normalize", "true");
+    }
+    const requestUrl = endpoint(
+      `databases/${encodeURIComponent(dbName)}/records/${currentRecordId}/histogram${
+        params.toString() ? `?${params.toString()}` : ""
+      }`,
+    );
     fetch(requestUrl, {
       headers: { Accept: "image/png" },
       cache: "no-store",
@@ -876,7 +886,7 @@ const SingleCellPage = () => {
     return () => {
       controller.abort();
     };
-  }, [drawMode, dbName, currentRecordId, revokeHistogramUrl]);
+  }, [drawMode, dbName, currentRecordId, histogramScale, revokeHistogramUrl]);
 
   useEffect(() => {
     if (!dbName) {
@@ -1229,6 +1239,21 @@ const SingleCellPage = () => {
                   </Stack>
                 ) : drawMode === "histogram" ? (
                   <>
+                    <Stack direction="row" justifyContent="flex-end" alignItems="center">
+                      <ToggleButtonGroup
+                        size="small"
+                        exclusive
+                        value={histogramScale}
+                        onChange={(_, value: HistogramScale | null) => {
+                          if (value) {
+                            setHistogramScale(value);
+                          }
+                        }}
+                      >
+                        <ToggleButton value="raw">0-255</ToggleButton>
+                        <ToggleButton value="normalized">0-1</ToggleButton>
+                      </ToggleButtonGroup>
+                    </Stack>
                     <Box sx={previewContainerSx}>
                       {!isRecordReady && (
                         <Typography variant="body2" color="text.secondary">
