@@ -61,6 +61,7 @@ const PAGE_SCALE = 1.1;
 const PAGE_SCALE_WIDTH_PERCENT = `${100 / PAGE_SCALE}%`;
 type PreviewMode = "normalized" | "jet" | "histogram" | "inference";
 type HistogramScale = "raw" | "normalized";
+const INFERENCE_CLASS_DESCRIPTIONS = ["単一細胞", "複数細胞", "ピンぼけ／アウトオブフォーカス", "非細胞粒子"];
 
 type InferenceModelEntry = {
   name: string;
@@ -1192,11 +1193,15 @@ const SingleCellPage = () => {
                             <Typography variant="body2" color="text.secondary">
                               確信度 {formatPercentage(inferenceResult.confidence)}
                             </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              0＝単一細胞、1＝複数細胞、2＝ピンぼけ／アウトオブフォーカス、3＝非細胞粒子
+                            </Typography>
                           </Box>
                           <Divider />
                           <Stack spacing={0.5} sx={{ width: "100%", maxHeight: 260, overflow: "auto" }}>
                             {inferenceResult.probabilities.map((probability, index) => {
                               const isPredicted = index === inferenceResult.predicted_class;
+                              const description = INFERENCE_CLASS_DESCRIPTIONS[index] ?? "";
                               return (
                                 <Stack
                                   key={`${inferenceResult.model_path}-${index}`}
@@ -1212,6 +1217,7 @@ const SingleCellPage = () => {
                                 >
                                   <Typography variant="body2" fontWeight={isPredicted ? 600 : 400}>
                                     Class {index}
+                                    {description ? `（${description}）` : ""}
                                   </Typography>
                                   <Typography variant="body2" fontWeight={isPredicted ? 600 : 400}>
                                     {formatPercentage(probability)}
