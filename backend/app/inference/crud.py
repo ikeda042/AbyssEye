@@ -4,6 +4,7 @@ import base64
 import binascii
 import os
 import sqlite3
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
@@ -26,6 +27,21 @@ DEFAULT_MODEL_CANDIDATES = (
     Path("data_set/Four-class/MyResNet18_model_best_four_class"),
     Path("data_set/Two-class/MyResNet18_model_best_two_class"),
 )
+MODELS_DIR = PROJECT_ROOT / "models"
+MODEL_FILE_SUFFIXES = {".h5", ".hdf5", ".keras", ".pb", ".tflite"}
+
+_active_model_path: Path | None = None
+_active_model_relative_path: str | None = None
+_active_model_lock = threading.Lock()
+
+
+@dataclass(slots=True)
+class AvailableModel:
+    name: str
+    relative_path: str
+    absolute_path: Path
+    kind: str
+    is_active: bool = False
 
 
 @dataclass(slots=True)
@@ -36,19 +52,171 @@ class InferenceResult:
     model_path: str
 
 
+def _models_root() -> Path:
+    return MODELS_DIR.resolve()
+
+
+def _safe_relative_to_models(path: Path) -> str | None:
+    try:
+        rel = path.resolve().relative_to(_models_root())
+    except ValueError:
+        return None
+    rel_str = rel.as_posix()
+    return rel_str or path.name
+
+
+def _normalize_candidate_path(candidate: str | Path) -> Path:
+    path = candidate if isinstance(candidate, Path) else Path(candidate)
+    if path.is_absolute():
+        return path.resolve()
+
+    models_root = _models_root()
+    models_candidate = (models_root / path).resolve()
+    if models_candidate.exists():
+        try:
+            models_candidate.relative_to(models_root)
+            return models_candidate
+        except ValueError:
+            pass
+
+    return (PROJECT_ROOT / path).resolve()
+
+
+def _relative_key(target: Path, root: Path) -> str:
+    try:
+        rel = target.resolve().relative_to(root.resolve())
+        rel_str = rel.as_posix()
+        return rel_str or target.name
+    except ValueError:
+        return target.name
+
+
+def _discover_models_in_models_dir() -> list[Path]:
+    if not MODELS_DIR.exists():
+        return []
+
+    root = _models_root()
+    discovered: dict[str, Path] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        current_dir = Path(dirpath)
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+
+        if "saved_model.pb" in filenames:
+            key = _relative_key(current_dir, root)
+            discovered[key] = current_dir.resolve()
+            dirnames[:] = []
+            continue
+
+        for filename in filenames:
+            if filename.startswith("."):
+                continue
+            candidate = current_dir / filename
+            if candidate.suffix.lower() in MODEL_FILE_SUFFIXES:
+                key = _relative_key(candidate, root)
+                discovered[key] = candidate.resolve()
+
+    return [discovered[key] for key in sorted(discovered)]
+
+
+def _build_available_model(path: Path, *, is_active: bool = False) -> AvailableModel:
+    relative = _safe_relative_to_models(path) or path.name
+    return AvailableModel(
+        name=path.name,
+        relative_path=relative,
+        absolute_path=path.resolve(),
+        kind=_infer_model_kind(path),
+        is_active=is_active,
+    )
+
+
+def _read_active_model_state() -> tuple[str | None, Path | None]:
+    global _active_model_path, _active_model_relative_path
+    with _active_model_lock:
+        if _active_model_path and _active_model_relative_path and _active_model_path.exists():
+            return _active_model_relative_path, _active_model_path
+        _active_model_path = None
+        _active_model_relative_path = None
+        return None, None
+
+
+def list_available_models() -> list[AvailableModel]:
+    active_rel, _ = _read_active_model_state()
+    models: list[AvailableModel] = []
+    for path in _discover_models_in_models_dir():
+        relative = _safe_relative_to_models(path) or path.name
+        models.append(_build_available_model(path, is_active=(relative == active_rel)))
+    models.sort(key=lambda item: item.relative_path.lower())
+    return models
+
+
+def _resolve_model_from_relative(relative_path: str) -> AvailableModel:
+    cleaned = relative_path.strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="relative_path を指定してください。")
+    if not MODELS_DIR.exists():
+        raise HTTPException(status_code=404, detail="models ディレクトリが見つかりません。")
+
+    base = _models_root()
+    target = (base / Path(cleaned)).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="models/ 配下のパスを指定してください。") from exc
+
+    if target.is_dir():
+        if not _is_saved_model_dir(target):
+            raise HTTPException(status_code=400, detail="saved_model.pb を含むディレクトリを指定してください。")
+    elif target.is_file():
+        if target.suffix.lower() not in MODEL_FILE_SUFFIXES:
+            raise HTTPException(status_code=400, detail="未対応のモデルファイル形式です。")
+    else:
+        raise HTTPException(status_code=404, detail="指定したモデルが存在しません。")
+
+    return _build_available_model(target, is_active=True)
+
+
+def set_active_model(relative_path: str) -> AvailableModel:
+    model = _resolve_model_from_relative(relative_path)
+    global _active_model_path, _active_model_relative_path
+    with _active_model_lock:
+        _active_model_path = model.absolute_path
+        _active_model_relative_path = model.relative_path
+    _load_model.cache_clear()
+    return model
+
+
+def get_active_model() -> AvailableModel | None:
+    active_rel, active_path = _read_active_model_state()
+    if not active_rel or not active_path:
+        return None
+    return _build_available_model(active_path, is_active=True)
+
+
+def _get_active_model_path() -> Path | None:
+    _, active_path = _read_active_model_state()
+    return active_path
+
+
 def _iter_candidate_model_paths(override: str | None) -> Iterable[Path]:
     """Yield possible model paths in prioritized order."""
     seen: set[Path] = set()
 
-    prioritized: list[Path] = []
-    manual = override or os.getenv(MODEL_ENV_VAR)
+    prioritized: list[str | Path] = []
+    if override:
+        prioritized.append(override)
+
+    active_path = _get_active_model_path()
+    if active_path:
+        prioritized.append(active_path)
+
+    manual = os.getenv(MODEL_ENV_VAR)
     if manual:
-        prioritized.append(Path(manual))
+        prioritized.append(manual)
+
     prioritized.extend(DEFAULT_MODEL_CANDIDATES)
 
     for candidate in prioritized:
-        resolved = candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
-        resolved = resolved.resolve()
+        resolved = _normalize_candidate_path(candidate)
         if resolved in seen:
             continue
         seen.add(resolved)
@@ -71,6 +239,13 @@ class _Predictor(Protocol):
 
 def _is_saved_model_dir(path: Path) -> bool:
     return path.is_dir() and (path / "saved_model.pb").is_file()
+
+
+def _infer_model_kind(path: Path) -> str:
+    if path.is_dir():
+        return "saved_model" if _is_saved_model_dir(path) else "directory"
+    suffix = path.suffix.lower()
+    return suffix[1:] if suffix.startswith(".") else (suffix or "file")
 
 
 class _SavedModelSession:
