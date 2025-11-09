@@ -721,19 +721,38 @@ const InferencePage = () => {
                       const imageSrc = getDisplaySrc(item);
                       return (
                         <Card key={`${item.record.record_id}-${classIndex}`} variant="outlined" sx={{ borderRadius: 0 }}>
-                          <CardContent sx={{ p: 1.5, display: "flex", flexDirection: "column", gap: 1 }}>
-                            <Typography variant="caption" color="text.secondary">
-                              record #{item.record.record_id}
-                            </Typography>
+                          <CardContent
+                            sx={{
+                              p: 0,
+                              display: "flex",
+                              flexDirection: "column",
+                              "&:last-child": { pb: 0 },
+                            }}
+                          >
+                            <Box sx={{ px: 1.25, pt: 1, pb: 0.5 }}>
+                              <Typography variant="caption" color="text.secondary">
+                                record #{item.record.record_id}
+                              </Typography>
+                            </Box>
                             <Box
                               component="img"
                               src={imageSrc ?? `data:image/png;base64,${item.record.png_base64}`}
                               alt={`record ${item.record.record_id} class ${classIndex}`}
-                              sx={{ width: "100%", height: 120, objectFit: "contain", border: "1px solid #e2e8f0" }}
+                              sx={{
+                                width: "100%",
+                                height: 160,
+                                objectFit: "contain",
+                                display: "block",
+                                borderTop: "1px solid #e2e8f0",
+                                borderBottom: "1px solid #e2e8f0",
+                                backgroundColor: (theme) => theme.palette.background.paper,
+                              }}
                             />
-                            <Typography variant="caption" color="text.secondary">
-                              確信度 {(item.result.confidence * 100).toFixed(1)}%
-                            </Typography>
+                            <Box sx={{ px: 1.25, py: 0.75 }}>
+                              <Typography variant="caption" color="text.secondary">
+                                確信度 {(item.result.confidence * 100).toFixed(1)}%
+                              </Typography>
+                            </Box>
                           </CardContent>
                         </Card>
                       );
