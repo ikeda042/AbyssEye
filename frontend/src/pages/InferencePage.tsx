@@ -17,7 +17,6 @@ import {
   Paper,
   Select,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
 import type { SelectChangeEvent } from "@mui/material/Select";
@@ -28,8 +27,7 @@ import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 import { API_BASE_URL } from "../config";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
-const DEFAULT_LIMIT = 60;
-const MAX_LIMIT = 240;
+const MAX_FETCH_LIMIT = 240;
 const CLASS_LABELS = ["Class 0", "Class 1", "Class 2", "Class 3"];
 
 type ROIRecord = {
@@ -72,7 +70,6 @@ const InferencePage = () => {
   const [records, setRecords] = useState<ROIRecord[]>([]);
   const [isRecordsLoading, setIsRecordsLoading] = useState(false);
   const [recordsError, setRecordsError] = useState<string | null>(null);
-  const [recordLimit, setRecordLimit] = useState<number>(DEFAULT_LIMIT);
 
   const [availableModels, setAvailableModels] = useState<InferenceModelEntry[]>([]);
   const [isModelsLoading, setIsModelsLoading] = useState(false);
@@ -100,7 +97,7 @@ const InferencePage = () => {
       try {
         const params = new URLSearchParams({
           skip: "0",
-          limit: Math.min(Math.max(1, limit), MAX_LIMIT).toString(),
+          limit: Math.min(Math.max(1, limit), MAX_FETCH_LIMIT).toString(),
         });
         const response = await fetch(
           endpoint(`databases/${encodeURIComponent(targetDb)}/records?${params.toString()}`),
@@ -237,7 +234,7 @@ const InferencePage = () => {
       return;
     }
     try {
-      const fetched = await fetchRecords(dbName, recordLimit);
+      const fetched = await fetchRecords(dbName, MAX_FETCH_LIMIT);
       if (fetched.length === 0) {
         setRecordsError("指定件数でレコードが見つかりません。");
         return;
@@ -246,7 +243,7 @@ const InferencePage = () => {
     } catch (err) {
       // fetchRecords already handled error messaging
     }
-  }, [dbName, selectedModelPath, fetchRecords, recordLimit]);
+  }, [dbName, selectedModelPath, fetchRecords]);
 
   const runInference = useCallback(
     async (targetRecords: ROIRecord[]) => {
@@ -311,22 +308,76 @@ const InferencePage = () => {
         const images = await Promise.all(
           bucket.map((item) => loadImage(`data:image/png;base64,${item.record.png_base64}`)),
         );
+        const count = images.length;
         const gap = 4;
-        const width = Math.max(...images.map((img) => img.width), 48);
-        const height =
-          images.reduce((sum, img) => sum + img.height, 0) + gap * Math.max(0, images.length - 1);
+
+        const computeLayout = (total: number) => {
+          if (total <= 1) {
+            return { columns: total || 1, rows: total ? 1 : 0 };
+          }
+          let bestCols = 1;
+          let bestScore = Number.POSITIVE_INFINITY;
+          for (let cols = 1; cols <= total; cols += 1) {
+            const rows = Math.ceil(total / cols);
+            const aspect = Math.max(rows, cols) / Math.min(rows, cols);
+            const score = Math.abs(aspect - 1);
+            if (score < bestScore) {
+              bestScore = score;
+              bestCols = cols;
+            }
+          }
+          return {
+            columns: bestCols,
+            rows: Math.ceil(total / bestCols),
+          };
+        };
+
+        const { columns, rows } = computeLayout(count);
+        const colWidths = Array.from({ length: columns }, () => 0);
+        const rowHeights = Array.from({ length: rows }, () => 0);
+
+        images.forEach((img, index) => {
+          const col = index % columns;
+          const row = Math.floor(index / columns);
+          colWidths[col] = Math.max(colWidths[col], img.width);
+          rowHeights[row] = Math.max(rowHeights[row], img.height);
+        });
+
+        const canvasWidth =
+          colWidths.reduce((sum, value) => sum + value, 0) + gap * Math.max(0, columns - 1);
+        const canvasHeight =
+          rowHeights.reduce((sum, value) => sum + value, 0) + gap * Math.max(0, rows - 1);
+
         const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
         const context = canvas.getContext("2d");
         if (!context) {
           throw new Error("キャンバスの描画に失敗しました。");
         }
-        let offsetY = 0;
+
+        const colOffsets: number[] = [];
+        colWidths.reduce((offset, widthValue, idx) => {
+          colOffsets[idx] = offset;
+          return offset + widthValue + gap;
+        }, 0);
+
+        const rowOffsets: number[] = [];
+        rowHeights.reduce((offset, heightValue, idx) => {
+          rowOffsets[idx] = offset;
+          return offset + heightValue + gap;
+        }, 0);
+
         images.forEach((img, index) => {
-          context.drawImage(img, 0, offsetY);
-          offsetY += img.height + (index < images.length - 1 ? gap : 0);
+          const col = index % columns;
+          const row = Math.floor(index / columns);
+          const targetWidth = colWidths[col];
+          const targetHeight = rowHeights[row];
+          const drawX = colOffsets[col] + Math.max(0, (targetWidth - img.width) / 2);
+          const drawY = rowOffsets[row] + Math.max(0, (targetHeight - img.height) / 2);
+          context.drawImage(img, drawX, drawY);
         });
+
         const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), "image/png"));
         if (!blob) {
           throw new Error("画像の書き出しに失敗しました。");
@@ -348,7 +399,6 @@ const InferencePage = () => {
     [classBuckets.buckets, dbName],
   );
 
-  const limitInputHelper = `1〜${MAX_LIMIT} 件`;
   const progressPercent =
     records.length > 0 ? Math.min(100, Math.round((processedCount / records.length) * 100)) : 0;
 
@@ -410,20 +460,6 @@ const InferencePage = () => {
             </Box>
 
             <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-              <TextField
-                label="処理件数"
-                type="number"
-                value={recordLimit}
-                inputProps={{ min: 1, max: MAX_LIMIT }}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  if (Number.isNaN(next)) return;
-                  setRecordLimit(Math.min(Math.max(1, next), MAX_LIMIT));
-                }}
-                helperText={limitInputHelper}
-                sx={{ maxWidth: 200 }}
-              />
-
               <FormControl size="small" sx={{ minWidth: 240 }}>
                 <InputLabel id="bulk-model-select-label">モデル</InputLabel>
                 <Select
