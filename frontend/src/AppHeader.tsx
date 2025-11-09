@@ -1,5 +1,4 @@
-import { AppBar, Box, Divider, IconButton, Stack, Toolbar, Typography } from "@mui/material";
-import HomeIcon from "@mui/icons-material/Home";
+import { AppBar, Box, Divider, Stack, Toolbar, Typography } from "@mui/material";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { API_BASE_URL } from "./config";
@@ -10,18 +9,6 @@ const AppHeader = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const isHome = location.pathname === "/";
-
-  const routeTitles: Record<string, string> = {
-    "/": "AbyssEye",
-    "/tiff-manager": "TIFF Manager",
-    "/roi-extract": "ROI Extractor",
-    "/databases": "ROI Databases",
-    "/databases/overview": "Database Overview",
-    "/databases/single-cell": "Single Cell Viewer",
-    "/inference": "Bulk Inference",
-  };
-
-  const currentTitle = routeTitles[location.pathname] ?? "JAMSTEC Console";
 
   const handleHomeClick = () => {
     if (!isHome) {
@@ -54,25 +41,17 @@ const AppHeader = () => {
               userSelect: "none",
             }}
           />
-          {!isHome && (
-            <IconButton
-              edge="start"
-              color="primary"
-              aria-label="back to top"
-              onClick={handleHomeClick}
-              sx={{
-                borderRadius: 0,
-                mr: 0.25,
-              }}
-            >
-              <HomeIcon fontSize="small" />
-            </IconButton>
-          )}
-          <Box>
-            <Typography variant="h6" sx={{ fontWeight: 600 }}>
-              {currentTitle}
-            </Typography>
-          </Box>
+          <Typography
+            variant="h6"
+            onClick={handleHomeClick}
+            sx={{
+              fontWeight: 600,
+              cursor: isHome ? "default" : "pointer",
+              userSelect: "none",
+            }}
+          >
+            AbyssEye
+          </Typography>
         </Stack>
         <Divider flexItem orientation="vertical" sx={{ borderColor: HEADER_BORDER }} />
         <Typography
