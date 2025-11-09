@@ -372,7 +372,22 @@ const RoiLocationPreview = ({
       </Typography>
     );
   }
-  if (!fullWidth || !fullHeight || fullWidth <= 0 || fullHeight <= 0) {
+  const fallbackWidth = Math.max(bounds.startX + bounds.width, bounds.width);
+  const fallbackHeight = Math.max(bounds.startY + bounds.height, bounds.height);
+  const scaleFactor = meta?.scale && Number.isFinite(meta.scale) && meta.scale > 0 ? meta.scale : null;
+  const resolveDimension = (dimension: number | null | undefined, fallback: number) => {
+    if (typeof dimension === "number" && Number.isFinite(dimension) && dimension > 0) {
+      if (scaleFactor) {
+        return dimension / scaleFactor;
+      }
+      return dimension;
+    }
+    return fallback;
+  };
+  const effectiveWidth = resolveDimension(fullWidth, fallbackWidth);
+  const effectiveHeight = resolveDimension(fullHeight, fallbackHeight);
+
+  if (!Number.isFinite(effectiveWidth) || !Number.isFinite(effectiveHeight) || effectiveWidth <= 0 || effectiveHeight <= 0) {
     return (
       <Typography variant="body2" color="text.secondary">
         画像全体のサイズ情報が取得できません。
@@ -382,16 +397,16 @@ const RoiLocationPreview = ({
 
   const canvasHeight = 220;
 
-  const roiWidth = Math.min(bounds.width, fullWidth);
-  const roiHeight = Math.min(bounds.height, fullHeight);
-  const startX = clamp(bounds.startX, 0, fullWidth - roiWidth);
-  const startY = clamp(bounds.startY, 0, fullHeight - roiHeight);
+  const roiWidth = Math.min(bounds.width, effectiveWidth);
+  const roiHeight = Math.min(bounds.height, effectiveHeight);
+  const startX = clamp(bounds.startX, 0, Math.max(0, effectiveWidth - roiWidth));
+  const startY = clamp(bounds.startY, 0, Math.max(0, effectiveHeight - roiHeight));
 
   return (
     <Box sx={{ width: "100%", maxWidth: 360 }}>
       <Box
         component="svg"
-        viewBox={`0 0 ${fullWidth} ${fullHeight}`}
+        viewBox={`0 0 ${effectiveWidth} ${effectiveHeight}`}
         width="100%"
         height={canvasHeight}
         sx={{
@@ -404,8 +419,8 @@ const RoiLocationPreview = ({
         <rect
           x={0}
           y={0}
-          width={fullWidth}
-          height={fullHeight}
+          width={effectiveWidth}
+          height={effectiveHeight}
           fill="#eef2ff"
           stroke="#94a3b8"
           strokeDasharray="8 6"
@@ -424,8 +439,8 @@ const RoiLocationPreview = ({
         />
       </Box>
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-        左上: ({Math.round(startX)}, {Math.round(startY)}) / サイズ: {Math.round(roiWidth)} ×{" "}
-        {Math.round(roiHeight)} px （全体 {fullWidth} × {fullHeight} px）
+        左上: ({Math.round(bounds.startX)}, {Math.round(bounds.startY)}) / サイズ: {Math.round(bounds.width)} ×{" "}
+        {Math.round(bounds.height)} px （全体 {Math.round(effectiveWidth)} × {Math.round(effectiveHeight)} px）
       </Typography>
     </Box>
   );
