@@ -11,6 +11,8 @@ import {
   Link,
   Paper,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
@@ -52,6 +54,7 @@ const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 const RECORD_BATCH_SIZE = 60;
 const PAGE_SCALE = 1.1;
 const PAGE_SCALE_WIDTH_PERCENT = `${100 / PAGE_SCALE}%`;
+type ProcessedPreviewMode = "normalized" | "jet";
 
 const formatBytes = (value?: number) => {
   if (typeof value !== "number" || Number.isNaN(value) || value <= 0) return "-";
@@ -156,6 +159,77 @@ const formatExtrasValue = (value: unknown) => {
   }
 };
 
+const clampUnit = (value: number) => Math.max(0, Math.min(1, value));
+
+const computeIntensityRange = (data: Uint8ClampedArray) => {
+  let min = 255;
+  let max = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const value = data[i];
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  return { min, max };
+};
+
+const buildNormalizedPixels = (data: Uint8ClampedArray, min: number, max: number) => {
+  if (max <= min) {
+    return new Uint8ClampedArray(data);
+  }
+  const range = max - min;
+  const result = new Uint8ClampedArray(data.length);
+  for (let i = 0; i < data.length; i += 4) {
+    const normalizedValue = clampUnit((data[i] - min) / range);
+    const channel = Math.round(normalizedValue * 255);
+    result[i] = channel;
+    result[i + 1] = channel;
+    result[i + 2] = channel;
+    result[i + 3] = data[i + 3];
+  }
+  return result;
+};
+
+const jetColorMap = (value: number) => {
+  const v = clampUnit(value);
+  const fourValue = 4 * v;
+  const red = clampUnit(Math.min(fourValue - 1.5, -fourValue + 4.5));
+  const green = clampUnit(Math.min(fourValue - 0.5, -fourValue + 3.5));
+  const blue = clampUnit(Math.min(fourValue + 0.5, -fourValue + 2.5));
+  return {
+    r: Math.round(red * 255),
+    g: Math.round(green * 255),
+    b: Math.round(blue * 255),
+  };
+};
+
+const buildJetPixels = (data: Uint8ClampedArray, min: number, max: number) => {
+  if (max <= min) {
+    return new Uint8ClampedArray(data);
+  }
+  const range = max - min;
+  const result = new Uint8ClampedArray(data.length);
+  for (let i = 0; i < data.length; i += 4) {
+    const normalizedValue = clampUnit((data[i] - min) / range);
+    const { r, g, b } = jetColorMap(normalizedValue);
+    result[i] = r;
+    result[i + 1] = g;
+    result[i + 2] = b;
+    result[i + 3] = data[i + 3];
+  }
+  return result;
+};
+
+const pixelsToDataUrl = (pixels: Uint8ClampedArray, width: number, height: number) => {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const imageData = new ImageData(pixels, width, height);
+  context.putImageData(imageData, 0, 0);
+  return canvas.toDataURL("image/png");
+};
+
 const MetaRow = ({ label, value }: { label: string; value: ReactNode }) => (
   <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={2}>
     <Typography variant="body2" color="text.secondary">
@@ -197,6 +271,88 @@ const deriveRoiBounds = (meta: NormalizedRoiMeta | null): RoiBounds | null => {
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const useProcessedPreviews = (imageSrc: string | null) => {
+  const [state, setState] = useState({
+    normalized: null as string | null,
+    jet: null as string | null,
+    isProcessing: false,
+    error: null as string | null,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!imageSrc) {
+      setState({ normalized: null, jet: null, isProcessing: false, error: null });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setState({ normalized: null, jet: null, isProcessing: true, error: null });
+
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => {
+      if (cancelled) return;
+      try {
+        const width = image.naturalWidth || image.width;
+        const height = image.naturalHeight || image.height;
+        if (!width || !height) {
+          throw new Error("画像サイズを取得できませんでした。");
+        }
+        const baseCanvas = document.createElement("canvas");
+        baseCanvas.width = width;
+        baseCanvas.height = height;
+        const context = baseCanvas.getContext("2d", { willReadFrequently: true });
+        if (!context) {
+          throw new Error("キャンバスを作成できませんでした。");
+        }
+        context.drawImage(image, 0, 0, width, height);
+        const imageData = context.getImageData(0, 0, width, height);
+        const { min, max } = computeIntensityRange(imageData.data);
+        const normalizedPixels = buildNormalizedPixels(imageData.data, min, max);
+        const jetPixels = buildJetPixels(imageData.data, min, max);
+        const normalized = pixelsToDataUrl(normalizedPixels, width, height);
+        const jet = pixelsToDataUrl(jetPixels, width, height);
+        if (!cancelled) {
+          setState({
+            normalized,
+            jet,
+            isProcessing: false,
+            error: normalized || jet ? null : "プレビュー画像を生成できませんでした。",
+          });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setState({
+            normalized: null,
+            jet: null,
+            isProcessing: false,
+            error: err instanceof Error ? err.message : "描画処理でエラーが発生しました。",
+          });
+        }
+      }
+    };
+    image.onerror = () => {
+      if (!cancelled) {
+        setState({
+          normalized: null,
+          jet: null,
+          isProcessing: false,
+          error: "raw画像の読み込みに失敗しました。",
+        });
+      }
+    };
+    image.src = imageSrc;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [imageSrc]);
+
+  return state;
+};
 
 const RoiLocationPreview = ({
   meta,
@@ -293,9 +449,30 @@ const SingleCellPage = () => {
   const [isRecordsLoading, setIsRecordsLoading] = useState(false);
   const [hasMoreRecords, setHasMoreRecords] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [drawMode, setDrawMode] = useState<ProcessedPreviewMode>("normalized");
 
   const currentRecord = records[currentIndex] ?? null;
   const totalCount = overview?.record_count ?? records.length;
+  const rawImageSrc = useMemo(() => (currentRecord ? `data:image/png;base64,${currentRecord.png_base64}` : null), [currentRecord]);
+  const processedPreviews = useProcessedPreviews(rawImageSrc);
+  const processedImageSrc = drawMode === "normalized" ? processedPreviews.normalized : processedPreviews.jet;
+  const isRecordReady = Boolean(currentRecord && rawImageSrc);
+  const previewContainerSx = useMemo(
+    () => ({
+      flex: 1,
+      width: "100%",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      bgcolor: "#0f172a08",
+      border: "1px dashed #cbd5f5",
+      minHeight: 300,
+      position: "relative",
+      borderRadius: 1,
+      p: 1.5,
+    }),
+    [],
+  );
 
   const fetchOverview = useCallback(async (targetDb: string) => {
     setIsOverviewLoading(true);
@@ -385,6 +562,10 @@ const SingleCellPage = () => {
     fetchOverview(dbName);
     fetchRecords(dbName, 0);
   }, [dbName, fetchOverview, fetchRecords]);
+
+  useEffect(() => {
+    setDrawMode("normalized");
+  }, [rawImageSrc]);
 
   const handlePrev = useCallback(() => {
     setCurrentIndex((prev) => (prev > 0 ? prev - 1 : prev));
@@ -524,35 +705,97 @@ const SingleCellPage = () => {
               </Typography>
             </Stack>
 
-            <Box
-              sx={{
-                flex: 1,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                bgcolor: "#0f172a08",
-                border: "1px dashed #cbd5f5",
-                minHeight: 300,
-                position: "relative",
-              }}
-            >
-              {isRecordsLoading && records.length === 0 && (
-                <CircularProgress size={40} sx={{ position: "absolute" }} />
-              )}
-              {!isRecordsLoading && !currentRecord && (
-                <Typography variant="body2" color="text.secondary">
-                  レコードが見つかりません
-                </Typography>
-              )}
-              {currentRecord && (
-                <Box
-                  component="img"
-                  src={`data:image/png;base64,${currentRecord.png_base64}`}
-                  alt={`Record ${currentRecord.record_id}`}
-                  sx={{ maxHeight: 420, width: "100%", objectFit: "contain" }}
-                />
-              )}
-            </Box>
+            <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ flex: 1 }}>
+              <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 1 }}>
+                <Stack spacing={0.5}>
+                  <Typography variant="subtitle2" color="text.secondary">
+                    Raw
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    取得した画像をそのまま表示します。
+                  </Typography>
+                </Stack>
+                <Box sx={previewContainerSx}>
+                  {isRecordsLoading && records.length === 0 && (
+                    <CircularProgress size={40} sx={{ position: "absolute" }} />
+                  )}
+                  {!isRecordsLoading && !currentRecord && (
+                    <Typography variant="body2" color="text.secondary">
+                      レコードが見つかりません
+                    </Typography>
+                  )}
+                  {currentRecord && rawImageSrc && (
+                    <Box
+                      component="img"
+                      src={rawImageSrc}
+                      alt={`Record ${currentRecord.record_id} raw`}
+                      sx={{ maxHeight: 420, width: "100%", objectFit: "contain" }}
+                    />
+                  )}
+                </Box>
+              </Box>
+
+              <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 1 }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Stack spacing={0.5}>
+                    <Typography variant="subtitle2" color="text.secondary">
+                      描画モード
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      raw画像を正規化またはJetカラーマップで表示します。
+                    </Typography>
+                  </Stack>
+                  <ToggleButtonGroup
+                    size="small"
+                    color="primary"
+                    exclusive
+                    value={drawMode}
+                    onChange={(_, value) => {
+                      if (value) {
+                        setDrawMode(value);
+                      }
+                    }}
+                    disabled={!isRecordReady}
+                  >
+                    <ToggleButton value="normalized" disabled={!isRecordReady || (!processedPreviews.normalized && !processedPreviews.isProcessing)}>
+                      Normalized
+                    </ToggleButton>
+                    <ToggleButton value="jet" disabled={!isRecordReady || (!processedPreviews.jet && !processedPreviews.isProcessing)}>
+                      Jet
+                    </ToggleButton>
+                  </ToggleButtonGroup>
+                </Stack>
+
+                <Box sx={previewContainerSx}>
+                  {!isRecordReady && (
+                    <Typography variant="body2" color="text.secondary">
+                      レコードを読み込み中です…
+                    </Typography>
+                  )}
+                  {isRecordReady && processedPreviews.isProcessing && (
+                    <CircularProgress size={32} sx={{ position: "absolute" }} />
+                  )}
+                  {isRecordReady && !processedPreviews.isProcessing && processedImageSrc && (
+                    <Box
+                      component="img"
+                      src={processedImageSrc}
+                      alt={`Record ${currentRecord?.record_id ?? ""} ${drawMode}`}
+                      sx={{ maxHeight: 420, width: "100%", objectFit: "contain" }}
+                    />
+                  )}
+                  {isRecordReady && !processedPreviews.isProcessing && !processedImageSrc && (
+                    <Typography variant="body2" color="text.secondary">
+                      プレビューを生成できませんでした。
+                    </Typography>
+                  )}
+                </Box>
+                {isRecordReady && processedPreviews.error && (
+                  <Typography variant="caption" color="error">
+                    {processedPreviews.error}
+                  </Typography>
+                )}
+              </Box>
+            </Stack>
 
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1} justifyContent="space-between">
               <Button
