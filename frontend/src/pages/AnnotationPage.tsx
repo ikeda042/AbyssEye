@@ -36,7 +36,7 @@ type ManualLabelResponse = {
 };
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
-const RECORD_BATCH_SIZE = 60;
+const RECORD_BATCH_SIZE = 240;
 const LABEL_OPTIONS = ["0", "1", "2", "3"] as const;
 type ProcessedMode = "normalized" | "jet";
 
