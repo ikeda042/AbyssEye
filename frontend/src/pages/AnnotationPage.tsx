@@ -449,42 +449,51 @@ const AnnotationPage = () => {
 
         <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, minHeight: 420 }}>
           <Stack direction={{ xs: "column", xl: "row" }} spacing={3} alignItems="stretch">
-            <Stack
-              direction={{ xs: "column", md: "row" }}
-              spacing={2}
-              sx={{ flex: 1, alignItems: "stretch" }}
-            >
-              <Box
+            <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ flex: 1 }}>
+              <Stack
+                spacing={1}
                 sx={{
                   flex: 1,
                   minHeight: 360,
                   border: "1px dashed #cbd5f5",
                   borderRadius: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  bgcolor: "#f8fafc",
-                  position: "relative",
                   p: 1.5,
+                  bgcolor: "#f8fafc",
                 }}
               >
-                {!currentRecord && !isRecordsLoading && (
-                  <Typography variant="body2" color="text.secondary">
-                    ROIレコードを読み込み中です…
-                  </Typography>
-                )}
-                {isRecordsLoading && (
-                  <CircularProgress size={40} sx={{ position: "absolute" }} />
-                )}
-                {currentRecord && imageSrc && (
-                  <Box
-                    component="img"
-                    src={imageSrc}
-                    alt={`Record ${currentRecord.record_id}`}
-                    sx={{ width: "100%", maxHeight: 480, objectFit: "contain" }}
-                  />
-                )}
-              </Box>
+                <Typography variant="subtitle2" color="text.secondary">
+                  Rawプレビュー
+                </Typography>
+                <Box
+                  sx={{
+                    flex: 1,
+                    borderRadius: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    bgcolor: "#fff",
+                    position: "relative",
+                    p: 1.5,
+                  }}
+                >
+                  {!currentRecord && !isRecordsLoading && (
+                    <Typography variant="body2" color="text.secondary">
+                      ROIレコードを読み込み中です…
+                    </Typography>
+                  )}
+                  {isRecordsLoading && (
+                    <CircularProgress size={40} sx={{ position: "absolute" }} />
+                  )}
+                  {currentRecord && imageSrc && !isRecordsLoading && (
+                    <Box
+                      component="img"
+                      src={imageSrc}
+                      alt={`Record ${currentRecord.record_id}`}
+                      sx={{ width: "100%", maxHeight: 480, objectFit: "contain" }}
+                    />
+                  )}
+                </Box>
+              </Stack>
 
               <Stack
                 spacing={1}
