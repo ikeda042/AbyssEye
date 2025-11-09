@@ -12,7 +12,7 @@ const AppHeader = () => {
   const isHome = location.pathname === "/";
 
   const routeTitles: Record<string, string> = {
-    "/": "Operations Hub",
+    "/": "AbyssEye",
     "/tiff-manager": "TIFF Manager",
     "/roi-extract": "ROI Extractor",
     "/databases": "ROI Databases",
