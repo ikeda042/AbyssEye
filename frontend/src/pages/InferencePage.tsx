@@ -27,10 +27,14 @@ import DownloadIcon from "@mui/icons-material/Download";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 
 import { API_BASE_URL } from "../config";
+import { INFERENCE_CLASS_DESCRIPTION_TEXT, getInferenceClassDescription } from "../constants/inference";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 const MAX_FETCH_LIMIT = 240;
-const CLASS_LABELS = ["Class 0", "Class 1", "Class 2", "Class 3"];
+const CLASS_LABELS = Array.from({ length: 4 }, (_, index) => {
+  const description = getInferenceClassDescription(index);
+  return description ? `Class ${index}（${description}）` : `Class ${index}`;
+});
 
 type ROIRecord = {
   record_id: number;
@@ -665,6 +669,11 @@ const InferencePage = () => {
             {records.length > 0 && (
               <Typography variant="body2" color="text.secondary">
                 対象レコード: {records.length.toLocaleString()} 件 / 推論完了: {processedCount.toLocaleString()} 件
+              </Typography>
+            )}
+            {records.length > 0 && (
+              <Typography variant="caption" color="text.secondary">
+                {INFERENCE_CLASS_DESCRIPTION_TEXT}
               </Typography>
             )}
           </Stack>

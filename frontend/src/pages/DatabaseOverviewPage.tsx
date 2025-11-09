@@ -25,6 +25,7 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import CloudDownloadIcon from "@mui/icons-material/CloudDownload";
 
 import { API_BASE_URL } from "../config";
+import { INFERENCE_CLASS_DESCRIPTION_TEXT, getInferenceClassDescription } from "../constants/inference";
 
 type DatabaseOverview = {
   db_name: string;
@@ -453,12 +454,19 @@ const DatabaseOverviewPage = () => {
                   <Typography variant="subtitle1" fontWeight={600}>
                     クラス {inferenceResult.predicted_class}（{(inferenceResult.confidence * 100).toFixed(1)}%）
                   </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {INFERENCE_CLASS_DESCRIPTION_TEXT}
+                  </Typography>
                   <Stack spacing={0.2}>
-                    {inferenceResult.probabilities.map((probability, index) => (
-                      <Typography key={index} variant="caption" color="text.secondary">
-                        クラス {index}: {(probability * 100).toFixed(1)}%
-                      </Typography>
-                    ))}
+                    {inferenceResult.probabilities.map((probability, index) => {
+                      const description = getInferenceClassDescription(index);
+                      return (
+                        <Typography key={index} variant="caption" color="text.secondary">
+                          クラス {index}
+                          {description ? `（${description}）` : ""}: {(probability * 100).toFixed(1)}%
+                        </Typography>
+                      );
+                    })}
                   </Stack>
                   <Typography variant="caption" color="text.secondary">
                     モデル: {inferenceResult.model_path}

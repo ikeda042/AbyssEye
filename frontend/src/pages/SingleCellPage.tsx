@@ -24,6 +24,7 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 import { API_BASE_URL } from "../config";
+import { INFERENCE_CLASS_DESCRIPTION_TEXT, getInferenceClassDescription } from "../constants/inference";
 
 type DatabaseOverview = {
   db_name: string;
@@ -61,7 +62,6 @@ const PAGE_SCALE = 1.1;
 const PAGE_SCALE_WIDTH_PERCENT = `${100 / PAGE_SCALE}%`;
 type PreviewMode = "normalized" | "jet" | "histogram" | "inference";
 type HistogramScale = "raw" | "normalized";
-const INFERENCE_CLASS_DESCRIPTIONS = ["単一細胞", "複数細胞", "ピンぼけ／アウトオブフォーカス", "非細胞粒子"];
 
 type InferenceModelEntry = {
   name: string;
@@ -1186,22 +1186,22 @@ const SingleCellPage = () => {
                       )}
                       {inferenceResult && !isInferenceLoading && (
                         <Stack spacing={1.5} sx={{ width: "100%" }}>
-                          <Box textAlign="center">
-                            <Typography variant="subtitle1" fontWeight={600}>
-                              予測クラス: {inferenceResult.predicted_class}
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              確信度 {formatPercentage(inferenceResult.confidence)}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              0＝単一細胞、1＝複数細胞、2＝ピンぼけ／アウトオブフォーカス、3＝非細胞粒子
-                            </Typography>
-                          </Box>
-                          <Divider />
-                          <Stack spacing={0.5} sx={{ width: "100%", maxHeight: 260, overflow: "auto" }}>
-                            {inferenceResult.probabilities.map((probability, index) => {
-                              const isPredicted = index === inferenceResult.predicted_class;
-                              const description = INFERENCE_CLASS_DESCRIPTIONS[index] ?? "";
+                      <Box textAlign="center">
+                        <Typography variant="subtitle1" fontWeight={600}>
+                          予測クラス: {inferenceResult.predicted_class}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          確信度 {formatPercentage(inferenceResult.confidence)}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {INFERENCE_CLASS_DESCRIPTION_TEXT}
+                        </Typography>
+                      </Box>
+                      <Divider />
+                      <Stack spacing={0.5} sx={{ width: "100%", maxHeight: 260, overflow: "auto" }}>
+                        {inferenceResult.probabilities.map((probability, index) => {
+                          const isPredicted = index === inferenceResult.predicted_class;
+                          const description = getInferenceClassDescription(index);
                               return (
                                 <Stack
                                   key={`${inferenceResult.model_path}-${index}`}
