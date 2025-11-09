@@ -7,6 +7,7 @@ import DatabasesPage from "./pages/DatabasesPage";
 import DatabaseOverviewPage from "./pages/DatabaseOverviewPage";
 import SingleCellPage from "./pages/SingleCellPage";
 import InferencePage from "./pages/InferencePage";
+import AnnotationPage from "./pages/AnnotationPage";
 import AppHeader from "./AppHeader";
 
 const theme = createTheme({
@@ -50,6 +51,7 @@ const App = () => {
             <Route path="/databases/overview" element={<DatabaseOverviewPage />} />
             <Route path="/databases/single-cell" element={<SingleCellPage />} />
             <Route path="/inference" element={<InferencePage />} />
+            <Route path="/annotation" element={<AnnotationPage />} />
           </Routes>
         </Box>
       </BrowserRouter>

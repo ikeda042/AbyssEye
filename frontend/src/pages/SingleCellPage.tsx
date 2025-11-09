@@ -40,6 +40,7 @@ type ROIRecord = {
   roi_id: number;
   roi_meta: Record<string, unknown> | string | null;
   png_base64: string;
+  manual_label?: string | null;
 };
 
 type RoiPoint = { x: number; y: number };

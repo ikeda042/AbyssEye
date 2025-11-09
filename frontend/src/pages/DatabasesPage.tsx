@@ -27,6 +27,7 @@ import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import SlideshowIcon from "@mui/icons-material/Slideshow";
 import ScienceIcon from "@mui/icons-material/Science";
+import EditNoteIcon from "@mui/icons-material/EditNote";
 import { API_BASE_URL } from "../config";
 
 type DatabaseEntry = {
@@ -180,6 +181,11 @@ const DatabasesPage = () => {
     navigate(`/inference?${params.toString()}`);
   };
 
+  const handleOpenAnnotation = (dbName: string) => {
+    const params = new URLSearchParams({ db_name: dbName });
+    navigate(`/annotation?${params.toString()}`);
+  };
+
   return (
     <Container
       maxWidth={false}
@@ -278,6 +284,7 @@ const DatabasesPage = () => {
                     <TableCell align="right">ダウンロード</TableCell>
                     <TableCell align="center">推論</TableCell>
                     <TableCell align="center">単細胞ビュー</TableCell>
+                    <TableCell align="center">アノテーション</TableCell>
                     <TableCell align="center">概要</TableCell>
                   </TableRow>
                 </TableHead>
@@ -329,6 +336,16 @@ const DatabasesPage = () => {
                           onClick={() => handleOpenSingleCell(db.name)}
                         >
                           ビュー
+                        </Button>
+                      </TableCell>
+                      <TableCell align="center">
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          startIcon={<EditNoteIcon fontSize="small" />}
+                          onClick={() => handleOpenAnnotation(db.name)}
+                        >
+                          注釈
                         </Button>
                       </TableCell>
                       <TableCell align="center">

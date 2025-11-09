@@ -40,6 +40,7 @@ type ROIRecord = {
   record_id: number;
   roi_id?: number;
   png_base64: string;
+  manual_label?: string | null;
 };
 
 type InferenceModelEntry = {

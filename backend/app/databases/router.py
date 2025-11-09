@@ -68,6 +68,7 @@ class ROIRecordResponse(BaseModel):
     roi_id: int = Field(..., description="ROI ID from detection pipeline")
     roi_meta: dict | str | None = Field(None, description="Stored metadata for ROI")
     png_base64: str = Field(..., description="48x48 PNG image encoded as base64 string")
+    manual_label: str | None = Field(None, description="手動ラベル (0-3 など)")
 
 
 @router.get("/overview", response_model=DatabaseOverviewResponse)
@@ -96,6 +97,22 @@ async def list_roi_records(
 ) -> list[ROIRecordResponse]:
     """Return ROI record PNGs stored inside the selected SQLite database."""
     return crud.list_roi_record_images(db_name=db_name, skip=skip, limit=limit, render_mode=render_mode)
+
+
+class ManualLabelUpdateRequest(BaseModel):
+    manual_label: str | None = Field(None, description="0/1/2/3 などの手動ラベル。null でクリア。")
+
+
+class ManualLabelUpdateResponse(BaseModel):
+    record_id: int
+    manual_label: str | None
+
+
+@router.put("/{db_name}/records/{record_id}/manual-label", response_model=ManualLabelUpdateResponse)
+async def set_manual_label(db_name: str, record_id: int, payload: ManualLabelUpdateRequest) -> ManualLabelUpdateResponse:
+    """Update manual_label column for the specified ROI."""
+    result = crud.update_manual_label(db_name=db_name, record_id=record_id, manual_label=payload.manual_label)
+    return ManualLabelUpdateResponse(**result)
 
 
 @router.get("/{db_name}/records/{record_id}/histogram", response_class=Response, responses={200: {"content": {"image/png": {}}}})

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import io
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Optional, Sequence
 
 import cv2
 import numpy as np
@@ -88,6 +88,15 @@ def _resolve_db_path(db_name: str) -> Path:
 def get_database_file_path(db_name: str) -> Path:
     """Return the absolute path for a given `.db` file."""
     return _resolve_db_path(db_name)
+
+
+def _ensure_manual_label_column(conn: sqlite3.Connection) -> None:
+    """Ensure roi_records table contains manual_label column."""
+    cursor = conn.execute("PRAGMA table_info(roi_records)")
+    columns = {row["name"] for row in cursor.fetchall()}
+    if "manual_label" not in columns:
+        conn.execute("ALTER TABLE roi_records ADD COLUMN manual_label TEXT")
+        conn.commit()
 
 
 def _deserialize_roi_meta(raw_meta: Any) -> Any:
@@ -346,10 +355,10 @@ def list_roi_record_images(
         raise HTTPException(status_code=400, detail="limit は1以上で指定してください。")
 
     db_path = _resolve_db_path(db_name)
-    query = "SELECT id, roi_id, roi_meta, png_blob FROM roi_records ORDER BY id LIMIT ? OFFSET ?"
+    query = "SELECT id, roi_id, roi_meta, manual_label, png_blob FROM roi_records ORDER BY id LIMIT ? OFFSET ?"
     params: tuple[Any, ...]
     if limit is None:
-        query = "SELECT id, roi_id, roi_meta, png_blob FROM roi_records ORDER BY id OFFSET ?"
+        query = "SELECT id, roi_id, roi_meta, manual_label, png_blob FROM roi_records ORDER BY id OFFSET ?"
         params = (skip,)
     else:
         params = (limit, skip)
@@ -358,6 +367,7 @@ def list_roi_record_images(
     try:
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
+            _ensure_manual_label_column(conn)
             cursor = conn.execute(query, params)
             for row in cursor.fetchall():
                 roi_meta = _deserialize_roi_meta(row["roi_meta"])
@@ -370,6 +380,7 @@ def list_roi_record_images(
                         "record_id": row["id"],
                         "roi_id": row["roi_id"],
                         "roi_meta": roi_meta,
+                        "manual_label": row["manual_label"],
                         "png_base64": base64.b64encode(rendered_blob).decode("ascii"),
                     }
                 )
@@ -441,3 +452,28 @@ def get_database_overview(db_name: str) -> DatabaseOverview:
         image_width_px=image_width_px,
         image_height_px=image_height_px,
     )
+
+
+def update_manual_label(db_name: str, record_id: int, manual_label: Optional[str]) -> dict[str, Any]:
+    """Update manual_label column for a given record."""
+    if record_id <= 0:
+        raise HTTPException(status_code=400, detail="record_id は1以上で指定してください。")
+
+    db_path = _resolve_db_path(db_name)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            _ensure_manual_label_column(conn)
+            cursor = conn.execute(
+                "UPDATE roi_records SET manual_label = ? WHERE id = ?",
+                (manual_label, record_id),
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="指定されたレコードが見つかりません。")
+            conn.commit()
+            row = conn.execute("SELECT id, manual_label FROM roi_records WHERE id = ?", (record_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="指定されたレコードが見つかりません。")
+            return {"record_id": row["id"], "manual_label": row["manual_label"]}
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=f"データベース更新中にエラー: {exc}") from exc
