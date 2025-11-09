@@ -1,0 +1,8 @@
+/data_set
+/venv
+/Test_data
+*.tif
+*.png
+*.db
+*.pyc
+__pycache__/
