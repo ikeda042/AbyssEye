@@ -8,13 +8,18 @@ import {
   CircularProgress,
   Container,
   Divider,
+  FormControl,
+  InputLabel,
   Link,
+  MenuItem,
   Paper,
+  Select,
   Stack,
   ToggleButton,
   ToggleButtonGroup,
   Typography,
 } from "@mui/material";
+import type { SelectChangeEvent } from "@mui/material/Select";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
@@ -54,26 +59,20 @@ const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 const RECORD_BATCH_SIZE = 60;
 const PAGE_SCALE = 1.1;
 const PAGE_SCALE_WIDTH_PERCENT = `${100 / PAGE_SCALE}%`;
-type ProcessedPreviewMode = "normalized" | "jet";
+type PreviewMode = "normalized" | "jet" | "inference";
 
-const formatBytes = (value?: number) => {
-  if (typeof value !== "number" || Number.isNaN(value) || value <= 0) return "-";
-  const units = ["B", "KB", "MB", "GB"];
-  let size = value;
-  let unitIndex = 0;
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-  const decimals = size >= 10 || unitIndex === 0 ? 0 : 1;
-  return `${size.toFixed(decimals)} ${units[unitIndex]}`;
+type InferenceModelEntry = {
+  name: string;
+  relative_path: string;
+  kind: string;
+  is_active: boolean;
 };
 
-const formatDateTime = (iso?: string) => {
-  if (!iso) return "-";
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return "-";
-  return parsed.toLocaleString("ja-JP", { hour12: false });
+type InferenceResultPayload = {
+  predicted_class: number;
+  confidence: number;
+  probabilities: number[];
+  model_path: string;
 };
 
 const toFiniteNumber = (value: unknown): number | null => {
@@ -147,6 +146,8 @@ const formatScale = (value: number | null) => {
   if (value <= 0) return `${value}`;
   return `${value % 1 === 0 ? value.toFixed(0) : value.toFixed(2)}x`;
 };
+
+const formatPercentage = (value: number) => `${(value * 100).toFixed(1)}%`;
 
 const formatExtrasValue = (value: unknown) => {
   if (value === null || typeof value === "undefined") return "-";
@@ -225,7 +226,7 @@ const pixelsToDataUrl = (pixels: Uint8ClampedArray, width: number, height: numbe
   canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) return null;
-  const imageData = new ImageData(pixels, width, height);
+  const imageData = new ImageData(pixels as unknown as ImageDataArray, width, height);
   context.putImageData(imageData, 0, 0);
   return canvas.toDataURL("image/png");
 };
@@ -442,21 +443,45 @@ const SingleCellPage = () => {
 
   const [overview, setOverview] = useState<DatabaseOverview | null>(null);
   const [overviewError, setOverviewError] = useState<string | null>(null);
-  const [isOverviewLoading, setIsOverviewLoading] = useState(false);
+  const [, setIsOverviewLoading] = useState(false);
 
   const [records, setRecords] = useState<ROIRecord[]>([]);
   const [recordsError, setRecordsError] = useState<string | null>(null);
   const [isRecordsLoading, setIsRecordsLoading] = useState(false);
   const [hasMoreRecords, setHasMoreRecords] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [drawMode, setDrawMode] = useState<ProcessedPreviewMode>("normalized");
+  const [drawMode, setDrawMode] = useState<PreviewMode>("normalized");
+  const [availableModels, setAvailableModels] = useState<InferenceModelEntry[]>([]);
+  const [isModelsLoading, setIsModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [selectedModelPath, setSelectedModelPath] = useState<string | null>(null);
+  const [isActivatingModel, setIsActivatingModel] = useState(false);
+  const [modelActivationError, setModelActivationError] = useState<string | null>(null);
+  const [inferenceResult, setInferenceResult] = useState<InferenceResultPayload | null>(null);
+  const [isInferenceLoading, setIsInferenceLoading] = useState(false);
+  const [inferenceError, setInferenceError] = useState<string | null>(null);
+  const inferenceCacheRef = useRef(new Map<string, InferenceResultPayload>());
 
   const currentRecord = records[currentIndex] ?? null;
   const totalCount = overview?.record_count ?? records.length;
   const rawImageSrc = useMemo(() => (currentRecord ? `data:image/png;base64,${currentRecord.png_base64}` : null), [currentRecord]);
   const processedPreviews = useProcessedPreviews(rawImageSrc);
-  const processedImageSrc = drawMode === "normalized" ? processedPreviews.normalized : processedPreviews.jet;
+  const processedImageSrc =
+    drawMode === "normalized"
+      ? processedPreviews.normalized
+      : drawMode === "jet"
+        ? processedPreviews.jet
+        : null;
   const isRecordReady = Boolean(currentRecord && rawImageSrc);
+  const currentModel = selectedModelPath ? availableModels.find((model) => model.relative_path === selectedModelPath) ?? null : null;
+  const hasInferenceModels = availableModels.length > 0;
+  const canUseInference = Boolean(
+    hasInferenceModels && selectedModelPath && isRecordReady && !isActivatingModel && !isModelsLoading,
+  );
+  const drawModeDescription =
+    drawMode === "inference"
+      ? "選択したモデルでROIを推論し、結果を表示します。"
+      : "raw画像を正規化またはJetカラーマップで表示します。";
   const previewContainerSx = useMemo(
     () => ({
       flex: 1,
@@ -546,6 +571,199 @@ const SingleCellPage = () => {
       }
     }
   }, []);
+
+  const activateModel = useCallback(
+    async (relativePath: string) => {
+      setIsActivatingModel(true);
+      setModelActivationError(null);
+      try {
+        const response = await fetch(endpoint("inference/models/active"), {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ relative_path: relativePath }),
+        });
+        const payload: InferenceModelEntry | null = await response.json().catch(() => null);
+        if (!response.ok || !payload) {
+          const message = (payload as { detail?: string } | null)?.detail ?? "モデルの切り替えに失敗しました。";
+          throw new Error(message);
+        }
+        setAvailableModels((prev) =>
+          prev.map((model) => ({
+            ...model,
+            is_active: model.relative_path === payload.relative_path,
+          })),
+        );
+        return payload;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "モデルの切り替えに失敗しました。";
+        setModelActivationError(message);
+        throw err;
+      } finally {
+        setIsActivatingModel(false);
+      }
+    },
+    [],
+  );
+
+  const handleModelChange = useCallback(
+    (event: SelectChangeEvent<string>) => {
+      const nextPath = event.target.value;
+      if (!nextPath || nextPath === selectedModelPath) {
+        return;
+      }
+      const previous = selectedModelPath;
+      setSelectedModelPath(nextPath);
+      setInferenceResult(null);
+      setInferenceError(null);
+      activateModel(nextPath).catch(() => {
+        setSelectedModelPath(previous ?? null);
+      });
+    },
+    [activateModel, selectedModelPath],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    setIsModelsLoading(true);
+    setModelsError(null);
+    fetch(endpoint("inference/models"), {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload: InferenceModelEntry[] | null = await response.json().catch(() => null);
+        if (!response.ok || !payload || !Array.isArray(payload)) {
+          const message = (payload as { detail?: string } | null)?.detail ?? "モデル一覧の取得に失敗しました。";
+          throw new Error(message);
+        }
+        return payload;
+      })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setAvailableModels(payload);
+        inferenceCacheRef.current.clear();
+        setInferenceResult(null);
+        if (payload.length === 0) {
+          setSelectedModelPath(null);
+          return;
+        }
+        const initial = payload.find((model) => model.is_active) ?? payload[0];
+        setSelectedModelPath(initial.relative_path);
+        if (!initial.is_active) {
+          void activateModel(initial.relative_path).catch(() => {});
+        }
+      })
+      .catch((err) => {
+        if (cancelled || (err instanceof DOMException && err.name === "AbortError")) {
+          return;
+        }
+        setAvailableModels([]);
+        setSelectedModelPath(null);
+        setModelsError(err instanceof Error ? err.message : "モデル一覧の取得に失敗しました。");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsModelsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [activateModel]);
+
+  useEffect(() => {
+    inferenceCacheRef.current.clear();
+    setInferenceResult(null);
+    setInferenceError(null);
+  }, [dbName]);
+
+  useEffect(() => {
+    if (drawMode === "inference" && !hasInferenceModels) {
+      setDrawMode("normalized");
+    }
+  }, [drawMode, hasInferenceModels]);
+
+  useEffect(() => {
+    if (!selectedModelPath) {
+      setInferenceResult(null);
+      setInferenceError(null);
+    }
+  }, [selectedModelPath]);
+
+  useEffect(() => {
+    if (drawMode !== "inference") {
+      setIsInferenceLoading(false);
+      return;
+    }
+    if (!dbName || !currentRecord || !selectedModelPath || !hasInferenceModels || isActivatingModel) {
+      setIsInferenceLoading(false);
+      return;
+    }
+    const cacheKey = `${currentRecord.record_id}:${selectedModelPath}`;
+    const cached = inferenceCacheRef.current.get(cacheKey);
+    if (cached) {
+      setInferenceResult(cached);
+      setInferenceError(null);
+      setIsInferenceLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    setIsInferenceLoading(true);
+    setInferenceError(null);
+    setInferenceResult(null);
+    fetch(endpoint("inference/predict-record"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ db_name: dbName, record_id: currentRecord.record_id }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload: InferenceResultPayload | null = await response.json().catch(() => null);
+        if (!response.ok || !payload) {
+          const message = (payload as { detail?: string } | null)?.detail ?? "推論に失敗しました。";
+          throw new Error(message);
+        }
+        return payload;
+      })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        inferenceCacheRef.current.set(cacheKey, payload);
+        setInferenceResult(payload);
+        setInferenceError(null);
+      })
+      .catch((err) => {
+        if (cancelled || (err instanceof DOMException && err.name === "AbortError")) {
+          return;
+        }
+        setInferenceResult(null);
+        setInferenceError(err instanceof Error ? err.message : "推論に失敗しました。");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsInferenceLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [drawMode, dbName, currentRecord?.record_id, selectedModelPath, hasInferenceModels, isActivatingModel]);
 
   useEffect(() => {
     if (!dbName) {
@@ -679,6 +897,11 @@ const SingleCellPage = () => {
             {recordsError}
           </Alert>
         )}
+        {modelsError && (
+          <Alert severity="warning" variant="outlined">
+            {modelsError}
+          </Alert>
+        )}
 
         <Stack direction={{ xs: "column", lg: "row" }} spacing={2} alignItems="stretch">
           <Paper
@@ -738,7 +961,7 @@ const SingleCellPage = () => {
                       描画モード
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      raw画像を正規化またはJetカラーマップで表示します。
+                      {drawModeDescription}
                     </Typography>
                   </Stack>
                   <ToggleButtonGroup
@@ -759,36 +982,166 @@ const SingleCellPage = () => {
                     <ToggleButton value="jet" disabled={!isRecordReady || (!processedPreviews.jet && !processedPreviews.isProcessing)}>
                       Jet
                     </ToggleButton>
+                    <ToggleButton value="inference" disabled={!canUseInference}>
+                      推論
+                    </ToggleButton>
                   </ToggleButtonGroup>
                 </Stack>
 
-                <Box sx={previewContainerSx}>
-                  {!isRecordReady && (
-                    <Typography variant="body2" color="text.secondary">
-                      レコードを読み込み中です…
-                    </Typography>
-                  )}
-                  {isRecordReady && processedPreviews.isProcessing && (
-                    <CircularProgress size={32} sx={{ position: "absolute" }} />
-                  )}
-                  {isRecordReady && !processedPreviews.isProcessing && processedImageSrc && (
-                    <Box
-                      component="img"
-                      src={processedImageSrc}
-                      alt={`Record ${currentRecord?.record_id ?? ""} ${drawMode}`}
-                      sx={{ maxHeight: 420, width: "100%", objectFit: "contain" }}
-                    />
-                  )}
-                  {isRecordReady && !processedPreviews.isProcessing && !processedImageSrc && (
-                    <Typography variant="body2" color="text.secondary">
-                      プレビューを生成できませんでした。
-                    </Typography>
-                  )}
-                </Box>
-                {isRecordReady && processedPreviews.error && (
-                  <Typography variant="caption" color="error">
-                    {processedPreviews.error}
-                  </Typography>
+                {drawMode === "inference" ? (
+                  <Stack spacing={1.5}>
+                    <Stack spacing={0.5}>
+                      <FormControl
+                        size="small"
+                        fullWidth
+                        disabled={!hasInferenceModels || isModelsLoading || isActivatingModel}
+                      >
+                        <InputLabel id="inference-model-select-label">モデル</InputLabel>
+                        <Select
+                          labelId="inference-model-select-label"
+                          label="モデル"
+                          value={selectedModelPath ?? ""}
+                          onChange={handleModelChange}
+                          displayEmpty
+                          renderValue={(value) => {
+                            if (!value) {
+                              return "モデルを選択";
+                            }
+                            const model = availableModels.find((item) => item.relative_path === value);
+                            return model ? `${model.name} (${model.kind})` : value;
+                          }}
+                        >
+                          {availableModels.map((model) => (
+                            <MenuItem key={model.relative_path} value={model.relative_path}>
+                              {model.name} ({model.kind})
+                            </MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                      {selectedModelPath && (
+                        <Typography variant="caption" color="text.secondary">
+                          {`models/${selectedModelPath}`}
+                          {currentModel ? ` ・ ${currentModel.kind}` : ""}
+                        </Typography>
+                      )}
+                      {modelActivationError && (
+                        <Typography variant="caption" color="error">
+                          {modelActivationError}
+                        </Typography>
+                      )}
+                    </Stack>
+                    <Box sx={previewContainerSx}>
+                      {isModelsLoading && (
+                        <CircularProgress size={32} sx={{ position: "absolute" }} />
+                      )}
+                      {!isModelsLoading && !hasInferenceModels && (
+                        <Typography variant="body2" color="text.secondary">
+                          {modelsError ?? "models/ ディレクトリに推論モデルが見つかりません。"}
+                        </Typography>
+                      )}
+                      {hasInferenceModels && !selectedModelPath && !isModelsLoading && (
+                        <Typography variant="body2" color="text.secondary">
+                          モデルを選択してください。
+                        </Typography>
+                      )}
+                      {hasInferenceModels && selectedModelPath && !currentRecord && (
+                        <Typography variant="body2" color="text.secondary">
+                          レコードを読み込み中です…
+                        </Typography>
+                      )}
+                      {(isInferenceLoading || isActivatingModel) && (
+                        <CircularProgress size={32} sx={{ position: "absolute" }} />
+                      )}
+                      {inferenceError && !isInferenceLoading && (
+                        <Typography variant="body2" color="error" textAlign="center">
+                          {inferenceError}
+                        </Typography>
+                      )}
+                      {inferenceResult && !isInferenceLoading && (
+                        <Stack spacing={1.5} sx={{ width: "100%" }}>
+                          <Box textAlign="center">
+                            <Typography variant="subtitle1" fontWeight={600}>
+                              予測クラス: {inferenceResult.predicted_class}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              確信度 {formatPercentage(inferenceResult.confidence)}
+                            </Typography>
+                          </Box>
+                          <Divider />
+                          <Stack spacing={0.5} sx={{ width: "100%", maxHeight: 260, overflow: "auto" }}>
+                            {inferenceResult.probabilities.map((probability, index) => {
+                              const isPredicted = index === inferenceResult.predicted_class;
+                              return (
+                                <Stack
+                                  key={`${inferenceResult.model_path}-${index}`}
+                                  direction="row"
+                                  justifyContent="space-between"
+                                  alignItems="center"
+                                  sx={{
+                                    px: 1,
+                                    py: 0.5,
+                                    borderRadius: 1,
+                                    bgcolor: isPredicted ? "rgba(79, 70, 229, 0.15)" : "transparent",
+                                  }}
+                                >
+                                  <Typography variant="body2" fontWeight={isPredicted ? 600 : 400}>
+                                    Class {index}
+                                  </Typography>
+                                  <Typography variant="body2" fontWeight={isPredicted ? 600 : 400}>
+                                    {formatPercentage(probability)}
+                                  </Typography>
+                                </Stack>
+                              );
+                            })}
+                          </Stack>
+                          <Typography variant="caption" color="text.secondary" textAlign="center">
+                            {inferenceResult.model_path}
+                          </Typography>
+                        </Stack>
+                      )}
+                      {hasInferenceModels &&
+                        selectedModelPath &&
+                        currentRecord &&
+                        !isInferenceLoading &&
+                        !inferenceResult &&
+                        !inferenceError && (
+                          <Typography variant="body2" color="text.secondary">
+                            推論結果を待機しています…
+                          </Typography>
+                        )}
+                    </Box>
+                  </Stack>
+                ) : (
+                  <>
+                    <Box sx={previewContainerSx}>
+                      {!isRecordReady && (
+                        <Typography variant="body2" color="text.secondary">
+                          レコードを読み込み中です…
+                        </Typography>
+                      )}
+                      {isRecordReady && processedPreviews.isProcessing && (
+                        <CircularProgress size={32} sx={{ position: "absolute" }} />
+                      )}
+                      {isRecordReady && !processedPreviews.isProcessing && processedImageSrc && (
+                        <Box
+                          component="img"
+                          src={processedImageSrc}
+                          alt={`Record ${currentRecord?.record_id ?? ""} ${drawMode}`}
+                          sx={{ maxHeight: 420, width: "100%", objectFit: "contain" }}
+                        />
+                      )}
+                      {isRecordReady && !processedPreviews.isProcessing && !processedImageSrc && (
+                        <Typography variant="body2" color="text.secondary">
+                          プレビューを生成できませんでした。
+                        </Typography>
+                      )}
+                    </Box>
+                    {isRecordReady && processedPreviews.error && (
+                      <Typography variant="caption" color="error">
+                        {processedPreviews.error}
+                      </Typography>
+                    )}
+                  </>
                 )}
               </Box>
             </Stack>
