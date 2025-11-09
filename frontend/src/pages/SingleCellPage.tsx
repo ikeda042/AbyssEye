@@ -484,37 +484,6 @@ const SingleCellPage = () => {
           </Typography>
         </Box>
 
-        <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 } }}>
-          <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" spacing={2}>
-            <Stack spacing={0.5}>
-              <Typography variant="body2" color="text.secondary">
-                Database
-              </Typography>
-              <Typography variant="h6" fontWeight={600}>
-                {dbName}
-              </Typography>
-            </Stack>
-            <Stack spacing={0.5}>
-              <Typography variant="body2" color="text.secondary">
-                レコード数
-              </Typography>
-              <Typography variant="h6" fontWeight={600}>
-                {isOverviewLoading ? "読み込み中…" : overview?.record_count?.toLocaleString() ?? "-"}
-              </Typography>
-            </Stack>
-            <Stack spacing={0.5}>
-              <Typography variant="body2" color="text.secondary">
-                サイズ / 更新日時
-              </Typography>
-              <Typography variant="body2">
-                {isOverviewLoading
-                  ? "読み込み中…"
-                  : `${formatBytes(overview?.size_bytes)} / ${formatDateTime(overview?.updated_at)}`}
-              </Typography>
-            </Stack>
-          </Stack>
-        </Paper>
-
         {overviewError && (
           <Alert severity="error" variant="outlined">
             {overviewError}
