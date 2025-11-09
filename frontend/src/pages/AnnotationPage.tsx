@@ -12,6 +12,8 @@ import {
   Link,
   Paper,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
@@ -36,6 +38,160 @@ type ManualLabelResponse = {
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 const RECORD_BATCH_SIZE = 60;
 const LABEL_OPTIONS = ["0", "1", "2", "3"] as const;
+type ProcessedMode = "normalized" | "jet";
+
+const clampUnit = (value: number) => Math.max(0, Math.min(1, value));
+
+const computeIntensityRange = (data: Uint8ClampedArray) => {
+  let min = 255;
+  let max = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const value = data[i];
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  return { min, max };
+};
+
+const buildNormalizedPixels = (data: Uint8ClampedArray, min: number, max: number) => {
+  if (max <= min) {
+    return new Uint8ClampedArray(data);
+  }
+  const range = max - min;
+  const result = new Uint8ClampedArray(data.length);
+  for (let i = 0; i < data.length; i += 4) {
+    const normalizedValue = clampUnit((data[i] - min) / range);
+    const channel = Math.round(normalizedValue * 255);
+    result[i] = channel;
+    result[i + 1] = channel;
+    result[i + 2] = channel;
+    result[i + 3] = data[i + 3];
+  }
+  return result;
+};
+
+const jetColorMap = (value: number) => {
+  const v = clampUnit(value);
+  const fourValue = 4 * v;
+  const red = clampUnit(Math.min(fourValue - 1.5, -fourValue + 4.5));
+  const green = clampUnit(Math.min(fourValue - 0.5, -fourValue + 3.5));
+  const blue = clampUnit(Math.min(fourValue + 0.5, -fourValue + 2.5));
+  return {
+    r: Math.round(red * 255),
+    g: Math.round(green * 255),
+    b: Math.round(blue * 255),
+  };
+};
+
+const buildJetPixels = (data: Uint8ClampedArray, min: number, max: number) => {
+  if (max <= min) {
+    return new Uint8ClampedArray(data);
+  }
+  const range = max - min;
+  const result = new Uint8ClampedArray(data.length);
+  for (let i = 0; i < data.length; i += 4) {
+    const normalizedValue = clampUnit((data[i] - min) / range);
+    const { r, g, b } = jetColorMap(normalizedValue);
+    result[i] = r;
+    result[i + 1] = g;
+    result[i + 2] = b;
+    result[i + 3] = data[i + 3];
+  }
+  return result;
+};
+
+const pixelsToDataUrl = (pixels: Uint8ClampedArray, width: number, height: number) => {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const imageData = new ImageData(pixels as unknown as ImageDataArray, width, height);
+  context.putImageData(imageData, 0, 0);
+  return canvas.toDataURL("image/png");
+};
+
+const useProcessedPreviews = (imageSrc: string | null) => {
+  const [state, setState] = useState({
+    normalized: null as string | null,
+    jet: null as string | null,
+    isProcessing: false,
+    error: null as string | null,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!imageSrc) {
+      setState({ normalized: null, jet: null, isProcessing: false, error: null });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setState({ normalized: null, jet: null, isProcessing: true, error: null });
+
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => {
+      if (cancelled) return;
+      try {
+        const width = image.naturalWidth || image.width;
+        const height = image.naturalHeight || image.height;
+        if (!width || !height) {
+          throw new Error("画像サイズを取得できませんでした。");
+        }
+        const baseCanvas = document.createElement("canvas");
+        baseCanvas.width = width;
+        baseCanvas.height = height;
+        const context = baseCanvas.getContext("2d", { willReadFrequently: true });
+        if (!context) {
+          throw new Error("キャンバスを作成できませんでした。");
+        }
+        context.drawImage(image, 0, 0, width, height);
+        const imageData = context.getImageData(0, 0, width, height);
+        const { min, max } = computeIntensityRange(imageData.data);
+        const normalizedPixels = buildNormalizedPixels(imageData.data, min, max);
+        const jetPixels = buildJetPixels(imageData.data, min, max);
+        const normalized = pixelsToDataUrl(normalizedPixels, width, height);
+        const jet = pixelsToDataUrl(jetPixels, width, height);
+        if (!cancelled) {
+          setState({
+            normalized,
+            jet,
+            isProcessing: false,
+            error: normalized || jet ? null : "プレビュー画像を生成できませんでした。",
+          });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setState({
+            normalized: null,
+            jet: null,
+            isProcessing: false,
+            error: err instanceof Error ? err.message : "描画処理でエラーが発生しました。",
+          });
+        }
+      }
+    };
+    image.onerror = () => {
+      if (!cancelled) {
+        setState({
+          normalized: null,
+          jet: null,
+          isProcessing: false,
+          error: "raw画像の読み込みに失敗しました。",
+        });
+      }
+    };
+    image.src = imageSrc;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [imageSrc]);
+
+  return state;
+};
 
 const AnnotationPage = () => {
   const [searchParams] = useSearchParams();
@@ -49,6 +205,7 @@ const AnnotationPage = () => {
   const [isLabelUpdating, setIsLabelUpdating] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [labelInfo, setLabelInfo] = useState<string | null>(null);
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
 
   const currentRecord = records[currentIndex] ?? null;
   const totalCount = records.length;
@@ -56,6 +213,11 @@ const AnnotationPage = () => {
     () => (currentRecord ? `data:image/png;base64,${currentRecord.png_base64}` : null),
     [currentRecord],
   );
+  const processedPreviews = useProcessedPreviews(imageSrc);
+  const [processedMode, setProcessedMode] = useState<ProcessedMode>("normalized");
+  const processedImageSrc =
+    processedMode === "normalized" ? processedPreviews.normalized : processedPreviews.jet;
+  const activeLabel = selectedLabel ?? currentRecord?.manual_label ?? null;
 
   const fetchRecords = useCallback(
     async (skip: number) => {
@@ -138,6 +300,7 @@ const AnnotationPage = () => {
       if (!dbName || !currentRecord || isLabelUpdating) {
         return;
       }
+      setSelectedLabel(label);
       setIsLabelUpdating(true);
       setLabelError(null);
       setLabelInfo(null);
@@ -173,6 +336,7 @@ const AnnotationPage = () => {
             handleNext();
           }, 150);
         }
+        setSelectedLabel(payload.manual_label);
       } catch (err) {
         setLabelError(err instanceof Error ? err.message : "manual_labelの更新に失敗しました。");
       } finally {
@@ -203,16 +367,16 @@ const AnnotationPage = () => {
       }
       if (LABEL_OPTIONS.includes(event.key as typeof LABEL_OPTIONS[number])) {
         event.preventDefault();
-        setRecords((prev) =>
-          prev.map((record, index) =>
-            index === currentIndex ? { ...record, manual_label: event.key } : record,
-          ),
-        );
+        setSelectedLabel(event.key);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [currentRecord, currentIndex, handleNext]);
+
+  useEffect(() => {
+    setSelectedLabel(currentRecord?.manual_label ?? null);
+  }, [currentRecord?.record_id, currentRecord?.manual_label]);
 
   if (!dbName) {
     return (
@@ -263,7 +427,7 @@ const AnnotationPage = () => {
             DB: {dbName}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Enterで次に進み、ラベルは下のボタンから更新してください。（数字キーでは保存されません）
+            Enterで次に進み、ラベルは下のボタンで保存できます。キーボードの 0 / 1 / 2 / 3 を押すとボタン選択のみを切り替えます（保存は行いません）。
           </Typography>
         </Stack>
 
@@ -284,38 +448,121 @@ const AnnotationPage = () => {
         )}
 
         <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, minHeight: 420 }}>
-          <Stack direction={{ xs: "column", lg: "row" }} spacing={3} alignItems="stretch">
-            <Box
-              sx={{
-                flex: 1,
-                minHeight: 360,
-                border: "1px dashed #cbd5f5",
-                borderRadius: 1,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                bgcolor: "#f8fafc",
-                position: "relative",
-                p: 1.5,
-              }}
+          <Stack direction={{ xs: "column", xl: "row" }} spacing={3} alignItems="stretch">
+            <Stack
+              direction={{ xs: "column", md: "row" }}
+              spacing={2}
+              sx={{ flex: 1, alignItems: "stretch" }}
             >
-              {!currentRecord && !isRecordsLoading && (
-                <Typography variant="body2" color="text.secondary">
-                  ROIレコードを読み込み中です…
-                </Typography>
-              )}
-              {isRecordsLoading && (
-                <CircularProgress size={40} sx={{ position: "absolute" }} />
-              )}
-              {currentRecord && imageSrc && (
+              <Box
+                sx={{
+                  flex: 1,
+                  minHeight: 360,
+                  border: "1px dashed #cbd5f5",
+                  borderRadius: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  bgcolor: "#f8fafc",
+                  position: "relative",
+                  p: 1.5,
+                }}
+              >
+                {!currentRecord && !isRecordsLoading && (
+                  <Typography variant="body2" color="text.secondary">
+                    ROIレコードを読み込み中です…
+                  </Typography>
+                )}
+                {isRecordsLoading && (
+                  <CircularProgress size={40} sx={{ position: "absolute" }} />
+                )}
+                {currentRecord && imageSrc && (
+                  <Box
+                    component="img"
+                    src={imageSrc}
+                    alt={`Record ${currentRecord.record_id}`}
+                    sx={{ width: "100%", maxHeight: 480, objectFit: "contain" }}
+                  />
+                )}
+              </Box>
+
+              <Stack
+                spacing={1}
+                sx={{
+                  flex: 1,
+                  minHeight: 360,
+                  border: "1px dashed #cbd5f5",
+                  borderRadius: 1,
+                  p: 1.5,
+                  bgcolor: "#f1f5f9",
+                }}
+              >
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Typography variant="subtitle2" color="text.secondary">
+                    加工プレビュー
+                  </Typography>
+                  <ToggleButtonGroup
+                    size="small"
+                    exclusive
+                    value={processedMode}
+                    onChange={(_, value: ProcessedMode | null) => {
+                      if (value) {
+                        setProcessedMode(value);
+                      }
+                    }}
+                  >
+                    <ToggleButton value="normalized">Normalized</ToggleButton>
+                    <ToggleButton value="jet">Jet</ToggleButton>
+                  </ToggleButtonGroup>
+                </Stack>
                 <Box
-                  component="img"
-                  src={imageSrc}
-                  alt={`Record ${currentRecord.record_id}`}
-                  sx={{ width: "100%", maxHeight: 480, objectFit: "contain" }}
-                />
-              )}
-            </Box>
+                  sx={{
+                    flex: 1,
+                    border: "1px dashed #cbd5f5",
+                    borderRadius: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    bgcolor: "#fff",
+                    position: "relative",
+                    p: 1.5,
+                  }}
+                >
+                  {!currentRecord && (
+                    <Typography variant="body2" color="text.secondary">
+                      ROIレコードを読み込み中です…
+                    </Typography>
+                  )}
+                  {currentRecord && processedPreviews.isProcessing && (
+                    <CircularProgress size={32} sx={{ position: "absolute" }} />
+                  )}
+                  {currentRecord &&
+                    !processedPreviews.isProcessing &&
+                    processedImageSrc &&
+                    !isRecordsLoading && (
+                      <Box
+                        component="img"
+                        src={processedImageSrc}
+                        alt={`Record ${currentRecord.record_id} ${processedMode}`}
+                        sx={{ width: "100%", maxHeight: 480, objectFit: "contain" }}
+                      />
+                    )}
+                  {currentRecord &&
+                    !processedPreviews.isProcessing &&
+                    !processedImageSrc &&
+                    !isRecordsLoading && (
+                      <Typography variant="body2" color="text.secondary">
+                        プレビューを生成できませんでした。
+                      </Typography>
+                    )}
+                </Box>
+                {processedPreviews.error && (
+                  <Typography variant="caption" color="error">
+                    {processedPreviews.error}
+                  </Typography>
+                )}
+              </Stack>
+            </Stack>
 
             <Box
               sx={{
@@ -353,7 +600,7 @@ const AnnotationPage = () => {
                 <ButtonGroup orientation="vertical" fullWidth>
                   {LABEL_OPTIONS.map((label) => {
                     const description = getInferenceClassDescription(Number(label));
-                    const isActive = currentRecord?.manual_label === label;
+                    const isActive = activeLabel === label;
                     return (
                       <Button
                         key={label}
