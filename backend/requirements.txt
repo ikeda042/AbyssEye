@@ -1,0 +1,19 @@
+# Web framework and ASGI server
+fastapi
+uvicorn[standard]
+
+# Data validation
+pydantic
+
+# Numerical and image processing stack
+numpy
+opencv-python-headless
+Pillow
+tensorflow
+scipy
+scikit-image
+
+# Persistence and uploads
+SQLAlchemy
+matplotlib
+python-multipart
