@@ -55,11 +55,11 @@ const TopPage = () => {
     >
       <Container maxWidth="lg" sx={{ p: 0 }}>
         <Box textAlign="center" mb={6}>
-          <Typography variant="overline" sx={{ letterSpacing: 4, color: "text.secondary" }}>
+          {/* <Typography variant="overline" sx={{ letterSpacing: 4, color: "text.secondary" }}>
             AbyssEye Platform
-          </Typography>
+          </Typography> */}
           <Typography variant="h3" sx={{ fontWeight: 600, mt: 1 }}>
-            AbyssEye local API 
+            AbyssEye local APIs
           </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
             Choose the module you need for ROI extraction, inference, or database management.
