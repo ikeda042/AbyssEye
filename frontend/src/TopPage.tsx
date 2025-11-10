@@ -92,19 +92,7 @@ const TopPage = () => {
                   }}
                   onClick={() => handleNavigate(card.path)}
                 >
-                  <Box
-                    sx={{
-                      width: 64,
-                      height: 64,
-                      borderRadius: 0,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      backgroundColor: `${card.accent}1A`,
-                    }}
-                  >
-                    {cloneElement(card.icon, { sx: { fontSize: 36, color: card.accent } })}
-                  </Box>
+                  {cloneElement(card.icon, { sx: { fontSize: 36, color: card.accent } })}
                   <CardContent sx={{ p: 0 }}>
                     <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
                       {card.title}
