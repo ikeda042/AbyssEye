@@ -59,7 +59,7 @@ const TopPage = () => {
             AbyssEye Platform
           </Typography>
           <Typography variant="h3" sx={{ fontWeight: 600, mt: 1 }}>
-            Image Analysis Starts Here
+            AbyssEye local API 
           </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
             Choose the module you need for ROI extraction, inference, or database management.
