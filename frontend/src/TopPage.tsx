@@ -62,7 +62,7 @@ const TopPage = () => {
     <Box
       sx={{
         minHeight: "100vh",
-        background: "radial-gradient(circle at top, #ffffff 0%, #edf2fb 45%, #e2e8f0 100%)",
+        backgroundColor: "#ffffff",
         py: { xs: 5, md: 8 },
         px: { xs: 2, sm: 4, md: 6 },
       }}
@@ -80,14 +80,9 @@ const TopPage = () => {
           </Typography>
         </Box>
 
-        <Grid
-          container
-          spacing={3}
-          justifyContent={{ xs: "stretch", md: "center" }}
-          alignItems="stretch"
-        >
+        <Grid container spacing={3} justifyContent="flex-start" alignItems="stretch">
           {cards.map((card) => (
-            <Grid item xs={12} sm={6} md={5} key={card.title} sx={{ display: "flex" }}>
+            <Grid item xs={12} sm={6} md={4} key={card.title} sx={{ display: "flex" }}>
               <Card
                 elevation={5}
                 sx={{
