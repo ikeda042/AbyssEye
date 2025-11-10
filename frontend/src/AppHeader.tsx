@@ -35,7 +35,7 @@ const AppHeader = () => {
             title="Go to home"
             onClick={handleHomeClick}
             sx={{
-              height: 32,
+              height: 40,
               width: "auto",
               cursor: isHome ? "default" : "pointer",
               userSelect: "none",
