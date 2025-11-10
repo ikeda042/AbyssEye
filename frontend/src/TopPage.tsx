@@ -11,6 +11,8 @@ import { API_BASE_URL } from "./config";
 
 const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
 const HEALTHCHECK_URL = API_BASE_URL;
+const DESKTOP_SCALE_FACTOR = 1.5;
+const SCALED_WIDTH_PERCENT = `${(100 / DESKTOP_SCALE_FACTOR).toFixed(3)}%`;
 
 type BaseCardItem = {
   title: string;
@@ -100,7 +102,16 @@ const TopPage = () => {
         px: { xs: 2, sm: 4, md: 6 },
       }}
     >
-      <Container maxWidth="lg" sx={{ p: 0 }}>
+      <Container
+        maxWidth="lg"
+        sx={{
+          p: 0,
+          mx: "auto",
+          width: SCALED_WIDTH_PERCENT,
+          transformOrigin: "top center",
+          transform: `scale(${DESKTOP_SCALE_FACTOR})`,
+        }}
+      >
         <Box textAlign="center" mb={6}>
           {/* <Typography variant="overline" sx={{ letterSpacing: 4, color: "text.secondary" }}>
             AbyssEye Platform
