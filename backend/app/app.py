@@ -11,7 +11,7 @@ from .tiff_manager.router import router as tiff_router
 API_PREFIX = "/api/v1"
 
 app = FastAPI(
-    title="ROI Extraction Backend",
+    title="AbyssEye APIs",
     docs_url=f"{API_PREFIX}/docs",
     redoc_url=f"{API_PREFIX}/redoc",
     openapi_url=f"{API_PREFIX}/openapi.json",

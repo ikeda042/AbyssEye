@@ -6,14 +6,21 @@ import type { SvgIconProps } from "@mui/material/SvgIcon";
 import Grid from "@mui/material/GridLegacy";
 import StorageIcon from "@mui/icons-material/Storage";
 import DisplaySettingsIcon from "@mui/icons-material/DisplaySettings";
+import ApiIcon from "@mui/icons-material/Api";
+import { API_BASE_URL } from "./config";
 
-type CardItem = {
+const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
+
+type BaseCardItem = {
   title: string;
   description: string;
-  path: string;
   accent: string;
   icon: ReactElement<SvgIconProps>;
 };
+
+type CardItem =
+  | (BaseCardItem & { path: string; href?: never })
+  | (BaseCardItem & { href: string; path?: never });
 
 const TopPage = () => {
   const navigate = useNavigate();
@@ -32,6 +39,13 @@ const TopPage = () => {
         path: "/databases",
         accent: "#F39C12",
         icon: <StorageIcon />,
+      },
+      {
+        title: "Swagger UI",
+        description: "Open the backend API documentation and run sample requests.",
+        href: SWAGGER_DOCS_URL,
+        accent: "#27AE60",
+        icon: <ApiIcon />,
       },
     ],
     []
@@ -90,7 +104,16 @@ const TopPage = () => {
                     alignItems: "flex-start",
                     gap: 2,
                   }}
-                  onClick={() => handleNavigate(card.path)}
+                  {...("href" in card
+                    ? {
+                        component: "a",
+                        href: card.href,
+                        target: "_blank",
+                        rel: "noopener noreferrer",
+                      }
+                    : {
+                        onClick: () => handleNavigate(card.path),
+                      })}
                 >
                   {cloneElement(card.icon, { sx: { fontSize: 36, color: card.accent } })}
                   <CardContent sx={{ p: 0 }}>

@@ -664,7 +664,11 @@ const InferencePage = () => {
             )}
 
             {(isRecordsLoading || isRunningInference) && (
-              <LinearProgress variant={records.length > 0 ? "determinate" : "indeterminate"} value={progressPercent} />
+              <LinearProgress
+                variant={records.length > 0 ? "determinate" : "indeterminate"}
+                value={progressPercent}
+                sx={{ height: 12, borderRadius: 9999 }}
+              />
             )}
 
             {records.length > 0 && (
