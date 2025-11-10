@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import os
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Iterable, Protocol
 
 import numpy as np
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
 import tensorflow as tf
 from tensorflow import keras
@@ -54,6 +55,38 @@ class InferenceResult:
 
 def _models_root() -> Path:
     return MODELS_DIR.resolve()
+
+
+def _ensure_models_dir() -> Path:
+    root = _models_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _sanitize_model_filename(filename: str) -> str:
+    name = Path(filename or "").name
+    if not name:
+        raise HTTPException(status_code=400, detail="ファイル名が空です。")
+    return name
+
+
+def _validate_model_extension(filename: str) -> None:
+    suffix = Path(filename).suffix.lower()
+    if suffix not in MODEL_FILE_SUFFIXES:
+        raise HTTPException(status_code=400, detail="未対応のモデルファイル形式です。")
+
+
+def _deduplicate_target_path(target: Path) -> Path:
+    if not target.exists():
+        return target
+    counter = 1
+    stem = target.stem
+    suffix = target.suffix
+    while True:
+        candidate = target.with_name(f"{stem}_{counter}{suffix}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
 
 
 def _safe_relative_to_models(path: Path) -> str | None:
@@ -190,6 +223,24 @@ def get_active_model() -> AvailableModel | None:
     if not active_rel or not active_path:
         return None
     return _build_available_model(active_path, is_active=True)
+
+
+async def save_uploaded_model(upload_file: UploadFile) -> AvailableModel:
+    data = await upload_file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="空のファイルは保存できません。")
+
+    safe_name = _sanitize_model_filename(upload_file.filename)
+    _validate_model_extension(safe_name)
+    models_root = _ensure_models_dir()
+
+    def _write_file() -> Path:
+        target = _deduplicate_target_path(models_root / safe_name)
+        target.write_bytes(data)
+        return target
+
+    saved_path = await asyncio.to_thread(_write_file)
+    return _build_available_model(saved_path, is_active=False)
 
 
 def _get_active_model_path() -> Path | None:

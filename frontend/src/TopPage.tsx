@@ -7,6 +7,7 @@ import Grid from "@mui/material/GridLegacy";
 import StorageIcon from "@mui/icons-material/Storage";
 import DisplaySettingsIcon from "@mui/icons-material/DisplaySettings";
 import ApiIcon from "@mui/icons-material/Api";
+import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import { API_BASE_URL } from "./config";
 
 const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
@@ -45,6 +46,13 @@ const TopPage = () => {
         path: "/databases",
         accent: ICON_COLOR,
         icon: <StorageIcon />,
+      },
+      {
+        title: "Model Manager",
+        description: "Upload and review models stored under models/.",
+        path: "/model-manager",
+        accent: ICON_COLOR,
+        icon: <ModelTrainingIcon />,
       },
       {
         title: "Swagger UI",

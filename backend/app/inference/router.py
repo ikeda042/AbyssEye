@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel, Field
 
 from . import crud
@@ -72,6 +72,13 @@ async def get_active_model() -> ModelInfo | None:
 async def set_active_model(request: SetActiveModelRequest) -> ModelInfo:
     """Update the active model path (stored in-process)."""
     model = crud.set_active_model(request.relative_path)
+    return _serialize_model(model)
+
+
+@router.post("/models/upload", response_model=ModelInfo)
+async def upload_model(file: UploadFile = File(...)) -> ModelInfo:
+    """Upload a new model file under the models/ directory."""
+    model = await crud.save_uploaded_model(file)
     return _serialize_model(model)
 
 
