@@ -76,9 +76,9 @@ async def set_active_model(request: SetActiveModelRequest) -> ModelInfo:
 
 
 @router.post("/models/upload", response_model=ModelInfo)
-async def upload_model(file: UploadFile = File(...)) -> ModelInfo:
-    """Upload a new model file under the models/ directory."""
-    model = await crud.save_uploaded_model(file)
+async def upload_model(files: list[UploadFile] = File(...)) -> ModelInfo:
+    """Upload a new model artifact or directory (as multiple files) under models/."""
+    model = await crud.save_uploaded_model(files)
     return _serialize_model(model)
 
 

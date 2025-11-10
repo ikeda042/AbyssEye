@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from typing import Iterable, Protocol
+from typing import Iterable, Protocol, Sequence
 
 import numpy as np
 from fastapi import HTTPException, UploadFile
@@ -30,6 +30,7 @@ DEFAULT_MODEL_CANDIDATES = (
 )
 MODELS_DIR = PROJECT_ROOT / "models"
 MODEL_FILE_SUFFIXES = {".h5", ".hdf5", ".keras", ".pb", ".tflite"}
+DIRECTORY_DISALLOWED_PARTS = {"", ".", ".."}
 
 _active_model_path: Path | None = None
 _active_model_relative_path: str | None = None
@@ -87,6 +88,39 @@ def _deduplicate_target_path(target: Path) -> Path:
         if not candidate.exists():
             return candidate
         counter += 1
+
+
+def _deduplicate_directory(target: Path) -> Path:
+    if not target.exists():
+        return target
+    counter = 1
+    while True:
+        candidate = target.parent / f"{target.name}_{counter}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _sanitize_relative_upload_path(filename: str | None) -> tuple[str, ...]:
+    if not filename:
+        raise HTTPException(status_code=400, detail="ファイル名が空です。")
+    path = Path(filename)
+    if path.is_absolute():
+        raise HTTPException(status_code=400, detail="フォルダ構造は相対パスで指定してください。")
+    parts: list[str] = []
+    for part in path.parts:
+        if part in DIRECTORY_DISALLOWED_PARTS:
+            continue
+        parts.append(part)
+    if not parts:
+        raise HTTPException(status_code=400, detail="フォルダ構造を解釈できません。")
+    return tuple(parts)
+
+
+def _is_single_file_upload(filename: str | None) -> bool:
+    if not filename:
+        return False
+    return ("/" not in filename and "\\" not in filename and Path(filename).suffix.lower() in MODEL_FILE_SUFFIXES)
 
 
 def _safe_relative_to_models(path: Path) -> str | None:
@@ -225,7 +259,7 @@ def get_active_model() -> AvailableModel | None:
     return _build_available_model(active_path, is_active=True)
 
 
-async def save_uploaded_model(upload_file: UploadFile) -> AvailableModel:
+async def _save_single_model_file(upload_file: UploadFile) -> AvailableModel:
     data = await upload_file.read()
     if not data:
         raise HTTPException(status_code=400, detail="空のファイルは保存できません。")
@@ -241,6 +275,46 @@ async def save_uploaded_model(upload_file: UploadFile) -> AvailableModel:
 
     saved_path = await asyncio.to_thread(_write_file)
     return _build_available_model(saved_path, is_active=False)
+
+
+async def _save_model_directory(files: Sequence[UploadFile]) -> AvailableModel:
+    normalized: list[tuple[UploadFile, tuple[str, ...]]] = []
+    for upload in files:
+        normalized.append((upload, _sanitize_relative_upload_path(upload.filename)))
+
+    root_name = normalized[0][1][0]
+    if any(parts[0] != root_name for _, parts in normalized):
+        raise HTTPException(status_code=400, detail="単一のフォルダのみアップロードしてください。")
+
+    models_root = _ensure_models_dir()
+    target_root = _deduplicate_directory(models_root / root_name)
+
+    async def _write_upload(upload: UploadFile, parts: tuple[str, ...]) -> None:
+        relative_subpath = Path(*parts[1:]) if len(parts) > 1 else Path()
+        target_path = target_root / relative_subpath
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        data = await upload.read()
+
+        def _write() -> None:
+            target_path.write_bytes(data)
+
+        await asyncio.to_thread(_write)
+
+    for upload, parts in normalized:
+        await _write_upload(upload, parts)
+
+    return _build_available_model(target_root, is_active=False)
+
+
+async def save_uploaded_model(files: Sequence[UploadFile]) -> AvailableModel:
+    uploads = [upload for upload in files if upload.filename]
+    if not uploads:
+        raise HTTPException(status_code=400, detail="アップロードするファイルがありません。")
+
+    if len(uploads) == 1 and _is_single_file_upload(uploads[0].filename):
+        return await _save_single_model_file(uploads[0])
+
+    return await _save_model_directory(uploads)
 
 
 def _get_active_model_path() -> Path | None:

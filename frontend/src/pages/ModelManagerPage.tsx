@@ -21,6 +21,7 @@ import {
 } from "@mui/material";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import DriveFolderUploadIcon from "@mui/icons-material/DriveFolderUpload";
 
 import { API_BASE_URL } from "../config";
 
@@ -33,6 +34,8 @@ type ModelEntry = {
   kind: string;
   is_active: boolean;
 };
+
+type FileWithRelativePath = File & { webkitRelativePath?: string };
 
 const isModelEntry = (value: unknown): value is ModelEntry =>
   typeof value === "object" &&
@@ -50,6 +53,7 @@ const ModelManagerPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const directoryInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchModels = useCallback(async () => {
     setIsLoading(true);
@@ -84,37 +88,64 @@ const ModelManagerPage = () => {
     void run();
   }, [fetchModels]);
 
-  const handleOpenDialog = () => fileInputRef.current?.click();
+  useEffect(() => {
+    const input = directoryInputRef.current;
+    if (input) {
+      input.setAttribute("webkitdirectory", "true");
+      input.setAttribute("mozdirectory", "true");
+      input.setAttribute("directory", "true");
+      input.multiple = true;
+    }
+  }, []);
 
-  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) {
-      return;
-    }
-    setError(null);
-    setInfo(null);
-    setIsUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const response = await fetch(endpoint("inference/models/upload"), {
-        method: "POST",
-        body: formData,
-      });
-      const payload: unknown = await response.json().catch(() => null);
-      if (!response.ok || !isModelEntry(payload)) {
-        const detail = (payload as { detail?: string } | null)?.detail ?? "モデルのアップロードに失敗しました。";
-        throw new Error(detail);
+  const handleOpenFileDialog = () => fileInputRef.current?.click();
+  const handleOpenDirectoryDialog = () => directoryInputRef.current?.click();
+
+  const processFileUpload = useCallback(
+    async (fileList: FileList | null) => {
+      const files = fileList ? Array.from(fileList) : [];
+      if (files.length === 0) {
+        return;
       }
-      const created = payload;
-      setInfo(`${created.name} をアップロードしました。`);
-      await fetchModels();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "アップロード中にエラーが発生しました。");
-    } finally {
-      setIsUploading(false);
-      event.target.value = "";
-    }
+      setError(null);
+      setInfo(null);
+      setIsUploading(true);
+      try {
+        const formData = new FormData();
+        files.forEach((file) => {
+          const withPath = file as FileWithRelativePath;
+          const relativePath = withPath.webkitRelativePath?.trim();
+          const filename = relativePath && relativePath.length > 0 ? relativePath : file.name;
+          formData.append("files", file, filename);
+        });
+        const response = await fetch(endpoint("inference/models/upload"), {
+          method: "POST",
+          body: formData,
+        });
+        const payload: unknown = await response.json().catch(() => null);
+        if (!response.ok || !isModelEntry(payload)) {
+          const detail = (payload as { detail?: string } | null)?.detail ?? "モデルのアップロードに失敗しました。";
+          throw new Error(detail);
+        }
+        setInfo(`${payload.name} をアップロードしました。`);
+        await fetchModels();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "アップロード中にエラーが発生しました。");
+      } finally {
+        setIsUploading(false);
+      }
+    },
+    [fetchModels],
+  );
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    void processFileUpload(event.target.files);
+    event.target.value = "";
+  };
+
+  const handleDirectoryChange = (event: ChangeEvent<HTMLInputElement>) => {
+    void processFileUpload(event.target.files);
+    event.target.value = "";
   };
 
   const handleSetActive = async (relativePath: string) => {
@@ -174,12 +205,12 @@ const ModelManagerPage = () => {
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Upload TensorFlow / Keras model artifacts into the backend <code>models/</code> directory and manage the
-            active model used for inference.
+            active model used for inference. Single model files or entire SavedModel folders can be uploaded directly.
           </Typography>
         </Box>
 
         <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 } }}>
-          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }} flexWrap="wrap">
             <input
               ref={fileInputRef}
               type="file"
@@ -187,13 +218,22 @@ const ModelManagerPage = () => {
               hidden
               onChange={handleFileChange}
             />
+            <input ref={directoryInputRef} type="file" hidden onChange={handleDirectoryChange} />
             <Button
               variant="contained"
               startIcon={<CloudUploadIcon />}
-              onClick={handleOpenDialog}
+              onClick={handleOpenFileDialog}
               disabled={isUploading}
             >
               {isUploading ? "アップロード中…" : "モデルをアップロード"}
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<DriveFolderUploadIcon />}
+              onClick={handleOpenDirectoryDialog}
+              disabled={isUploading}
+            >
+              {isUploading ? "アップロード中…" : "フォルダごとアップロード"}
             </Button>
             <Button
               variant="outlined"
@@ -206,7 +246,7 @@ const ModelManagerPage = () => {
               再読み込み
             </Button>
             <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
-              サポート形式: {ALLOWED_MODEL_EXTENSIONS.join(", ")}
+              サポート形式: {ALLOWED_MODEL_EXTENSIONS.join(", ")} / SavedModel ディレクトリ
             </Typography>
           </Stack>
         </Paper>
