@@ -1,7 +1,7 @@
-import { useMemo, useCallback, cloneElement } from "react";
+import { useMemo, useCallback, cloneElement, useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Card, CardActionArea, CardContent, Container, Typography } from "@mui/material";
+import { Alert, Box, Card, CardActionArea, CardContent, Container, Typography } from "@mui/material";
 import type { SvgIconProps } from "@mui/material/SvgIcon";
 import Grid from "@mui/material/GridLegacy";
 import StorageIcon from "@mui/icons-material/Storage";
@@ -10,6 +10,7 @@ import ApiIcon from "@mui/icons-material/Api";
 import { API_BASE_URL } from "./config";
 
 const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
+const HEALTHCHECK_URL = API_BASE_URL;
 
 type BaseCardItem = {
   title: string;
@@ -24,6 +25,8 @@ type CardItem =
 
 const TopPage = () => {
   const navigate = useNavigate();
+  const [healthStatus, setHealthStatus] = useState<"loading" | "ok" | "error">("loading");
+  const [healthMessage, setHealthMessage] = useState("Checking backend status…");
   const cards = useMemo<CardItem[]>(
     () => [
       {
@@ -58,6 +61,36 @@ const TopPage = () => {
     [navigate],
   );
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const checkHealth = async () => {
+      try {
+        const response = await fetch(HEALTHCHECK_URL, { headers: { Accept: "application/json" }, cache: "no-store" });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error("Backend unavailable");
+        }
+        if (isMounted) {
+          setHealthStatus("ok");
+          const statusText = payload && typeof payload.status === "string" ? payload.status : "ok";
+          setHealthMessage(`Backend API is available (status: ${statusText}).`);
+        }
+      } catch {
+        if (isMounted) {
+          setHealthStatus("error");
+          setHealthMessage("Unable to reach the backend. Please start the server and try again.");
+        }
+      }
+    };
+
+    checkHealth();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   return (
     <Box
       sx={{
@@ -78,6 +111,14 @@ const TopPage = () => {
           <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
             Choose the module you need for ROI extraction, inference, or database management.
           </Typography>
+        </Box>
+        <Box mb={4}>
+          <Alert
+            severity={healthStatus === "ok" ? "success" : healthStatus === "error" ? "error" : "info"}
+            variant="outlined"
+          >
+            {healthMessage}
+          </Alert>
         </Box>
 
         <Grid container spacing={3} justifyContent="flex-start" alignItems="stretch">
