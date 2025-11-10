@@ -11,6 +11,7 @@ import { API_BASE_URL } from "./config";
 
 const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
 const HEALTHCHECK_URL = API_BASE_URL;
+const ICON_COLOR = "#27AE60";
 const DESKTOP_SCALE_FACTOR = 1.5;
 const SCALED_WIDTH_PERCENT = `${(100 / DESKTOP_SCALE_FACTOR).toFixed(3)}%`;
 
@@ -35,21 +36,21 @@ const TopPage = () => {
         title: "TIFF Manager",
         description: "Inspect uploaded TIFF stacks and quickly preview metadata.",
         path: "/tiff-manager",
-        accent: "#1F8EF1",
+        accent: ICON_COLOR,
         icon: <DisplaySettingsIcon />,
       },
       {
         title: "Databases",
         description: "Browse generated .db files and manage saved experiments.",
         path: "/databases",
-        accent: "#F39C12",
+        accent: ICON_COLOR,
         icon: <StorageIcon />,
       },
       {
         title: "Swagger UI",
         description: "Open the backend API documentation and run sample requests.",
         href: SWAGGER_DOCS_URL,
-        accent: "#27AE60",
+        accent: ICON_COLOR,
         icon: <ApiIcon />,
       },
     ],
