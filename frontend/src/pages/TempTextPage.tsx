@@ -22,6 +22,8 @@ const TempTextPage = () => {
   const [value, setValue] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [lastSaved, setLastSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -36,6 +38,8 @@ const TempTextPage = () => {
       }
       const text = await response.text();
       setValue(text);
+      setDirty(false);
+      setLastSaved(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "予期しないエラーが発生しました。");
     } finally {
@@ -65,6 +69,9 @@ const TempTextPage = () => {
       }
       const savedText = await response.text();
       setValue(savedText);
+      setDirty(false);
+      const savedAt = new Date();
+      setLastSaved(savedAt.toLocaleString());
       setInfo("テキストを保存しました（メモリ上で保持されます）。");
     } catch (err) {
       setError(err instanceof Error ? err.message : "テキスト保存中にエラーが発生しました。");
@@ -117,22 +124,36 @@ const TempTextPage = () => {
                 multiline
                 minRows={12}
                 value={value}
-                onChange={(e) => setValue(e.target.value)}
+                onChange={(e) => {
+                  setValue(e.target.value);
+                  setDirty(true);
+                }}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    handleSave();
+                  }
+                }}
                 fullWidth
                 InputProps={{ sx: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" } }}
               />
-              <Stack direction="row" spacing={1.5} justifyContent="flex-end">
-                <Button variant="outlined" startIcon={<RefreshIcon />} onClick={fetchText} disabled={loading || saving}>
+              <Stack direction="row" spacing={1.5} justifyContent="space-between" alignItems="center">
+                <Typography variant="caption" color="text.secondary">
+                  Ctrl/⌘ + Enter で保存 {lastSaved ? `・ 最終保存: ${lastSaved}` : ""}
+                </Typography>
+                <Box display="flex" gap={1.5}>
+                  <Button variant="outlined" startIcon={<RefreshIcon />} onClick={fetchText} disabled={loading || saving}>
                   再読み込み
                 </Button>
                 <Button
                   variant="contained"
                   startIcon={<SaveIcon />}
                   onClick={handleSave}
-                  disabled={saving}
+                  disabled={saving || !dirty}
                 >
-                  {saving ? "保存中..." : "保存"}
+                  {saving ? "保存中..." : dirty ? "保存" : "保存済み"}
                 </Button>
+                </Box>
               </Stack>
             </Stack>
           )}
