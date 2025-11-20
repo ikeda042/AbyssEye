@@ -26,6 +26,8 @@ APP_DIR = Path(__file__).resolve().parents[1]
 REALTIME_TIFF_DIR = APP_DIR / "realtime_tiff"
 REALTIME_DB_DIR = APP_DIR / "realtime_databases"
 REALTIME_CACHE_DIR = APP_DIR / "realtime_cache"
+PRIMARY_TIFF_DIR = APP_DIR / "tiff_manager"
+PRIMARY_DB_DIR = APP_DIR / "databases"
 LEGACY_REALTIME_TIFF_DIR = APP_DIR.parent / "realtime_tiff"
 ALLOWED_EXTENSIONS = {".tif", ".tiff"}
 ROI_CACHE_VERSION = 1
@@ -75,6 +77,8 @@ def _ensure_storage_dir() -> None:
     REALTIME_TIFF_DIR.mkdir(parents=True, exist_ok=True)
     REALTIME_DB_DIR.mkdir(parents=True, exist_ok=True)
     REALTIME_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    PRIMARY_TIFF_DIR.mkdir(parents=True, exist_ok=True)
+    PRIMARY_DB_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _is_dir_writable(path: Path) -> bool:
@@ -142,6 +146,26 @@ def _sanitize_stem(stem: str) -> str:
 
 def _candidate_tiff_dirs() -> list[Path]:
     return [REALTIME_TIFF_DIR, LEGACY_REALTIME_TIFF_DIR]
+
+
+def _deduplicate_target(target_dir: Path, filename: str) -> Path:
+    base = target_dir / filename
+    if not base.exists():
+        return base
+    stem, suffix = base.stem, base.suffix
+    counter = 1
+    while True:
+        candidate = target_dir / f"{stem}_{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _copy_with_dedup(src: Path, dest_dir: Path) -> Path:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target = _deduplicate_target(dest_dir, src.name)
+    shutil.copy2(src, target)
+    return target
 
 
 def _roi_cache_path(tif_path: Path) -> Path:
@@ -519,6 +543,16 @@ def get_realtime_tif_path(tif_name: str) -> Path:
         if tif_path.is_file():
             return _ensure_local_copy(tif_path)
     raise HTTPException(status_code=404, detail=f"{safe_name} が見つかりませんでした。")
+
+
+async def copy_latest_to_primary_locations() -> tuple[Path, Path]:
+    """Copy latest realtime TIFF/DB into primary folders used by tiff_manager & databases."""
+    _ensure_storage_dir()
+    status = await get_latest_status()
+
+    tif_target = await asyncio.to_thread(_copy_with_dedup, status.tif_path, PRIMARY_TIFF_DIR)
+    db_target = await asyncio.to_thread(_copy_with_dedup, status.db_path, PRIMARY_DB_DIR)
+    return tif_target, db_target
 
 
 async def render_tif_as_png_bytes(tif_path: Path, max_edge: int = 1400) -> bytes:

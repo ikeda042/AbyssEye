@@ -77,3 +77,14 @@ async def get_latest_realtime_tif_png():
     status = await crud.get_latest_status()
     png_bytes = await crud.render_tif_as_png_bytes(status.tif_path)
     return Response(content=png_bytes, media_type="image/png")
+
+
+@router.post("/use-current")
+async def use_current_realtime_assets() -> dict:
+    tif_path, db_path = await crud.copy_latest_to_primary_locations()
+    return {
+        "tif_name": tif_path.name,
+        "db_name": db_path.name,
+        "tif_path": str(tif_path),
+        "db_path": str(db_path),
+    }

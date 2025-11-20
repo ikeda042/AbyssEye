@@ -8,6 +8,7 @@ import {
   CircularProgress,
   Container,
   Link,
+  Button,
   ToggleButton,
   ToggleButtonGroup,
   Stack,
@@ -49,6 +50,7 @@ type RealtimeStatus = {
 };
 
 const statusEndpoint = new URL("realtime/latest", API_BASE_URL).toString();
+const useCurrentEndpoint = new URL("realtime/use-current", API_BASE_URL).toString();
 type DisplayMode = "raw" | "normalized" | "jet";
 const storageKeys = {
   tifDisplayMode: "realtime:tifDisplayMode",
@@ -169,6 +171,9 @@ const RealtimePage = () => {
   const [selectedOverlayRoiId, setSelectedOverlayRoiId] = useState<number | null>(null);
   const [selectedOverlayRoiSrc, setSelectedOverlayRoiSrc] = useState<string | null>(null);
   const [selectedOverlayRoiMeta, setSelectedOverlayRoiMeta] = useState<RealtimeROI | null>(null);
+  const [usingCurrent, setUsingCurrent] = useState(false);
+  const [useCurrentMessage, setUseCurrentMessage] = useState<string | null>(null);
+  const [useCurrentError, setUseCurrentError] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -206,6 +211,8 @@ const RealtimePage = () => {
       setLoading(true);
       setError(null);
       setRenderingTif(false);
+      setUseCurrentMessage(null);
+      setUseCurrentError(null);
     }
     try {
       const response = await fetch(statusEndpoint, { headers: { Accept: "application/json" }, cache: "no-store" });
@@ -362,6 +369,26 @@ const RealtimePage = () => {
     return () => window.clearInterval(id);
   }, [fetchStatus]);
 
+  const handleUseCurrent = useCallback(async () => {
+    if (!status) return;
+    setUsingCurrent(true);
+    setUseCurrentMessage(null);
+    setUseCurrentError(null);
+    try {
+      const response = await fetch(useCurrentEndpoint, { method: "POST" });
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null))?.detail;
+        throw new Error(detail || "コピーに失敗しました。");
+      }
+      const json = (await response.json()) as { tif_name: string; db_name: string };
+      setUseCurrentMessage(`コピー完了: TIFF ${json.tif_name} / DB ${json.db_name}`);
+    } catch (err) {
+      setUseCurrentError(err instanceof Error ? err.message : "コピーに失敗しました。");
+    } finally {
+      setUsingCurrent(false);
+    }
+  }, [status]);
+
   const classBuckets = useMemo(() => {
     const buckets: Record<number, RealtimeROI[]> = {
       0: [],
@@ -399,7 +426,28 @@ const RealtimePage = () => {
           </Typography>
         </Breadcrumbs>
 
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={1}
+          alignItems={{ xs: "flex-start", sm: "center" }}
+          justifyContent="space-between"
+        >
+          <Typography variant="h6" sx={{ fontWeight: 700 }}>
+            最新のRealtimeデータを確認
+          </Typography>
+          <Button
+            variant="contained"
+            onClick={handleUseCurrent}
+            disabled={!status || usingCurrent}
+            sx={{ minWidth: 220, alignSelf: { xs: "stretch", sm: "flex-end" } }}
+          >
+            {usingCurrent ? "コピー中..." : "このデータを使用する"}
+          </Button>
+        </Stack>
+
         {error && <Alert severity="error">{error}</Alert>}
+        {useCurrentError && <Alert severity="error">{useCurrentError}</Alert>}
+        {useCurrentMessage && <Alert severity="success">{useCurrentMessage}</Alert>}
 
         {loading ? (
           <Box display="flex" justifyContent="center" py={6}>
