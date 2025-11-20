@@ -5,6 +5,7 @@ import asyncio
 import base64
 import hashlib
 import sqlite3
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
@@ -20,6 +21,7 @@ from ..roi_extract.roi_module import ROIExtractor
 APP_DIR = Path(__file__).resolve().parents[1]
 REALTIME_TIFF_DIR = APP_DIR / "realtime_tiff"
 REALTIME_DB_DIR = APP_DIR / "realtime_databases"
+LEGACY_REALTIME_TIFF_DIR = APP_DIR.parent / "realtime_tiff"
 ALLOWED_EXTENSIONS = {".tif", ".tiff"}
 # fmt: on
 
@@ -75,6 +77,23 @@ def _validate_extension(filename: str) -> None:
 
 def _sanitize_stem(stem: str) -> str:
     return stem.replace(".", "").replace("#", "")
+
+
+def _candidate_tiff_dirs() -> list[Path]:
+    return [REALTIME_TIFF_DIR, LEGACY_REALTIME_TIFF_DIR]
+
+
+def _ensure_local_copy(tif_path: Path) -> Path:
+    """If tif is in a legacy location, copy it into REALTIME_TIFF_DIR to normalize path."""
+    if tif_path.parent.resolve() == REALTIME_TIFF_DIR.resolve():
+        return tif_path
+    target = REALTIME_TIFF_DIR / tif_path.name
+    try:
+        shutil.copy2(tif_path, target)
+    except OSError:
+        # fall back to using the original path if copy fails
+        return tif_path
+    return target
 
 
 def _mock_inference(tif_name: str) -> InferenceResult:
@@ -219,11 +238,15 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
 async def get_latest_status() -> RealtimeStatus:
     global _latest_status
     _ensure_storage_dir()
-    candidates = sorted(
-        (p for p in REALTIME_TIFF_DIR.iterdir() if p.suffix.lower() in ALLOWED_EXTENSIONS and p.is_file()),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    tif_files = []
+    for directory in _candidate_tiff_dirs():
+        if not directory.exists():
+            continue
+        for p in directory.iterdir():
+            if p.is_file() and p.suffix.lower() in ALLOWED_EXTENSIONS:
+                tif_files.append(p)
+
+    candidates = sorted(tif_files, key=lambda p: p.stat().st_mtime, reverse=True)
     if not candidates:
         raise HTTPException(status_code=404, detail="まだRealtime TIFFがアップロードされていません。")
 
@@ -236,14 +259,15 @@ async def get_latest_status() -> RealtimeStatus:
     ):
         return _latest_status
 
-    db_path = await asyncio.to_thread(_create_db_from_tif, latest)
+    latest_local = _ensure_local_copy(latest)
+    db_path = await asyncio.to_thread(_create_db_from_tif, latest_local)
     rois = await asyncio.to_thread(_load_rois_with_inference, db_path)
     _latest_status = RealtimeStatus(
-        tif_path=latest,
+        tif_path=latest_local,
         saved_at=datetime.fromtimestamp(latest_mtime),
-        size_bytes=latest.stat().st_size,
+        size_bytes=latest_local.stat().st_size,
         db_path=db_path,
-        inference=_build_inference_summary(rois, latest.name),
+        inference=_build_inference_summary(rois, latest_local.name),
         rois=rois,
     )
     return _latest_status
@@ -253,10 +277,11 @@ def get_realtime_tif_path(tif_name: str) -> Path:
     _ensure_storage_dir()
     safe_name = _sanitize_filename(tif_name)
     _validate_extension(safe_name)
-    tif_path = REALTIME_TIFF_DIR / safe_name
-    if not tif_path.is_file():
-        raise HTTPException(status_code=404, detail=f"{safe_name} が見つかりませんでした。")
-    return tif_path
+    for directory in _candidate_tiff_dirs():
+        tif_path = directory / safe_name
+        if tif_path.is_file():
+            return _ensure_local_copy(tif_path)
+    raise HTTPException(status_code=404, detail=f"{safe_name} が見つかりませんでした。")
 
 
 async def render_tif_as_png_bytes(tif_path: Path, max_edge: int = 1400) -> bytes:
