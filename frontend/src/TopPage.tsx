@@ -55,7 +55,7 @@ const TopPage = () => {
         icon: <ModelTrainingIcon />,
       },
       {
-        title: "Realtime Monitor",
+        title: "Realtime engine",
         description: "最新のTIFFと推論結果を自動表示します。",
         path: "/realtime",
         accent: ICON_COLOR,
