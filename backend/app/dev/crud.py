@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-
-async def get_temp_text() -> dict:
-    return {"text": """# ============================================
+POWERSHELL_WATCH_SCRIPT = r"""# ============================================
 # 設定値（必要に応じて書き換えてください）
 # ============================================
 
@@ -141,4 +139,8 @@ catch [System.Exception] {
 finally {
     Write-Host "[INFO] 監視を終了します。"
 }
-"""}
+"""
+
+
+async def get_temp_text() -> dict:
+    return {"text": POWERSHELL_WATCH_SCRIPT}
