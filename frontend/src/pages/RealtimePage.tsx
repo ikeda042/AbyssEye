@@ -779,29 +779,33 @@ const RealtimePage = () => {
                           )}
                         </Stack>
                       </Box>
-                      {selectedOverlayRoiSrc && (
-                        <Box sx={{ mt: "auto", pt: 1, borderTop: "1px solid rgba(15,23,42,0.08)" }}>
-                          <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" mb={0.5}>
-                            <Typography variant="subtitle2" fontWeight={600}>
-                              選択 ROI
+                      <Box sx={{ mt: "auto", pt: 1, borderTop: "1px solid rgba(15,23,42,0.08)" }}>
+                        <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" mb={0.5}>
+                          <Typography variant="subtitle2" fontWeight={600}>
+                            選択 ROI
+                          </Typography>
+                          {selectedOverlayRoiMeta ? (
+                            <Stack direction="row" spacing={1} alignItems="center">
+                              <Box
+                                sx={{
+                                  width: 10,
+                                  height: 10,
+                                  borderRadius: "50%",
+                                  bgcolor: classColors[selectedOverlayRoiMeta.predicted_class],
+                                }}
+                              />
+                              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                Class {selectedOverlayRoiMeta.predicted_class} / 信頼度:{" "}
+                                {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
+                              </Typography>
+                            </Stack>
+                          ) : (
+                            <Typography variant="body2" color="text.secondary">
+                              ROIが選択されていません。
                             </Typography>
-                            {selectedOverlayRoiMeta && (
-                              <Stack direction="row" spacing={1} alignItems="center">
-                                <Box
-                                  sx={{
-                                    width: 10,
-                                    height: 10,
-                                    borderRadius: "50%",
-                                    bgcolor: classColors[selectedOverlayRoiMeta.predicted_class],
-                                  }}
-                                />
-                                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
-                                  Class {selectedOverlayRoiMeta.predicted_class} / 信頼度:{" "}
-                                  {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
-                                </Typography>
-                              </Stack>
-                            )}
-                          </Stack>
+                          )}
+                        </Stack>
+                        {selectedOverlayRoiSrc ? (
                           <Box
                             component="img"
                             src={selectedOverlayRoiSrc}
@@ -819,8 +823,12 @@ const RealtimePage = () => {
                               marginRight: "auto",
                             }}
                           />
-                        </Box>
-                      )}
+                        ) : (
+                          <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ py: 1.25 }}>
+                            ROIが選択されていません。
+                          </Typography>
+                        )}
+                      </Box>
                     </Box>
                   </Stack>
                 </Stack>
