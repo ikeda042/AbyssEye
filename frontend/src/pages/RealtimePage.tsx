@@ -8,6 +8,8 @@ import {
   CircularProgress,
   Container,
   Link,
+  ToggleButton,
+  ToggleButtonGroup,
   Stack,
   Typography,
 } from "@mui/material";
@@ -41,6 +43,8 @@ type RealtimeStatus = {
 };
 
 const statusEndpoint = new URL("realtime/latest", API_BASE_URL).toString();
+type DisplayMode = "raw" | "normalized" | "jet";
+
 const classLabels = Array.from({ length: 4 }, (_, index) => {
   const description = getInferenceClassDescription(index);
   return description ? `Class ${index}（${description}）` : `Class ${index}`;
@@ -53,17 +57,91 @@ const formatBytes = (bytes: number) => {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
 };
 
+const loadImage = (src: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("画像の読み込みに失敗しました"));
+    img.src = src;
+  });
+
+const jetColor = (value01: number): [number, number, number] => {
+  const v = Math.max(0, Math.min(1, value01));
+  const four = 4 * v;
+  const r = Math.min(Math.max(Math.min(four - 1.5, -four + 4.5), 0), 1);
+  const g = Math.min(Math.max(Math.min(four - 0.5, -four + 3.5), 0), 1);
+  const b = Math.min(Math.max(Math.min(four + 0.5, -four + 2.5), 0), 1);
+  return [r * 255, g * 255, b * 255];
+};
+
+const applyDisplayMode = async (src: string, mode: DisplayMode): Promise<string> => {
+  if (mode === "raw") return src;
+  const img = await loadImage(src);
+  const canvas = document.createElement("canvas");
+  canvas.width = img.naturalWidth || img.width;
+  canvas.height = img.naturalHeight || img.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("画像の描画に失敗しました");
+  ctx.drawImage(img, 0, 0);
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+
+  if (mode === "normalized") {
+    let min = 255;
+    let max = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      min = Math.min(min, data[i], data[i + 1], data[i + 2]);
+      max = Math.max(max, data[i], data[i + 1], data[i + 2]);
+    }
+    const range = Math.max(1, max - min);
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = ((data[i] - min) / range) * 255;
+      data[i + 1] = ((data[i + 1] - min) / range) * 255;
+      data[i + 2] = ((data[i + 2] - min) / range) * 255;
+    }
+  } else if (mode === "jet") {
+    let min = 255;
+    let max = 0;
+    const luminance: number[] = [];
+    luminance.length = data.length / 4;
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+      const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      luminance[p] = lum;
+      min = Math.min(min, lum);
+      max = Math.max(max, lum);
+    }
+    const range = Math.max(1, max - min);
+    for (let p = 0, i = 0; p < luminance.length; p++, i += 4) {
+      const normalized = (luminance[p] - min) / range;
+      const [r, g, b] = jetColor(normalized);
+      data[i] = r;
+      data[i + 1] = g;
+      data[i + 2] = b;
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL("image/png");
+};
+
 const RealtimePage = () => {
   const [status, setStatus] = useState<RealtimeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const latestStatusRef = useRef<RealtimeStatus | null>(null);
+  const [tifDisplayMode, setTifDisplayMode] = useState<DisplayMode>("raw");
+  const [roiDisplayMode, setRoiDisplayMode] = useState<DisplayMode>("raw");
+  const [renderedTifSrc, setRenderedTifSrc] = useState<string | null>(null);
+  const [renderingTif, setRenderingTif] = useState(false);
+  const [roiDisplaySources, setRoiDisplaySources] = useState<Record<number, string>>({});
 
   const fetchStatus = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
     if (!silent) {
       setLoading(true);
       setError(null);
+      setRenderingTif(false);
     }
     try {
       const response = await fetch(statusEndpoint, { headers: { Accept: "application/json" }, cache: "no-store" });
@@ -93,6 +171,79 @@ const RealtimePage = () => {
   useEffect(() => {
     latestStatusRef.current = status;
   }, [status]);
+
+  useEffect(() => {
+    if (!status) {
+      setRenderedTifSrc(null);
+      return;
+    }
+    const rawSrc = status.tif_png_url || status.tif_url;
+    if (tifDisplayMode === "raw") {
+      setRenderedTifSrc(rawSrc);
+      return;
+    }
+    let cancelled = false;
+    setRenderingTif(true);
+    void applyDisplayMode(rawSrc, tifDisplayMode)
+      .then((result) => {
+        if (!cancelled) {
+          setRenderedTifSrc(result);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRenderedTifSrc(rawSrc);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRenderingTif(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status, tifDisplayMode]);
+
+  useEffect(() => {
+    const rois = status?.rois ?? [];
+    if (rois.length === 0) {
+      setRoiDisplaySources({});
+      return;
+    }
+    if (roiDisplayMode === "raw") {
+      const mapping: Record<number, string> = {};
+      rois.forEach((roi) => {
+        mapping[roi.roi_id] = `data:image/png;base64,${roi.png_base64}`;
+      });
+      setRoiDisplaySources(mapping);
+      return;
+    }
+
+    let cancelled = false;
+    const run = async () => {
+      const entries = await Promise.all(
+        rois.map(async (roi) => {
+          const rawSrc = `data:image/png;base64,${roi.png_base64}`;
+          try {
+            const processed = await applyDisplayMode(rawSrc, roiDisplayMode);
+            return [roi.roi_id, processed] as const;
+          } catch {
+            return [roi.roi_id, rawSrc] as const;
+          }
+        })
+      );
+      if (!cancelled) {
+        setRoiDisplaySources(Object.fromEntries(entries));
+      }
+    };
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status, roiDisplayMode]);
 
   useEffect(() => {
     void fetchStatus();
@@ -142,7 +293,11 @@ const RealtimePage = () => {
           <Stack spacing={3}>
             <Card variant="outlined">
               <CardContent>
-                <Stack direction={{ xs: "column", md: "row" }} spacing={2.5}>
+                <Stack
+                  direction={{ xs: "column", md: "row" }}
+                  spacing={2.5}
+                  alignItems={{ xs: "stretch", md: "flex-start" }}
+                >
                   <Box
                     sx={{
                       flex: 1,
@@ -150,11 +305,38 @@ const RealtimePage = () => {
                       borderRadius: 1,
                       overflow: "hidden",
                       border: "1px solid rgba(15,23,42,0.1)",
+                      position: "relative",
                     }}
                   >
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      alignItems="center"
+                      justifyContent="space-between"
+                      sx={{
+                        px: 1.5,
+                        py: 1,
+                        borderBottom: "1px solid rgba(15,23,42,0.08)",
+                        backgroundColor: "rgba(15,23,42,0.02)",
+                      }}
+                    >
+                      <Typography variant="subtitle2" fontWeight={600}>
+                        TIFF表示モード
+                      </Typography>
+                      <ToggleButtonGroup
+                        size="small"
+                        exclusive
+                        value={tifDisplayMode}
+                        onChange={(_, value) => value && setTifDisplayMode(value)}
+                      >
+                        <ToggleButton value="raw">Raw</ToggleButton>
+                        <ToggleButton value="normalized">Normalized</ToggleButton>
+                        <ToggleButton value="jet">Jet</ToggleButton>
+                      </ToggleButtonGroup>
+                    </Stack>
                     <Box
                       component="img"
-                      src={status.tif_png_url || status.tif_url}
+                      src={renderedTifSrc || status.tif_png_url || status.tif_url}
                       alt={status.tif_name}
                       sx={{
                         width: "100%",
@@ -163,6 +345,20 @@ const RealtimePage = () => {
                         backgroundColor: "#0f172a0d",
                       }}
                     />
+                    {renderingTif && (
+                      <Box
+                        sx={{
+                          position: "absolute",
+                          inset: 0,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          backgroundColor: "rgba(255,255,255,0.4)",
+                        }}
+                      >
+                        <CircularProgress size={42} />
+                      </Box>
+                    )}
                   </Box>
                   <Stack spacing={1} sx={{ minWidth: { md: 280 } }}>
                     <Typography variant="subtitle1" fontWeight={600}>
@@ -189,6 +385,24 @@ const RealtimePage = () => {
                 gap: 2,
               }}
             >
+              <Card variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, gridColumn: { xs: "1", lg: "1 / span 2" } }}>
+                <Stack direction={{ xs: "column", sm: "row" }} alignItems="center" spacing={1} justifyContent="space-between">
+                  <Typography variant="subtitle1" fontWeight={600}>
+                    推論プレビュー表示モード
+                  </Typography>
+                  <ToggleButtonGroup
+                    size="small"
+                    exclusive
+                    value={roiDisplayMode}
+                    onChange={(_, value) => value && setRoiDisplayMode(value)}
+                  >
+                    <ToggleButton value="raw">Raw</ToggleButton>
+                    <ToggleButton value="normalized">Normalized</ToggleButton>
+                    <ToggleButton value="jet">Jet</ToggleButton>
+                  </ToggleButtonGroup>
+                </Stack>
+              </Card>
+
               {classLabels.map((label, classIndex) => {
                 const bucket = classBuckets.buckets[classIndex] ?? [];
                 return (
@@ -220,7 +434,7 @@ const RealtimePage = () => {
                         }}
                       >
                         {bucket.map((roi) => {
-                          const imageSrc = `data:image/png;base64,${roi.png_base64}`;
+                          const imageSrc = roiDisplaySources[roi.roi_id] || `data:image/png;base64,${roi.png_base64}`;
                           return (
                             <Box
                               key={`${classIndex}-${roi.roi_id}`}
