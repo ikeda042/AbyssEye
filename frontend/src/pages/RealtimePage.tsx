@@ -63,7 +63,8 @@ const classLabels = Array.from({ length: 4 }, (_, index) => {
   return description ? `Class ${index}（${description}）` : `Class ${index}`;
 });
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
-const overlayStaggerSeconds = 0.012;
+const overlayStaggerSeconds = 0.008;
+const overlayScanDelayOffset = overlayStaggerSeconds * 10;
 
 const drawFrame = keyframes`
   0% { clip-path: inset(65% 65% 65% 65%); opacity: 0; transform: scale(0.96); }
@@ -629,7 +630,7 @@ const RealtimePage = () => {
                                     filter: "blur(0.2px)",
                                     transform: "translateX(-110%)",
                                     opacity: 0,
-                                    animation: `${scanLine} 0.8s ease-out ${delay + 0.12}s 1`,
+                                    animation: `${scanLine} 0.8s ease-out ${delay + overlayScanDelayOffset}s 1`,
                                   },
                                 }}
                                 onClick={() => setSelectedOverlayRoiId(roi.roi_id)}
