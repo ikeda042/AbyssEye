@@ -18,3 +18,4 @@ SQLAlchemy
 matplotlib
 python-multipart
 swagger-ui-bundle
+fastapi-swagger
