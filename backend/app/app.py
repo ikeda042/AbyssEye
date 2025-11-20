@@ -4,10 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.staticfiles import StaticFiles
-try:  # swagger-ui-bundle >=0.0.11
-    from swagger_ui_bundle import swagger_ui_4_path as swagger_ui_path  # type: ignore
-except ImportError:  # pragma: no cover - fallback for older swagger-ui-bundle
-    from swagger_ui_bundle import swagger_ui_3_path as swagger_ui_path  # type: ignore
+from swagger_ui_bundle import swagger_ui_path
 
 from .databases.router import router as databases_router
 from .inference.router import router as inference_router
