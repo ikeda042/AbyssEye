@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { keyframes } from "@emotion/react";
 import {
   Alert,
   Box,
@@ -62,6 +63,27 @@ const classLabels = Array.from({ length: 4 }, (_, index) => {
   return description ? `Class ${index}（${description}）` : `Class ${index}`;
 });
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
+const overlayStaggerSeconds = 0.12;
+
+const drawFrame = keyframes`
+  0% { clip-path: inset(65% 65% 65% 65%); opacity: 0; transform: scale(0.96); }
+  35% { opacity: 0.92; }
+  100% { clip-path: inset(0 0 0 0); opacity: 1; transform: scale(1); }
+`;
+
+const scanLine = keyframes`
+  0% { transform: translateX(-110%); opacity: 0; }
+  25% { opacity: 0.42; }
+  55% { opacity: 0.24; }
+  100% { transform: translateX(110%); opacity: 0; }
+`;
+
+const capturePulse = keyframes`
+  0% { opacity: 0; transform: scale(0.9); }
+  30% { opacity: 0.35; }
+  70% { opacity: 0; transform: scale(1.25); }
+  100% { opacity: 0; transform: scale(1.35); }
+`;
 const formatBytes = (bytes: number) => {
   if (!bytes) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
@@ -414,6 +436,24 @@ const RealtimePage = () => {
     return { buckets, others, counts };
   }, [status]);
 
+  const roiCaptureOrder = useMemo(() => {
+    const rois = status?.rois ?? [];
+    const sortedByPosition = [...rois].sort((a, b) => {
+      const centerAy = (a.roi_start_y + a.roi_end_y) / 2;
+      const centerBy = (b.roi_start_y + b.roi_end_y) / 2;
+      if (centerAy === centerBy) {
+        const centerAx = (a.roi_start_x + a.roi_end_x) / 2;
+        const centerBx = (b.roi_start_x + b.roi_end_x) / 2;
+        return centerAx - centerBx;
+      }
+      return centerAy - centerBy;
+    });
+    return sortedByPosition.reduce<Record<number, number>>((acc, roi, index) => {
+      acc[roi.roi_id] = index;
+      return acc;
+    }, {});
+  }, [status?.rois, status?.tif_name]);
+
   return (
     <Container maxWidth="xl" sx={{ py: 4.5, px: { xs: 2.5, sm: 3.5, md: 4.5 } }}>
       <Stack spacing={2.5}>
@@ -526,7 +566,7 @@ const RealtimePage = () => {
                             pointerEvents: "auto",
                           }}
                         >
-                          {(status.rois ?? []).map((roi) => {
+                          {(status.rois ?? []).map((roi, index) => {
                             const baseWidth = roi.image_width_px || 0;
                             const baseHeight = roi.image_height_px || 0;
                             if (!baseWidth || !baseHeight) return null;
@@ -538,6 +578,8 @@ const RealtimePage = () => {
                             const height = (roi.roi_end_y - roi.roi_start_y) * scaleY;
                             const color = classColors[roi.predicted_class] ?? "#6366f1";
                             const isSelected = selectedOverlayRoiId === roi.roi_id;
+                            const sequenceIndex = roiCaptureOrder[roi.roi_id] ?? index;
+                            const delay = sequenceIndex * overlayStaggerSeconds;
                             return (
                               <Box
                                 key={`overlay-${roi.roi_id}`}
@@ -547,16 +589,54 @@ const RealtimePage = () => {
                                   top,
                                   width,
                                   height,
-                                  border: isSelected ? `2px solid ${color}` : `1.2px solid ${color}`,
-                                  borderRadius: 0.5,
-                                  backgroundColor: isSelected ? `${color}28` : `${color}18`,
-                                  boxShadow: isSelected
-                                    ? `0 0 0 1px rgba(15,23,42,0.12), 0 0 0 2px ${color}33`
-                                    : "0 0 0 0.5px rgba(15,23,42,0.06)",
+                                  borderRadius: 0.75,
+                                  backgroundColor: isSelected ? `${color}24` : `${color}10`,
+                                  overflow: "hidden",
                                   cursor: "pointer",
+                                  boxShadow: isSelected
+                                    ? `0 0 0 1px ${color}70, 0 0 0 5px ${color}1c`
+                                    : "0 0 0 0.5px rgba(15,23,42,0.06)",
+                                  transition: "box-shadow 160ms ease, background-color 160ms ease, transform 160ms ease",
+                                  "&:hover": {
+                                    boxShadow: `0 0 0 1.4px ${color}9a, 0 0 0 7px ${color}16`,
+                                    backgroundColor: `${color}16`,
+                                  },
+                                  "&::before": {
+                                    content: '""',
+                                    position: "absolute",
+                                    inset: -1,
+                                    borderRadius: "inherit",
+                                    border: `1.5px solid ${color}`,
+                                    clipPath: "inset(65% 65% 65% 65%)",
+                                    opacity: 0,
+                                    animation: `${drawFrame} 0.9s cubic-bezier(0.18, 0.72, 0.25, 1) ${delay}s forwards`,
+                                  },
+                                  "&::after": {
+                                    content: '""',
+                                    position: "absolute",
+                                    inset: "-18%",
+                                    background: `linear-gradient(120deg, transparent 28%, ${color}66 48%, transparent 68%)`,
+                                    filter: "blur(0.2px)",
+                                    transform: "translateX(-110%)",
+                                    opacity: 0,
+                                    animation: `${scanLine} 1.2s ease-out ${delay + 0.18}s 1`,
+                                  },
                                 }}
                                 onClick={() => setSelectedOverlayRoiId(roi.roi_id)}
-                              />
+                              >
+                                <Box
+                                  sx={{
+                                    position: "absolute",
+                                    inset: "-10%",
+                                    borderRadius: "inherit",
+                                    background: `${color}24`,
+                                    filter: "blur(14px)",
+                                    opacity: 0,
+                                    pointerEvents: "none",
+                                    animation: `${capturePulse} 1.15s ease-out ${delay}s 1`,
+                                  }}
+                                />
+                              </Box>
                             );
                           })}
                         </Box>
