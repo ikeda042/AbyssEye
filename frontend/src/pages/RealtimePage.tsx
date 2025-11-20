@@ -50,6 +50,10 @@ type RealtimeStatus = {
 
 const statusEndpoint = new URL("realtime/latest", API_BASE_URL).toString();
 type DisplayMode = "raw" | "normalized" | "jet";
+const storageKeys = {
+  tifDisplayMode: "realtime:tifDisplayMode",
+  deepVision: "realtime:deepVisionEnabled",
+};
 
 const classLabels = Array.from({ length: 4 }, (_, index) => {
   const description = getInferenceClassDescription(index);
@@ -62,6 +66,17 @@ const formatBytes = (bytes: number) => {
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / Math.pow(1024, i);
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
+};
+
+const loadStoredTifMode = (): DisplayMode => {
+  if (typeof window === "undefined") return "raw";
+  const stored = window.localStorage.getItem(storageKeys.tifDisplayMode);
+  return stored === "normalized" || stored === "jet" ? stored : "raw";
+};
+
+const loadStoredDeepVision = (): boolean => {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(storageKeys.deepVision) === "1";
 };
 
 const loadImage = (src: string): Promise<HTMLImageElement> =>
@@ -137,9 +152,9 @@ const RealtimePage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const latestStatusRef = useRef<RealtimeStatus | null>(null);
-  const [tifDisplayMode, setTifDisplayMode] = useState<DisplayMode>("raw");
+  const [tifDisplayMode, setTifDisplayMode] = useState<DisplayMode>(() => loadStoredTifMode());
   const [roiDisplayMode, setRoiDisplayMode] = useState<DisplayMode>("raw");
-  const [deepVisionOverlayEnabled, setDeepVisionOverlayEnabled] = useState(false);
+  const [deepVisionOverlayEnabled, setDeepVisionOverlayEnabled] = useState<boolean>(() => loadStoredDeepVision());
   const [renderedTifSrc, setRenderedTifSrc] = useState<string | null>(null);
   const [renderingTif, setRenderingTif] = useState(false);
   const [roiDisplaySources, setRoiDisplaySources] = useState<Record<number, string>>({});
@@ -153,6 +168,16 @@ const RealtimePage = () => {
   } | null>(null);
   const [selectedOverlayRoiId, setSelectedOverlayRoiId] = useState<number | null>(null);
   const [selectedOverlayRoiSrc, setSelectedOverlayRoiSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(storageKeys.tifDisplayMode, tifDisplayMode);
+  }, [tifDisplayMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(storageKeys.deepVision, deepVisionOverlayEnabled ? "1" : "0");
+  }, [deepVisionOverlayEnabled]);
 
   const recomputeImageLayout = useCallback(() => {
     const container = imageContainerRef.current;
