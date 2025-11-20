@@ -586,7 +586,7 @@ const RealtimePage = () => {
                               color="primary"
                             />
                           }
-                          label="DeepVision"
+                          label="Deep Scan"
                           sx={{
                             ml: 1,
                             mr: 0,
@@ -761,7 +761,7 @@ const RealtimePage = () => {
                     >
                       <Box>
                         <Typography variant="subtitle2" fontWeight={600} gutterBottom>
-                          DeepVision 概要
+                          Deep Scan 概要
                         </Typography>
                         <Stack spacing={0.5}>
                           {classLabels.map((label, idx) => (
@@ -879,7 +879,7 @@ const RealtimePage = () => {
                       <Box
                         sx={{
                           display: "grid",
-                          gridTemplateColumns: "repeat(15, minmax(0, 1fr))",
+                          gridTemplateColumns: "repeat(10, minmax(0, 1fr))",
                           gap: 0.75,
                         }}
                       >
