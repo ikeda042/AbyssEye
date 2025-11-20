@@ -16,11 +16,13 @@ import {
 import RefreshIcon from "@mui/icons-material/Refresh";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import { API_BASE_URL } from "../config";
+import { getInferenceClassDescription } from "../constants/inference";
 
 type Inference = {
   predicted_class: number;
   confidence: number;
   probabilities: number[];
+  model_path?: string;
   created_at: string;
 };
 
@@ -34,6 +36,10 @@ type RealtimeStatus = {
 };
 
 const statusEndpoint = new URL("realtime/latest", API_BASE_URL).toString();
+const classLabels = Array.from({ length: 4 }, (_, index) => {
+  const description = getInferenceClassDescription(index);
+  return description ? `Class ${index}（${description}）` : `Class ${index}`;
+});
 const formatBytes = (bytes: number) => {
   if (!bytes) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
@@ -75,7 +81,7 @@ const RealtimePage = () => {
   const probRows = useMemo(() => {
     if (!status?.inference) return [];
     return status.inference.probabilities.map((p, idx) => ({
-      label: `Class ${idx}`,
+      label: classLabels[idx] ?? `Class ${idx}`,
       value: p,
       percent: (p * 100).toFixed(1),
       isPredicted: idx === status.inference.predicted_class,
@@ -183,10 +189,44 @@ const RealtimePage = () => {
 
             <Card variant="outlined">
               <CardContent>
-                <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-                  推論スコア
-                </Typography>
-                <Stack spacing={1.25}>
+                <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+                  <Box sx={{ flex: 1 }}>
+                    <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+                      推論概要
+                    </Typography>
+                    <Stack spacing={0.5}>
+                      <Typography variant="body2" color="text.secondary">
+                        使用モデル: {status.inference.model_path ?? "N/A"}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        推論時刻: {new Date(status.inference.created_at).toLocaleString()}
+                      </Typography>
+                      <Box
+                        sx={{
+                          mt: 1,
+                          p: 1.25,
+                          border: "1px solid rgba(15, 23, 42, 0.1)",
+                          borderRadius: 1,
+                          backgroundColor: "rgba(15,23,42,0.02)",
+                        }}
+                      >
+                        <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                          Class {status.inference.predicted_class}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          信頼度: {(status.inference.confidence * 100).toFixed(1)}%
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {classLabels[status.inference.predicted_class] ?? ""}
+                        </Typography>
+                      </Box>
+                    </Stack>
+                  </Box>
+                  <Box sx={{ flex: 1 }}>
+                    <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+                      推論スコア
+                    </Typography>
+                    <Stack spacing={1.25}>
                   {probRows.map((row) => (
                     <Box key={row.label}>
                       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={0.25}>
@@ -210,6 +250,8 @@ const RealtimePage = () => {
                       推論結果がありません。
                     </Typography>
                   )}
+                    </Stack>
+                  </Box>
                 </Stack>
               </CardContent>
             </Card>

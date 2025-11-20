@@ -21,6 +21,7 @@ class InferenceResult:
     predicted_class: int
     confidence: float
     probabilities: list[float]
+    model_path: str
     created_at: datetime
 
 
@@ -63,6 +64,7 @@ def _mock_inference(tif_name: str) -> InferenceResult:
         predicted_class=predicted_class,
         confidence=confidence,
         probabilities=probabilities,
+        model_path="realtime/mock-model",
         created_at=datetime.now(),
     )
 

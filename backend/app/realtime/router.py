@@ -30,6 +30,7 @@ async def get_latest_realtime_status(request: Request) -> dict:
             "predicted_class": status.inference.predicted_class,
             "confidence": status.inference.confidence,
             "probabilities": status.inference.probabilities,
+            "model_path": status.inference.model_path,
             "created_at": status.inference.created_at.isoformat(),
         },
     }
