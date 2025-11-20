@@ -1,7 +1,7 @@
 import { useMemo, useCallback, cloneElement, useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import { Alert, Box, Card, CardActionArea, CardContent, Container, Typography } from "@mui/material";
+import { Alert, Box, Card, CardActionArea, CardContent, Container, Typography, Stack, Chip } from "@mui/material";
 import type { SvgIconProps } from "@mui/material/SvgIcon";
 import Grid from "@mui/material/GridLegacy";
 import StorageIcon from "@mui/icons-material/Storage";
@@ -14,9 +14,7 @@ import { API_BASE_URL } from "./config";
 
 const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
 const HEALTHCHECK_URL = API_BASE_URL;
-const ICON_COLOR = "#27AE60";
-const DESKTOP_SCALE_FACTOR = 1.5;
-const SCALED_WIDTH_PERCENT = `${(100 / DESKTOP_SCALE_FACTOR).toFixed(3)}%`;
+const ICON_COLOR = "#0f172a";
 
 type BaseCardItem = {
   title: string;
@@ -122,26 +120,14 @@ const TopPage = () => {
     <Box
       sx={{
         minHeight: "100vh",
-        backgroundColor: "#ffffff",
+        backgroundColor: "#f8fafc",
         py: { xs: 5, md: 8 },
-        px: { xs: 2, sm: 4, md: 6 },
+        px: { xs: 2.5, sm: 3.5, md: 4.5 },
       }}
     >
-      <Container
-        maxWidth="lg"
-        sx={{
-          p: 0,
-          mx: "auto",
-          width: SCALED_WIDTH_PERCENT,
-          transformOrigin: "top center",
-          transform: `scale(${DESKTOP_SCALE_FACTOR})`,
-        }}
-      >
+      <Container maxWidth="lg" sx={{ p: 0, pb: 6 }}>
         <Box textAlign="center" mb={6}>
-          {/* <Typography variant="overline" sx={{ letterSpacing: 4, color: "text.secondary" }}>
-            AbyssEye Platform
-          </Typography> */}
-          <Typography variant="h3" sx={{ fontWeight: 600, mt: 1 }}>
+          <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, color: "#0f172a" }}>
             AbyssEye local APIs
           </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
@@ -161,10 +147,15 @@ const TopPage = () => {
           {cards.map((card) => (
             <Grid item xs={12} sm={6} md={4} key={card.title} sx={{ display: "flex" }}>
               <Card
-                elevation={5}
+                elevation={2}
                 sx={{
-                  borderRadius: 0,
+                  borderRadius: 2,
+                  border: "1px solid rgba(15,23,42,0.06)",
+                  background: "#ffffff",
+                  boxShadow: "0 10px 30px rgba(15,23,42,0.08)",
                   height: "100%",
+                  display: "flex",
+                  flexDirection: "column",
                 }}
               >
                 <CardActionArea
@@ -175,6 +166,7 @@ const TopPage = () => {
                     flexDirection: "column",
                     alignItems: "flex-start",
                     gap: 2,
+                    justifyContent: "space-between",
                   }}
                   {...("href" in card
                     ? {
@@ -187,11 +179,32 @@ const TopPage = () => {
                         onClick: () => handleNavigate(card.path),
                       })}
                 >
-                  {cloneElement(card.icon, { sx: { fontSize: 36, color: card.accent } })}
-                  <CardContent sx={{ p: 0 }}>
-                    <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
-                      {card.title}
-                    </Typography>
+                  <Stack direction="row" spacing={1.5} alignItems="center" sx={{ width: "100%" }}>
+                    <Box
+                      sx={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 2,
+                        backgroundColor: "rgba(15,23,42,0.06)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      {cloneElement(card.icon, { sx: { fontSize: 28, color: card.accent } })}
+                    </Box>
+                    <Box sx={{ flex: 1 }}>
+                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                        {card.title}
+                      </Typography>
+                      <Chip
+                        size="small"
+                        label="Open"
+                        sx={{ mt: 0.5, backgroundColor: "rgba(15,23,42,0.04)", color: "#0f172a" }}
+                      />
+                    </Box>
+                  </Stack>
+                  <CardContent sx={{ p: 0, flex: 1, width: "100%" }}>
                     <Typography variant="body2" color="text.secondary">
                       {card.description}
                     </Typography>
