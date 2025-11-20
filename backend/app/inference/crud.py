@@ -31,6 +31,7 @@ DEFAULT_MODEL_CANDIDATES = (
 MODELS_DIR = PROJECT_ROOT / "models"
 MODEL_FILE_SUFFIXES = {".h5", ".hdf5", ".keras", ".pb", ".tflite"}
 DIRECTORY_DISALLOWED_PARTS = {"", ".", ".."}
+DEFAULT_ACTIVE_KEYWORD = "four"
 
 _active_model_path: Path | None = None
 _active_model_relative_path: str | None = None
@@ -206,10 +207,30 @@ def _read_active_model_state() -> tuple[str | None, Path | None]:
         return None, None
 
 
+def _auto_activate_default_if_missing(candidates: Sequence[Path] | None = None) -> tuple[str | None, Path | None]:
+    """If no active model is set, pick the first path containing DEFAULT_ACTIVE_KEYWORD (case-insensitive)."""
+    active_rel, active_path = _read_active_model_state()
+    if active_rel and active_path:
+        return active_rel, active_path
+
+    paths = list(candidates) if candidates is not None else list(_discover_models_in_models_dir())
+    for path in paths:
+        rel = _safe_relative_to_models(path) or path.name
+        if DEFAULT_ACTIVE_KEYWORD in rel.lower():
+            global _active_model_path, _active_model_relative_path
+            with _active_model_lock:
+                _active_model_path = path.resolve()
+                _active_model_relative_path = rel
+                _load_model.cache_clear()
+                return _active_model_relative_path, _active_model_path
+    return None, None
+
+
 def list_available_models() -> list[AvailableModel]:
-    active_rel, _ = _read_active_model_state()
+    discovered = _discover_models_in_models_dir()
+    active_rel, _ = _auto_activate_default_if_missing(discovered)
     models: list[AvailableModel] = []
-    for path in _discover_models_in_models_dir():
+    for path in discovered:
         relative = _safe_relative_to_models(path) or path.name
         models.append(_build_available_model(path, is_active=(relative == active_rel)))
     models.sort(key=lambda item: item.relative_path.lower())
@@ -253,7 +274,7 @@ def set_active_model(relative_path: str) -> AvailableModel:
 
 
 def get_active_model() -> AvailableModel | None:
-    active_rel, active_path = _read_active_model_state()
+    active_rel, active_path = _auto_activate_default_if_missing()
     if not active_rel or not active_path:
         return None
     return _build_available_model(active_path, is_active=True)
@@ -318,7 +339,7 @@ async def save_uploaded_model(files: Sequence[UploadFile]) -> AvailableModel:
 
 
 def _get_active_model_path() -> Path | None:
-    _, active_path = _read_active_model_state()
+    _, active_path = _auto_activate_default_if_missing()
     return active_path
 
 
