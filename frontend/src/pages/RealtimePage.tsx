@@ -154,15 +154,6 @@ const RealtimePage = () => {
   const [selectedOverlayRoiId, setSelectedOverlayRoiId] = useState<number | null>(null);
   const [selectedOverlayRoiSrc, setSelectedOverlayRoiSrc] = useState<string | null>(null);
 
-  useEffect(() => {
-    const root = document.documentElement;
-    const prevFontSize = root.style.fontSize;
-    root.style.fontSize = "20px"; // ~125% of default 16px
-    return () => {
-      root.style.fontSize = prevFontSize;
-    };
-  }, []);
-
   const recomputeImageLayout = useCallback(() => {
     const container = imageContainerRef.current;
     if (!container || !imageNaturalSize) return;
@@ -391,7 +382,7 @@ const RealtimePage = () => {
                 <Stack
                   direction={{ xs: "column", md: "row" }}
                   spacing={2.5}
-                  alignItems={{ xs: "stretch", md: "flex-start" }}
+                  alignItems="stretch"
                 >
                   <Box
                     sx={{
@@ -401,6 +392,8 @@ const RealtimePage = () => {
                       overflow: "hidden",
                       border: "1px solid rgba(15,23,42,0.1)",
                       backgroundColor: "#fff",
+                      display: "flex",
+                      flexDirection: "column",
                     }}
                   >
                     <Stack
@@ -442,9 +435,10 @@ const RealtimePage = () => {
                     <Box
                       ref={imageContainerRef}
                       sx={{
+                        flex: 1,
                         position: "relative",
                         width: "100%",
-                        height: { xs: 340, md: 460 },
+                        minHeight: { xs: 340, md: 460 },
                         backgroundColor: "#0f172a0d",
                         overflow: "hidden",
                       }}
@@ -520,7 +514,7 @@ const RealtimePage = () => {
                       )}
                     </Box>
                   </Box>
-                  <Stack spacing={1} sx={{ minWidth: { md: 280 } }}>
+                  <Stack spacing={1.25} sx={{ minWidth: { md: 300 }, width: { md: 320 }, alignSelf: "stretch" }}>
                     <Typography variant="subtitle1" fontWeight={600}>
                       最新 TIFF
                     </Typography>
@@ -535,33 +529,38 @@ const RealtimePage = () => {
                     </Typography>
                     <Box
                       sx={{
-                        mt: 1,
+                        flex: 1,
                         border: "1px dashed rgba(15,23,42,0.15)",
                         borderRadius: 1,
                         p: 1,
                         backgroundColor: "rgba(15,23,42,0.02)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 0.5,
                       }}
                     >
-                      <Typography variant="subtitle2" fontWeight={600} gutterBottom>
-                        DeepVision 概要
-                      </Typography>
-                      <Stack spacing={0.5}>
-                        {classLabels.map((label, idx) => (
-                          <Stack key={label} direction="row" alignItems="center" spacing={1}>
-                            <Box sx={{ width: 12, height: 12, borderRadius: 0.75, bgcolor: classColors[idx] }} />
+                      <Box>
+                        <Typography variant="subtitle2" fontWeight={600} gutterBottom>
+                          DeepVision 概要
+                        </Typography>
+                        <Stack spacing={0.5}>
+                          {classLabels.map((label, idx) => (
+                            <Stack key={label} direction="row" alignItems="center" spacing={1}>
+                              <Box sx={{ width: 12, height: 12, borderRadius: 0.75, bgcolor: classColors[idx] }} />
+                              <Typography variant="body2" color="text.secondary">
+                                {label}: {classBuckets.counts[idx]}
+                              </Typography>
+                            </Stack>
+                          ))}
+                          {classBuckets.counts.others > 0 && (
                             <Typography variant="body2" color="text.secondary">
-                              {label}: {classBuckets.counts[idx]}
+                              その他: {classBuckets.counts.others}
                             </Typography>
-                          </Stack>
-                        ))}
-                        {classBuckets.counts.others > 0 && (
-                          <Typography variant="body2" color="text.secondary">
-                            その他: {classBuckets.counts.others}
-                          </Typography>
-                        )}
-                      </Stack>
+                          )}
+                        </Stack>
+                      </Box>
                       {selectedOverlayRoiSrc && (
-                        <Box sx={{ mt: 1, borderTop: "1px solid rgba(15,23,42,0.08)", pt: 1 }}>
+                        <Box sx={{ mt: "auto", pt: 1, borderTop: "1px solid rgba(15,23,42,0.08)" }}>
                           <Typography variant="subtitle2" fontWeight={600} gutterBottom>
                             選択 ROI プレビュー
                           </Typography>
@@ -571,11 +570,13 @@ const RealtimePage = () => {
                             alt="Selected ROI"
                             sx={{
                               width: "100%",
-                              maxWidth: 220,
+                              maxWidth: 260,
                               borderRadius: 1,
                               border: "1px solid rgba(15,23,42,0.12)",
                               backgroundColor: "#0f172a0d",
                               display: "block",
+                              marginLeft: "auto",
+                              marginRight: "auto",
                             }}
                           />
                         </Box>
