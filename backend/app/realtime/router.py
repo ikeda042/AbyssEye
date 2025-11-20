@@ -58,3 +58,16 @@ async def get_realtime_tif_png(tif_name: str):
     tif_path = crud.get_realtime_tif_path(tif_name)
     png_bytes = await crud.render_tif_as_png_bytes(tif_path)
     return Response(content=png_bytes, media_type="image/png")
+
+
+@router.get("/tiff", name="get_realtime_tif_latest")
+async def get_latest_realtime_tif():
+    status = await crud.get_latest_status()
+    return FileResponse(status.tif_path, media_type="image/tiff", filename=status.tif_path.name)
+
+
+@router.get("/tiff/png", name="get_realtime_tif_latest_png")
+async def get_latest_realtime_tif_png():
+    status = await crud.get_latest_status()
+    png_bytes = await crud.render_tif_as_png_bytes(status.tif_path)
+    return Response(content=png_bytes, media_type="image/png")
