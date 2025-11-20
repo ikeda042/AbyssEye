@@ -590,7 +590,8 @@ const RealtimePage = () => {
                                   width,
                                   height,
                                   borderRadius: 0.75,
-                                  backgroundColor: isSelected ? `${color}24` : `${color}10`,
+                                  border: isSelected ? `1.8px solid ${color}` : `1px solid ${color}c0`,
+                                  backgroundColor: isSelected ? `${color}26` : `${color}12`,
                                   overflow: "hidden",
                                   cursor: "pointer",
                                   boxShadow: isSelected
@@ -604,7 +605,7 @@ const RealtimePage = () => {
                                   "&::before": {
                                     content: '""',
                                     position: "absolute",
-                                    inset: -1,
+                                    inset: 0,
                                     borderRadius: "inherit",
                                     border: `1.5px solid ${color}`,
                                     clipPath: "inset(65% 65% 65% 65%)",
