@@ -452,14 +452,18 @@ const RealtimePage = () => {
                           <ToggleButton value="normalized">Normalized</ToggleButton>
                           <ToggleButton value="jet">Jet</ToggleButton>
                         </ToggleButtonGroup>
-                        <ToggleButton
+                        <ToggleButtonGroup
                           size="small"
-                          value="deepvision"
-                          selected={deepVisionOverlayEnabled}
-                          onChange={() => setDeepVisionOverlayEnabled((prev) => !prev)}
+                          exclusive
+                          value={deepVisionOverlayEnabled ? "on" : "off"}
+                          onChange={(_, val) => {
+                            if (!val) return;
+                            setDeepVisionOverlayEnabled(val === "on");
+                          }}
                         >
-                          DeepVision
-                        </ToggleButton>
+                          <ToggleButton value="on">DeepVision ON</ToggleButton>
+                          <ToggleButton value="off">DeepVision OFF</ToggleButton>
+                        </ToggleButtonGroup>
                       </Stack>
                     </Stack>
                     <Box
