@@ -8,6 +8,7 @@ import StorageIcon from "@mui/icons-material/Storage";
 import DisplaySettingsIcon from "@mui/icons-material/DisplaySettings";
 import ApiIcon from "@mui/icons-material/Api";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
+import NotesIcon from "@mui/icons-material/Notes";
 import { API_BASE_URL } from "./config";
 
 const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
@@ -60,6 +61,13 @@ const TopPage = () => {
         href: SWAGGER_DOCS_URL,
         accent: ICON_COLOR,
         icon: <ApiIcon />,
+      },
+      {
+        title: "Temp Text",
+        description: "Backendメモリに保存されたテキストを閲覧・編集します。",
+        path: "/temptext",
+        accent: ICON_COLOR,
+        icon: <NotesIcon />,
       },
     ],
     []

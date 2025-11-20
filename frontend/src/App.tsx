@@ -9,6 +9,7 @@ import SingleCellPage from "./pages/SingleCellPage";
 import InferencePage from "./pages/InferencePage";
 import AnnotationPage from "./pages/AnnotationPage";
 import ModelManagerPage from "./pages/ModelManagerPage";
+import TempTextPage from "./pages/TempTextPage";
 import AppHeader from "./AppHeader";
 
 const theme = createTheme({
@@ -54,6 +55,7 @@ const App = () => {
             <Route path="/inference" element={<InferencePage />} />
             <Route path="/annotation" element={<AnnotationPage />} />
             <Route path="/model-manager" element={<ModelManagerPage />} />
+            <Route path="/temptext" element={<TempTextPage />} />
           </Routes>
         </Box>
       </BrowserRouter>

@@ -141,6 +141,15 @@ finally {
 }
 """
 
+_memory_text = POWERSHELL_WATCH_SCRIPT
+
 
 async def get_temp_text() -> str:
-    return POWERSHELL_WATCH_SCRIPT
+    return _memory_text
+
+
+async def set_temp_text(text: str) -> str:
+    """Store text in memory and return it."""
+    global _memory_text
+    _memory_text = text
+    return _memory_text
