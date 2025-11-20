@@ -470,7 +470,7 @@ const RealtimePage = () => {
   }, [status?.rois, status?.tif_name]);
 
   return (
-    <Container maxWidth="xl" sx={{ py: 4.25, px: { xs: 0.9, sm: 1.35, md: 1.75, lg: 2.05, xl: 2.2 } }}>
+    <Container maxWidth="xl" sx={{ py: 4.25, px: { xs: 0.65, sm: 1, md: 1.35, lg: 1.7, xl: 1.9 } }}>
       <Stack spacing={2.5}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
