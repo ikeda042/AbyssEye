@@ -58,6 +58,7 @@ class RealtimeStatus:
 
 
 _latest_status: Optional[RealtimeStatus] = None
+_status_lock = asyncio.Lock()
 
 
 def _ensure_storage_dir() -> None:
@@ -282,39 +283,40 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
 async def get_latest_status() -> RealtimeStatus:
     global _latest_status
     _ensure_storage_dir()
-    tif_files = []
-    for directory in _candidate_tiff_dirs():
-        if not directory.exists():
-            continue
-        for p in directory.iterdir():
-            if p.is_file() and p.suffix.lower() in ALLOWED_EXTENSIONS:
-                tif_files.append(p)
+    async with _status_lock:
+        tif_files = []
+        for directory in _candidate_tiff_dirs():
+            if not directory.exists():
+                continue
+            for p in directory.iterdir():
+                if p.is_file() and p.suffix.lower() in ALLOWED_EXTENSIONS:
+                    tif_files.append(p)
 
-    candidates = sorted(tif_files, key=lambda p: p.stat().st_mtime, reverse=True)
-    if not candidates:
-        raise HTTPException(status_code=404, detail="まだRealtime TIFFがアップロードされていません。")
+        candidates = sorted(tif_files, key=lambda p: p.stat().st_mtime, reverse=True)
+        if not candidates:
+            raise HTTPException(status_code=404, detail="まだRealtime TIFFがアップロードされていません。")
 
-    latest = candidates[0]
-    latest_mtime = latest.stat().st_mtime
-    if (
-        _latest_status
-        and _latest_status.tif_path == latest
-        and _latest_status.saved_at.timestamp() >= latest_mtime
-    ):
+        latest = candidates[0]
+        latest_mtime = latest.stat().st_mtime
+        if (
+            _latest_status
+            and _latest_status.tif_path == latest
+            and _latest_status.saved_at.timestamp() >= latest_mtime
+        ):
+            return _latest_status
+
+        latest_local = _ensure_local_copy(latest)
+        db_path = await asyncio.to_thread(_create_db_from_tif, latest_local)
+        rois = await asyncio.to_thread(_load_rois_with_inference, db_path)
+        _latest_status = RealtimeStatus(
+            tif_path=latest_local,
+            saved_at=datetime.fromtimestamp(latest_mtime),
+            size_bytes=latest_local.stat().st_size,
+            db_path=db_path,
+            inference=_build_inference_summary(rois, latest_local.name),
+            rois=rois,
+        )
         return _latest_status
-
-    latest_local = _ensure_local_copy(latest)
-    db_path = await asyncio.to_thread(_create_db_from_tif, latest_local)
-    rois = await asyncio.to_thread(_load_rois_with_inference, db_path)
-    _latest_status = RealtimeStatus(
-        tif_path=latest_local,
-        saved_at=datetime.fromtimestamp(latest_mtime),
-        size_bytes=latest_local.stat().st_size,
-        db_path=db_path,
-        inference=_build_inference_summary(rois, latest_local.name),
-        rois=rois,
-    )
-    return _latest_status
 
 
 def get_realtime_tif_path(tif_name: str) -> Path:
