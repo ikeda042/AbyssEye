@@ -142,5 +142,5 @@ finally {
 """
 
 
-async def get_temp_text() -> dict:
-    return {"text": POWERSHELL_WATCH_SCRIPT}
+async def get_temp_text() -> str:
+    return POWERSHELL_WATCH_SCRIPT
