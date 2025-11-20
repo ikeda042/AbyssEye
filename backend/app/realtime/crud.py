@@ -113,8 +113,9 @@ def _sanitize_filename(filename: str) -> str:
     raw = Path(filename or "").name
     if not raw:
         raise HTTPException(status_code=400, detail="ファイル名を指定してください。")
-    # Normalize problematic characters (e.g., '#' fragments from iOS uploads) to underscores.
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("_")
+    # Normalize problematic characters (e.g., '#' fragments from iOS uploads); drop hashes outright.
+    without_hash = raw.replace("#", "")
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", without_hash).strip("_")
     if not cleaned:
         raise HTTPException(status_code=400, detail="ファイル名が不正です。")
     return cleaned
@@ -131,6 +132,32 @@ def _sanitize_stem(stem: str) -> str:
 
 def _candidate_tiff_dirs() -> list[Path]:
     return [REALTIME_TIFF_DIR, LEGACY_REALTIME_TIFF_DIR]
+
+
+def _normalize_on_disk_tif_names() -> None:
+    """Strip '#' from on-disk TIFF names to avoid fragment issues in URLs."""
+    for directory in _candidate_tiff_dirs():
+        if not directory.exists():
+            continue
+        for tif_path in directory.iterdir():
+            if not tif_path.is_file() or tif_path.suffix.lower() not in ALLOWED_EXTENSIONS:
+                continue
+            if "#" not in tif_path.name:
+                continue
+            target_name = tif_path.name.replace("#", "")
+            if not target_name:
+                continue
+            target_path = tif_path.with_name(target_name)
+            if target_path.exists():
+                base_stem, suffix = target_path.stem, target_path.suffix
+                counter = 1
+                while target_path.exists():
+                    target_path = tif_path.with_name(f"{base_stem}-{counter}{suffix}")
+                    counter += 1
+            try:
+                tif_path.rename(target_path)
+            except OSError as exc:
+                raise HTTPException(status_code=500, detail=f"{tif_path.name} のリネームに失敗しました: {exc}") from exc
 
 
 def _ensure_local_copy(tif_path: Path) -> Path:
@@ -312,6 +339,7 @@ async def get_latest_status() -> RealtimeStatus:
     global _latest_status
     _ensure_storage_dir()
     async with _status_lock:
+        _normalize_on_disk_tif_names()
         tif_files = []
         for directory in _candidate_tiff_dirs():
             if not directory.exists():
@@ -355,6 +383,7 @@ async def get_latest_status() -> RealtimeStatus:
 
 def get_realtime_tif_path(tif_name: str) -> Path:
     _ensure_storage_dir()
+    _normalize_on_disk_tif_names()
     safe_name = _sanitize_filename(tif_name)
     _validate_extension(safe_name)
     for directory in _candidate_tiff_dirs():
