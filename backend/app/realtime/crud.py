@@ -6,6 +6,7 @@ import base64
 import hashlib
 import sqlite3
 import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
@@ -14,6 +15,7 @@ from typing import Optional
 
 from fastapi import HTTPException, UploadFile
 from PIL import Image
+from sqlalchemy.exc import OperationalError as SAOperationalError
 
 from ..inference import crud as inference_crud
 from ..roi_extract.roi_module import ROIExtractor
@@ -61,6 +63,31 @@ _latest_status: Optional[RealtimeStatus] = None
 def _ensure_storage_dir() -> None:
     REALTIME_TIFF_DIR.mkdir(parents=True, exist_ok=True)
     REALTIME_DB_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _is_dir_writable(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write_test"
+        probe.write_bytes(b"ok")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+def _resolve_db_path(stem: str, *, prefer_temporary: bool = False) -> Path:
+    tmp_dir = Path(tempfile.gettempdir()) / "abyss_eye" / "realtime_databases"
+    candidates = (tmp_dir, REALTIME_DB_DIR) if prefer_temporary else (REALTIME_DB_DIR, tmp_dir)
+    for base in candidates:
+        if _is_dir_writable(base):
+            return base / f"{stem}.db"
+    raise HTTPException(status_code=500, detail="DBの保存先に書き込めませんでした。権限を確認してください。")
+
+
+def _is_sqlite_readonly_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "readonly" in message or "read-only" in message
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -122,7 +149,7 @@ def _create_db_from_tif(tif_path: Path) -> Path:
     import cv2  # local import to avoid heavy import at module load
 
     stem = _sanitize_stem(tif_path.stem)
-    db_path = REALTIME_DB_DIR / f"{stem}.db"
+    db_path = _resolve_db_path(stem)
     if db_path.exists():
         try:
             db_path.unlink()
@@ -140,16 +167,33 @@ def _create_db_from_tif(tif_path: Path) -> Path:
         processed_h, processed_w = img_rgb.shape[:2]
 
         rois = ROIExtractor.detect_rois(img_rgb)
-        ROIExtractor.save_rois_to_db(
-            img_rgb,
-            rois,
-            str(db_path),
-            tif_path.stem,
-            scale=0.5,
-            image_width_px=processed_w,
-            image_height_px=processed_h,
-        )
-        return db_path
+        try:
+            ROIExtractor.save_rois_to_db(
+                img_rgb,
+                rois,
+                str(db_path),
+                tif_path.stem,
+                scale=0.5,
+                image_width_px=processed_w,
+                image_height_px=processed_h,
+            )
+            return db_path
+        except (SAOperationalError, sqlite3.OperationalError) as exc:
+            if not _is_sqlite_readonly_error(exc):
+                raise
+            fallback_db_path = _resolve_db_path(stem, prefer_temporary=True)
+            if fallback_db_path.exists():
+                fallback_db_path.unlink(missing_ok=True)
+            ROIExtractor.save_rois_to_db(
+                img_rgb,
+                rois,
+                str(fallback_db_path),
+                tif_path.stem,
+                scale=0.5,
+                image_width_px=processed_w,
+                image_height_px=processed_h,
+            )
+            return fallback_db_path
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
