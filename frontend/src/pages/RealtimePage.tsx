@@ -14,6 +14,8 @@ import {
   ToggleButtonGroup,
   Stack,
   Typography,
+  Switch,
+  FormControlLabel,
 } from "@mui/material";
 import { API_BASE_URL } from "../config";
 import { getInferenceClassDescription } from "../constants/inference";
@@ -528,18 +530,22 @@ const RealtimePage = () => {
                           <ToggleButton value="normalized">Normalized</ToggleButton>
                           <ToggleButton value="jet">Jet</ToggleButton>
                         </ToggleButtonGroup>
-                        <ToggleButtonGroup
-                          size="small"
-                          exclusive
-                          value={deepVisionOverlayEnabled ? "on" : "off"}
-                          onChange={(_, val) => {
-                            if (!val) return;
-                            setDeepVisionOverlayEnabled(val === "on");
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              size="medium"
+                              checked={deepVisionOverlayEnabled}
+                              onChange={(_, checked) => setDeepVisionOverlayEnabled(checked)}
+                              color="primary"
+                            />
+                          }
+                          label={deepVisionOverlayEnabled ? "DeepVision ON" : "DeepVision OFF"}
+                          sx={{
+                            ml: 1,
+                            mr: 0,
+                            "& .MuiFormControlLabel-label": { fontWeight: 600, fontSize: 14 },
                           }}
-                        >
-                          <ToggleButton value="on">DeepVision ON</ToggleButton>
-                          <ToggleButton value="off">DeepVision OFF</ToggleButton>
-                        </ToggleButtonGroup>
+                        />
                       </Stack>
                     </Stack>
                     <Box
