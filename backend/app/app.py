@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi_swagger import patch_fastapi
 
 from .databases.router import router as databases_router
+from .dev.router import router as dev_router
 from .inference.router import router as inference_router
 from .roi_extract.router import router as roi_router
 from .tiff_manager.router import router as tiff_router
@@ -34,6 +35,7 @@ app.include_router(roi_router, prefix=API_PREFIX)
 app.include_router(databases_router, prefix=API_PREFIX)
 app.include_router(inference_router, prefix=API_PREFIX)
 app.include_router(realtime_router, prefix=API_PREFIX)
+app.include_router(dev_router, prefix=API_PREFIX)
 
 
 @app.get(f"{API_PREFIX}/")
