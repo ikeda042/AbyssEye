@@ -7,3 +7,4 @@
 *.db
 *.pyc
 __pycache__/
+/backend/app/realtime_cache/
