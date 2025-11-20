@@ -14,8 +14,8 @@ API_PREFIX = "/api/v1"
 
 app = FastAPI(
     title="AbyssEye APIs",
-    docs_url=None,  # fastapi-swagger will provide offline /docs
-    swagger_ui_oauth2_redirect_url=None,
+    docs_url=f"{API_PREFIX}/docs",  # expose docs under API prefix
+    swagger_ui_oauth2_redirect_url=f"{API_PREFIX}/docs/oauth2-redirect",
     redoc_url=f"{API_PREFIX}/redoc",
     openapi_url=f"{API_PREFIX}/openapi.json",
 )
