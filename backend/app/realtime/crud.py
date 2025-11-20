@@ -125,7 +125,7 @@ def _sanitize_filename(filename: str) -> str:
         raise HTTPException(status_code=400, detail="ファイル名を指定してください。")
     # Normalize problematic characters (e.g., '#' fragments from iOS uploads); drop hashes outright.
     without_hash = raw.replace("#", "")
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", without_hash).strip("_")
+    cleaned = re.sub(r"[^A-Za-z0-9._()\\-]+", "_", without_hash).strip("_")
     if not cleaned:
         raise HTTPException(status_code=400, detail="ファイル名が不正です。")
     return cleaned
