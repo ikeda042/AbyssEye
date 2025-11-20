@@ -1,23 +1,18 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, UploadFile
-from fastapi.responses import FileResponse, Response
-from fastapi import Request
+import asyncio
+import json
+from typing import AsyncGenerator
+
+from fastapi import APIRouter, File, UploadFile, Request, HTTPException
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from . import crud
 
 router = APIRouter(prefix="/realtime", tags=["realtime"])
 
 
-@router.post("/tiff")
-async def upload_realtime_tiff(file: UploadFile = File(...)) -> dict:
-    saved_path = await crud.save_realtime_tif(file)
-    return {"saved_name": saved_path.name, "saved_path": str(saved_path)}
-
-
-@router.get("/latest")
-async def get_latest_realtime_status(request: Request) -> dict:
-    status = await crud.get_latest_status()
+def _build_status_payload(status: crud.RealtimeStatus, request: Request) -> dict:
     tif_url = request.url_for("get_realtime_tif_file", tif_name=status.tif_path.name)
     tif_png_url = request.url_for("get_realtime_tif_png", tif_name=status.tif_path.name)
     return {
@@ -53,6 +48,18 @@ async def get_latest_realtime_status(request: Request) -> dict:
     }
 
 
+@router.post("/tiff")
+async def upload_realtime_tiff(file: UploadFile = File(...)) -> dict:
+    saved_path = await crud.save_realtime_tif(file)
+    return {"saved_name": saved_path.name, "saved_path": str(saved_path)}
+
+
+@router.get("/latest")
+async def get_latest_realtime_status(request: Request) -> dict:
+    status = await crud.get_latest_status()
+    return _build_status_payload(status, request)
+
+
 @router.get("/tiff/{tif_name}", name="get_realtime_tif_file")
 async def get_realtime_tif_file(tif_name: str):
     tif_path = crud.get_realtime_tif_path(tif_name)
@@ -77,6 +84,51 @@ async def get_latest_realtime_tif_png():
     status = await crud.get_latest_status()
     png_bytes = await crud.render_tif_as_png_bytes(status.tif_path)
     return Response(content=png_bytes, media_type="image/png")
+
+
+@router.get("/stream")
+async def stream_realtime_status(request: Request) -> StreamingResponse:
+    async def event_generator() -> AsyncGenerator[str, None]:
+        last_signature: str | None = None
+        heartbeat_seconds = 15.0
+        elapsed = 0.0
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                status = await crud.get_latest_status()
+                payload = _build_status_payload(status, request)
+                roi_signature = "|".join(
+                    f"{roi['roi_id']}-{roi['predicted_class']}-{roi['confidence']:.3f}"
+                    for roi in payload.get("rois", [])
+                )
+                signature = f"{payload['tif_name']}::{payload['saved_at']}::{roi_signature}"
+                if signature != last_signature:
+                    last_signature = signature
+                    data = json.dumps(payload, ensure_ascii=False)
+                    yield f"data: {data}\n\n"
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    error_payload = json.dumps({"detail": exc.detail}, ensure_ascii=False)
+                    yield f"event: error\ndata: {error_payload}\n\n"
+            except Exception:
+                error_payload = json.dumps({"detail": "stream_error"}, ensure_ascii=False)
+                yield f"event: error\ndata: {error_payload}\n\n"
+
+            elapsed += 0.5
+            if elapsed >= heartbeat_seconds:
+                elapsed = 0.0
+                yield ":keepalive\n\n"
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+          "Cache-Control": "no-cache",
+          "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/use-current")

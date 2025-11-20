@@ -53,6 +53,7 @@ type RealtimeStatus = {
 };
 
 const statusEndpoint = new URL("realtime/latest", API_BASE_URL).toString();
+const statusStreamEndpoint = new URL("realtime/stream", API_BASE_URL).toString();
 const useCurrentEndpoint = new URL("realtime/use-current", API_BASE_URL).toString();
 type DisplayMode = "raw" | "normalized" | "jet" | "opticalBoost";
 const storageKeys = {
@@ -399,11 +400,50 @@ const RealtimePage = () => {
   }, [selectedOverlayRoiId, status?.tif_name, tifDisplayMode, status?.rois]);
 
   useEffect(() => {
+    // Initial fetch for immediate content while stream connects
     void fetchStatus();
-    const id = window.setInterval(() => {
-      void fetchStatus({ silent: true });
-    }, 300);
-    return () => window.clearInterval(id);
+    let destroyed = false;
+    let eventSource: EventSource | null = null;
+    let reconnectTimer: number | null = null;
+
+    const connect = () => {
+      if (destroyed) return;
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+      eventSource = new EventSource(statusStreamEndpoint);
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data) as RealtimeStatus;
+          setStatus(payload);
+          setError(null);
+          setLoading(false);
+        } catch (err) {
+          console.error("Failed to parse realtime stream payload", err);
+        }
+      };
+      eventSource.onerror = () => {
+        eventSource?.close();
+        eventSource = null;
+        if (destroyed) return;
+        if (reconnectTimer !== null) return;
+        reconnectTimer = window.setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, 1500);
+      };
+    };
+
+    connect();
+
+    return () => {
+      destroyed = true;
+      eventSource?.close();
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+      }
+    };
   }, [fetchStatus]);
 
   const handleUseCurrent = useCallback(async () => {
