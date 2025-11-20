@@ -91,6 +91,23 @@ def _is_sqlite_readonly_error(exc: Exception) -> bool:
     return "readonly" in message or "read-only" in message
 
 
+def _expected_db_locations(stem: str) -> list[Path]:
+    """Return potential DB files for a given TIFF stem (primary + temp fallback)."""
+    tmp_dir = Path(tempfile.gettempdir()) / "abyss_eye" / "realtime_databases"
+    return [
+        REALTIME_DB_DIR / f"{stem}.db",
+        tmp_dir / f"{stem}.db",
+    ]
+
+
+def _find_existing_db(tif_path: Path) -> Path | None:
+    stem = _sanitize_stem(tif_path.stem)
+    for candidate in _expected_db_locations(stem):
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _sanitize_filename(filename: str) -> str:
     name = Path(filename or "").name
     if not name:
@@ -306,7 +323,13 @@ async def get_latest_status() -> RealtimeStatus:
             return _latest_status
 
         latest_local = _ensure_local_copy(latest)
-        db_path = await asyncio.to_thread(_create_db_from_tif, latest_local)
+        existing_db = _find_existing_db(latest_local)
+
+        if existing_db and existing_db.stat().st_mtime >= latest_mtime:
+            db_path = existing_db
+        else:
+            db_path = await asyncio.to_thread(_create_db_from_tif, latest_local)
+
         rois = await asyncio.to_thread(_load_rois_with_inference, db_path)
         _latest_status = RealtimeStatus(
             tif_path=latest_local,
