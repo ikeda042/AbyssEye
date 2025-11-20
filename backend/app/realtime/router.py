@@ -17,13 +17,14 @@ async def upload_realtime_tiff(file: UploadFile = File(...)) -> dict:
 
 @router.get("/latest")
 async def get_latest_realtime_status(request: Request) -> dict:
-    status = crud.get_latest_status()
+    status = await crud.get_latest_status()
     tif_url = request.url_for("get_realtime_tif_file", tif_name=status.tif_path.name)
     tif_png_url = request.url_for("get_realtime_tif_png", tif_name=status.tif_path.name)
     return {
         "tif_name": status.tif_path.name,
         "saved_at": status.saved_at.isoformat(),
         "size_bytes": status.size_bytes,
+        "db_name": status.db_path.name,
         "tif_url": str(tif_url),
         "tif_png_url": str(tif_png_url),
         "inference": {
