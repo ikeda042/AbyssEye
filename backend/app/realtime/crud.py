@@ -6,6 +6,7 @@ import base64
 import hashlib
 import sqlite3
 import shutil
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -109,10 +110,14 @@ def _find_existing_db(tif_path: Path) -> Path | None:
 
 
 def _sanitize_filename(filename: str) -> str:
-    name = Path(filename or "").name
-    if not name:
+    raw = Path(filename or "").name
+    if not raw:
         raise HTTPException(status_code=400, detail="ファイル名を指定してください。")
-    return name
+    # Normalize problematic characters (e.g., '#' fragments from iOS uploads) to underscores.
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("_")
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="ファイル名が不正です。")
+    return cleaned
 
 
 def _validate_extension(filename: str) -> None:
