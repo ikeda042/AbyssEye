@@ -319,7 +319,14 @@ const RealtimePage = () => {
         others.push(roi);
       }
     });
-    return { buckets, others };
+    const counts: Record<number | "others", number> = {
+      0: buckets[0].length,
+      1: buckets[1].length,
+      2: buckets[2].length,
+      3: buckets[3].length,
+      others: others.length,
+    };
+    return { buckets, others, counts };
   }, [status]);
 
   return (
@@ -445,29 +452,12 @@ const RealtimePage = () => {
                                   top,
                                   width,
                                   height,
-                                  border: `2px solid ${color}`,
-                                  borderRadius: 0.75,
-                                  backgroundColor: `${color}22`,
-                                  boxShadow: "0 0 0 1px rgba(15,23,42,0.08)",
+                                  border: `1.2px solid ${color}`,
+                                  borderRadius: 0.5,
+                                  backgroundColor: `${color}18`,
+                                  boxShadow: "0 0 0 0.5px rgba(15,23,42,0.06)",
                                 }}
-                              >
-                                <Box
-                                  sx={{
-                                    position: "absolute",
-                                    top: 4,
-                                    left: 4,
-                                    px: 0.75,
-                                    py: 0.25,
-                                    borderRadius: 0.75,
-                                    fontSize: 11,
-                                    fontWeight: 700,
-                                    color: "#fff",
-                                    backgroundColor: color,
-                                  }}
-                                >
-                                  ROI {roi.roi_id}
-                                </Box>
-                              </Box>
+                              />
                             );
                           })}
                         </Box>
@@ -501,6 +491,34 @@ const RealtimePage = () => {
                     <Typography variant="body2" color="text.secondary">
                       サイズ: {formatBytes(status.size_bytes)}
                     </Typography>
+                    <Box
+                      sx={{
+                        mt: 1,
+                        border: "1px dashed rgba(15,23,42,0.15)",
+                        borderRadius: 1,
+                        p: 1,
+                        backgroundColor: "rgba(15,23,42,0.02)",
+                      }}
+                    >
+                      <Typography variant="subtitle2" fontWeight={600} gutterBottom>
+                        DeepVision 概要
+                      </Typography>
+                      <Stack spacing={0.5}>
+                        {classLabels.map((label, idx) => (
+                          <Stack key={label} direction="row" alignItems="center" spacing={1}>
+                            <Box sx={{ width: 12, height: 12, borderRadius: 0.75, bgcolor: classColors[idx] }} />
+                            <Typography variant="body2" color="text.secondary">
+                              {label}: {classBuckets.counts[idx]}
+                            </Typography>
+                          </Stack>
+                        ))}
+                        {classBuckets.counts.others > 0 && (
+                          <Typography variant="body2" color="text.secondary">
+                            その他: {classBuckets.counts.others}
+                          </Typography>
+                        )}
+                      </Stack>
+                    </Box>
                   </Stack>
                 </Stack>
               </CardContent>
