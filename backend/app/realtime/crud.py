@@ -221,6 +221,7 @@ def _load_rois_with_inference(db_path: Path) -> list[RealtimeROI]:
     if not db_path.is_file():
         raise HTTPException(status_code=404, detail=f"{db_path.name} が見つかりません。")
     rois: list[RealtimeROI] = []
+    first_error: HTTPException | None = None
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -234,7 +235,9 @@ def _load_rois_with_inference(db_path: Path) -> list[RealtimeROI]:
         data_url = f"data:image/png;base64,{base64_png}"
         try:
             result = inference_crud.predict_label(data_url)
-        except HTTPException:
+        except HTTPException as exc:
+            if first_error is None:
+                first_error = exc
             # skip problematic ROI but continue others
             continue
         rois.append(
@@ -247,6 +250,9 @@ def _load_rois_with_inference(db_path: Path) -> list[RealtimeROI]:
                 png_base64=base64_png,
             )
         )
+    if not rois and first_error:
+        # surface inference failures instead of silently returning empty buckets
+        raise HTTPException(status_code=500, detail=f"ROI推論に失敗しました: {first_error.detail}")
     return rois
 
 

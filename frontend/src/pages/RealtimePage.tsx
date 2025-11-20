@@ -221,8 +221,8 @@ const RealtimePage = () => {
                       <Box
                         sx={{
                           display: "grid",
-                          gridTemplateColumns: "repeat(5, 1fr)",
-                          gap: 1.25,
+                          gridTemplateColumns: "repeat(15, minmax(0, 1fr))",
+                          gap: 0.75,
                         }}
                       >
                         {bucket.map((roi) => {
@@ -248,7 +248,7 @@ const RealtimePage = () => {
                                   alt={`ROI ${roi.roi_id} class ${classIndex}`}
                                   sx={{
                                     width: "100%",
-                                    height: 140,
+                                    height: 80,
                                     objectFit: "contain",
                                     display: "block",
                                     borderTop: "1px solid #e2e8f0",
