@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent
+BACKEND_DIR = Path(__file__).resolve().parents[2]
 REALTIME_TIFF_DIR = BACKEND_DIR / "realtime_tiff"
 ALLOWED_EXTENSIONS = {".tif", ".tiff"}
 

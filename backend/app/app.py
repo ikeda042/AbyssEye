@@ -7,9 +7,9 @@ from fastapi_swagger import patch_fastapi
 from .databases.router import router as databases_router
 from .dev.router import router as dev_router
 from .inference.router import router as inference_router
+from .realtime.router import router as realtime_router
 from .roi_extract.router import router as roi_router
 from .tiff_manager.router import router as tiff_router
-from realtime.router import router as realtime_router
 
 API_PREFIX = "/api/v1"
 
