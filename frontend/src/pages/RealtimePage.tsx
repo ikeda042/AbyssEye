@@ -29,6 +29,7 @@ type RealtimeStatus = {
   saved_at: string;
   size_bytes: number;
   tif_url: string;
+  tif_png_url?: string;
   inference: Inference;
 };
 
@@ -135,7 +136,7 @@ const RealtimePage = () => {
                   >
                     <Box
                       component="img"
-                      src={status.tif_url}
+                      src={status.tif_png_url || status.tif_url}
                       alt={status.tif_name}
                       sx={{ width: "100%", height: { xs: 280, md: 360 }, objectFit: "contain", backgroundColor: "#0f172a0d" }}
                     />

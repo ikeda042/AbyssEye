@@ -4,10 +4,12 @@ import asyncio
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
 from fastapi import HTTPException, UploadFile
+from PIL import Image
 
 APP_DIR = Path(__file__).resolve().parents[1]
 REALTIME_TIFF_DIR = APP_DIR / "realtime_tiff"
@@ -123,3 +125,19 @@ def get_realtime_tif_path(tif_name: str) -> Path:
     if not tif_path.is_file():
         raise HTTPException(status_code=404, detail=f"{safe_name} が見つかりませんでした。")
     return tif_path
+
+
+async def render_tif_as_png_bytes(tif_path: Path, max_edge: int = 1400) -> bytes:
+    """Render a TIFF as PNG for browser display, optionally resizing to max_edge."""
+    if not tif_path.is_file():
+        raise HTTPException(status_code=404, detail=f"{tif_path.name} が見つかりませんでした。")
+
+    def _task() -> bytes:
+        with Image.open(tif_path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((max_edge, max_edge))
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
+
+    return await asyncio.to_thread(_task)
