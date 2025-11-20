@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   Alert,
   Box,
@@ -57,6 +57,7 @@ const RealtimePage = () => {
   const [status, setStatus] = useState<RealtimeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const latestStatusRef = useRef<RealtimeStatus | null>(null);
 
   const fetchStatus = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
@@ -71,8 +72,15 @@ const RealtimePage = () => {
         throw new Error(detail || "最新のTIFFを取得できませんでした。");
       }
       const json = (await response.json()) as RealtimeStatus;
-      setStatus(json);
-      setError(null);
+
+      const prev = latestStatusRef.current;
+      const isNewTif = !prev || prev.tif_name !== json.tif_name || prev.saved_at !== json.saved_at;
+      const roisChanged = (prev?.rois?.length ?? 0) !== (json.rois?.length ?? 0);
+
+      if (isNewTif || roisChanged) {
+        setStatus(json);
+        setError(null);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "予期しないエラーが発生しました。");
     } finally {
@@ -81,6 +89,10 @@ const RealtimePage = () => {
       }
     }
   }, []);
+
+  useEffect(() => {
+    latestStatusRef.current = status;
+  }, [status]);
 
   useEffect(() => {
     void fetchStatus();
