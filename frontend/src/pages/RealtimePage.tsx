@@ -546,11 +546,16 @@ const RealtimePage = () => {
                               color="primary"
                             />
                           }
-                          label={deepVisionOverlayEnabled ? "DeepVision ON" : "DeepVision OFF"}
+                          label="DeepVision"
                           sx={{
                             ml: 1,
                             mr: 0,
-                            "& .MuiFormControlLabel-label": { fontWeight: 600, fontSize: 14 },
+                            "& .MuiFormControlLabel-label": {
+                              fontWeight: 700,
+                              fontSize: 14,
+                              color: deepVisionOverlayEnabled ? "primary.main" : "text.secondary",
+                              letterSpacing: "0.01em",
+                            },
                           }}
                         />
                       </Stack>
