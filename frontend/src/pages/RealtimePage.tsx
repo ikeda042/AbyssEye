@@ -686,7 +686,7 @@ const RealtimePage = () => {
                       )}
                     </Box>
                   </Box>
-                  <Stack spacing={1.25} sx={{ minWidth: { md: 280 }, width: { md: 300 }, maxWidth: 340, alignSelf: "stretch" }}>
+                  <Stack spacing={1.25} sx={{ minWidth: { md: 360 }, width: { md: 420 }, maxWidth: 520, alignSelf: "stretch" }}>
                     <Typography variant="subtitle1" fontWeight={600}>
                       最新 TIFF
                     </Typography>
