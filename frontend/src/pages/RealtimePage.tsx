@@ -132,17 +132,6 @@ const RealtimePage = () => {
           </Typography>
         </Breadcrumbs>
 
-        <Stack direction="row" justifyContent="space-between" alignItems="center">
-          <Box>
-            <Typography variant="h5" fontWeight={600}>
-              Realtime TIFF Monitor
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
-              最新のTIFFとROI分類結果を自動更新で表示します。
-            </Typography>
-          </Box>
-        </Stack>
-
         {error && <Alert severity="error">{error}</Alert>}
 
         {loading ? (
