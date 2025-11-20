@@ -1,7 +1,7 @@
 import { useMemo, useCallback, cloneElement, useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import { Alert, Box, Card, CardActionArea, CardContent, Container, Typography, Stack, Chip } from "@mui/material";
+import { Alert, Box, Card, CardActionArea, CardContent, Container, Typography, Stack } from "@mui/material";
 import type { SvgIconProps } from "@mui/material/SvgIcon";
 import Grid from "@mui/material/GridLegacy";
 import StorageIcon from "@mui/icons-material/Storage";
@@ -156,6 +156,7 @@ const TopPage = () => {
                   height: "100%",
                   display: "flex",
                   flexDirection: "column",
+                  width: "100%",
                 }}
               >
                 <CardActionArea
@@ -197,11 +198,6 @@ const TopPage = () => {
                       <Typography variant="h6" sx={{ fontWeight: 700 }}>
                         {card.title}
                       </Typography>
-                      <Chip
-                        size="small"
-                        label="Open"
-                        sx={{ mt: 0.5, backgroundColor: "rgba(15,23,42,0.04)", color: "#0f172a" }}
-                      />
                     </Box>
                   </Stack>
                   <CardContent sx={{ p: 0, flex: 1, width: "100%" }}>
