@@ -121,7 +121,7 @@ const RealtimePage = () => {
   }, [status]);
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4, px: { xs: 2, sm: 3, md: 4 } }}>
+    <Container maxWidth="xl" sx={{ py: 4.5, px: { xs: 2.5, sm: 3.5, md: 4.5 } }}>
       <Stack spacing={2.5}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
@@ -156,7 +156,12 @@ const RealtimePage = () => {
                       component="img"
                       src={status.tif_png_url || status.tif_url}
                       alt={status.tif_name}
-                      sx={{ width: "100%", height: { xs: 280, md: 360 }, objectFit: "contain", backgroundColor: "#0f172a0d" }}
+                      sx={{
+                        width: "100%",
+                        height: { xs: 340, md: 460 },
+                        objectFit: "contain",
+                        backgroundColor: "#0f172a0d",
+                      }}
                     />
                   </Box>
                   <Stack spacing={1} sx={{ minWidth: { md: 280 } }}>
