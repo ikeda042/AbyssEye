@@ -54,7 +54,7 @@ type RealtimeStatus = {
 
 const statusEndpoint = new URL("realtime/latest", API_BASE_URL).toString();
 const useCurrentEndpoint = new URL("realtime/use-current", API_BASE_URL).toString();
-type DisplayMode = "raw" | "normalized" | "jet";
+type DisplayMode = "raw" | "normalized" | "jet" | "opticalBoost";
 const storageKeys = {
   tifDisplayMode: "realtime:tifDisplayMode",
   deepVision: "realtime:deepVisionEnabled",
@@ -104,7 +104,7 @@ const formatBytes = (bytes: number) => {
 const loadStoredTifMode = (): DisplayMode => {
   if (typeof window === "undefined") return "raw";
   const stored = window.localStorage.getItem(storageKeys.tifDisplayMode);
-  return stored === "normalized" || stored === "jet" ? stored : "raw";
+  return stored === "normalized" || stored === "jet" || stored === "opticalBoost" ? stored : "raw";
 };
 
 const loadStoredDeepVision = (): boolean => {
@@ -142,7 +142,13 @@ const applyDisplayMode = async (src: string, mode: DisplayMode): Promise<string>
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const data = imageData.data;
 
-  if (mode === "normalized") {
+  if (mode === "opticalBoost") {
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = Math.min(255, data[i] * 10);
+      data[i + 1] = Math.min(255, data[i + 1] * 10);
+      data[i + 2] = Math.min(255, data[i + 2] * 10);
+    }
+  } else if (mode === "normalized") {
     let min = 255;
     let max = 0;
     for (let i = 0; i < data.length; i += 4) {
@@ -529,6 +535,7 @@ const RealtimePage = () => {
                           <ToggleButton value="raw">Raw</ToggleButton>
                           <ToggleButton value="normalized">Normalized</ToggleButton>
                           <ToggleButton value="jet">Jet</ToggleButton>
+                          <ToggleButton value="opticalBoost">Optical Boost</ToggleButton>
                         </ToggleButtonGroup>
                         <FormControlLabel
                           control={
@@ -796,6 +803,7 @@ const RealtimePage = () => {
                     <ToggleButton value="raw">Raw</ToggleButton>
                     <ToggleButton value="normalized">Normalized</ToggleButton>
                     <ToggleButton value="jet">Jet</ToggleButton>
+                    <ToggleButton value="opticalBoost">Optical Boost</ToggleButton>
                   </ToggleButtonGroup>
                 </Stack>
               </Card>
