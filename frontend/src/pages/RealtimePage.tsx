@@ -71,6 +71,12 @@ const drawFrame = keyframes`
   100% { clip-path: inset(0 0 0 0); opacity: 1; transform: scale(1); }
 `;
 
+const overlayReveal = keyframes`
+  0% { opacity: 0; transform: scale(0.97); }
+  50% { opacity: 0.3; }
+  100% { opacity: 1; transform: scale(1); }
+`;
+
 const scanLine = keyframes`
   0% { transform: translateX(-110%); opacity: 0; }
   25% { opacity: 0.42; }
@@ -592,6 +598,9 @@ const RealtimePage = () => {
                                   borderRadius: 0.75,
                                   border: isSelected ? `1.8px solid ${color}` : `1px solid ${color}c0`,
                                   backgroundColor: isSelected ? `${color}26` : `${color}12`,
+                                  opacity: 0,
+                                  transform: "scale(0.97)",
+                                  animation: `${overlayReveal} 0.35s ease ${delay}s forwards`,
                                   overflow: "hidden",
                                   cursor: "pointer",
                                   boxShadow: isSelected
