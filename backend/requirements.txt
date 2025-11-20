@@ -17,3 +17,4 @@ scikit-image
 SQLAlchemy
 matplotlib
 python-multipart
+swagger-ui-bundle
