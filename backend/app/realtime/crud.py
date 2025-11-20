@@ -5,8 +5,8 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 
-BACKEND_DIR = Path(__file__).resolve().parents[2]
-REALTIME_TIFF_DIR = BACKEND_DIR / "realtime_tiff"
+APP_DIR = Path(__file__).resolve().parents[1]
+REALTIME_TIFF_DIR = APP_DIR / "realtime_tiff"
 ALLOWED_EXTENSIONS = {".tif", ".tiff"}
 
 
@@ -43,3 +43,4 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
 
     await asyncio.to_thread(_write)
     return target_path
+    """Save uploaded TIFF data under backend/app/realtime_tiff asynchronously."""
