@@ -63,7 +63,7 @@ const classLabels = Array.from({ length: 4 }, (_, index) => {
   return description ? `Class ${index}（${description}）` : `Class ${index}`;
 });
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
-const overlayStaggerSeconds = 0.008;
+const overlayStaggerSeconds = 0.012;
 
 const drawFrame = keyframes`
   0% { clip-path: inset(65% 65% 65% 65%); opacity: 0; transform: scale(0.96); }
