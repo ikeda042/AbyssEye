@@ -3,7 +3,6 @@ import {
   Alert,
   Box,
   Breadcrumbs,
-  Button,
   Card,
   CardContent,
   CircularProgress,
@@ -12,7 +11,6 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import RefreshIcon from "@mui/icons-material/Refresh";
 import { API_BASE_URL } from "../config";
 import { getInferenceClassDescription } from "../constants/inference";
 
@@ -58,14 +56,11 @@ const formatBytes = (bytes: number) => {
 const RealtimePage = () => {
   const [status, setStatus] = useState<RealtimeStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchStatus = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
-    if (silent) {
-      setRefreshing(true);
-    } else {
+    if (!silent) {
       setLoading(true);
       setError(null);
     }
@@ -81,9 +76,7 @@ const RealtimePage = () => {
     } catch (err) {
       setError(err instanceof Error ? err.message : "予期しないエラーが発生しました。");
     } finally {
-      if (silent) {
-        setRefreshing(false);
-      } else {
+      if (!silent) {
         setLoading(false);
       }
     }
@@ -93,7 +86,7 @@ const RealtimePage = () => {
     void fetchStatus();
     const id = window.setInterval(() => {
       void fetchStatus({ silent: true });
-    }, 5000);
+    }, 300);
     return () => window.clearInterval(id);
   }, [fetchStatus]);
 
@@ -136,15 +129,6 @@ const RealtimePage = () => {
               最新のTIFFとROI分類結果を自動更新で表示します。
             </Typography>
           </Box>
-          <Button
-            variant="contained"
-            startIcon={<RefreshIcon />}
-            onClick={() => fetchStatus({ silent: Boolean(status) })}
-            disabled={loading || refreshing}
-            sx={{ minWidth: 120 }}
-          >
-            {refreshing ? "更新中..." : "再読み込み"}
-          </Button>
         </Stack>
 
         {error && <Alert severity="error">{error}</Alert>}
