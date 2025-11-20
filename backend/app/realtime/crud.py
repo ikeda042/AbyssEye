@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import hashlib
 import sqlite3
 import shutil
@@ -24,8 +25,10 @@ from ..roi_extract.roi_module import ROIExtractor
 APP_DIR = Path(__file__).resolve().parents[1]
 REALTIME_TIFF_DIR = APP_DIR / "realtime_tiff"
 REALTIME_DB_DIR = APP_DIR / "realtime_databases"
+REALTIME_CACHE_DIR = APP_DIR / "realtime_cache"
 LEGACY_REALTIME_TIFF_DIR = APP_DIR.parent / "realtime_tiff"
 ALLOWED_EXTENSIONS = {".tif", ".tiff"}
+ROI_CACHE_VERSION = 1
 # fmt: on
 
 
@@ -65,6 +68,7 @@ _status_lock = asyncio.Lock()
 def _ensure_storage_dir() -> None:
     REALTIME_TIFF_DIR.mkdir(parents=True, exist_ok=True)
     REALTIME_DB_DIR.mkdir(parents=True, exist_ok=True)
+    REALTIME_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _is_dir_writable(path: Path) -> bool:
@@ -134,6 +138,75 @@ def _candidate_tiff_dirs() -> list[Path]:
     return [REALTIME_TIFF_DIR, LEGACY_REALTIME_TIFF_DIR]
 
 
+def _roi_cache_path(tif_path: Path) -> Path:
+    stem = _sanitize_stem(tif_path.stem)
+    return REALTIME_CACHE_DIR / f"{stem}.json"
+
+
+def _invalidate_roi_cache(tif_path: Path) -> None:
+    _roi_cache_path(tif_path).unlink(missing_ok=True)
+
+
+def _load_roi_inference_cache(tif_path: Path, db_path: Path) -> dict[int, dict[str, object]] | None:
+    cache_path = _roi_cache_path(tif_path)
+    if not cache_path.is_file():
+        return None
+    try:
+        data = json.loads(cache_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if data.get("version") != ROI_CACHE_VERSION:
+        return None
+    try:
+        tif_mtime = tif_path.stat().st_mtime
+        db_mtime = db_path.stat().st_mtime
+    except OSError:
+        return None
+    if abs(float(data.get("tif_mtime", -1)) - float(tif_mtime)) > 1e-6:
+        return None
+    if abs(float(data.get("db_mtime", -1)) - float(db_mtime)) > 1e-6:
+        return None
+
+    cached: dict[int, dict[str, object]] = {}
+    for entry in data.get("rois", []):
+        try:
+            roi_id = int(entry["roi_id"])
+            cached[roi_id] = {
+                "predicted_class": int(entry["predicted_class"]),
+                "confidence": float(entry["confidence"]),
+                "probabilities": [float(v) for v in entry.get("probabilities", [])],
+                "model_path": str(entry.get("model_path", "")),
+            }
+        except (KeyError, ValueError, TypeError):
+            continue
+    return cached or None
+
+
+def _persist_roi_inference_cache(tif_path: Path, db_path: Path, rois: list[RealtimeROI]) -> None:
+    cache_path = _roi_cache_path(tif_path)
+    try:
+        payload = {
+            "version": ROI_CACHE_VERSION,
+            "tif_name": tif_path.name,
+            "tif_mtime": tif_path.stat().st_mtime,
+            "db_mtime": db_path.stat().st_mtime,
+            "rois": [
+                {
+                    "roi_id": roi.roi_id,
+                    "predicted_class": roi.predicted_class,
+                    "confidence": roi.confidence,
+                    "probabilities": roi.probabilities,
+                    "model_path": roi.model_path,
+                }
+                for roi in rois
+            ],
+        }
+        cache_path.write_text(json.dumps(payload))
+    except OSError:
+        # Cache write failures should not block responses.
+        return
+
+
 def _normalize_on_disk_tif_names() -> None:
     """Strip '#' from on-disk TIFF names to avoid fragment issues in URLs."""
     for directory in _candidate_tiff_dirs():
@@ -195,6 +268,7 @@ def _create_db_from_tif(tif_path: Path) -> Path:
     _ensure_storage_dir()
     if not tif_path.is_file():
         raise HTTPException(status_code=404, detail=f"{tif_path.name} が見つかりませんでした。")
+    _invalidate_roi_cache(tif_path)
 
     import cv2  # local import to avoid heavy import at module load
 
@@ -248,10 +322,12 @@ def _create_db_from_tif(tif_path: Path) -> Path:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _load_rois_with_inference(db_path: Path) -> list[RealtimeROI]:
-    """Read all ROI png blobs from DB, run inference, and return grouped results."""
+def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI]:
+    """Read all ROI png blobs from DB, reuse cached inference if available, otherwise run inference."""
     if not db_path.is_file():
         raise HTTPException(status_code=404, detail=f"{db_path.name} が見つかりません。")
+    cached = _load_roi_inference_cache(tif_path, db_path)
+    cache_dirty = cached is None
     rois: list[RealtimeROI] = []
     first_error: HTTPException | None = None
 
@@ -263,7 +339,22 @@ def _load_rois_with_inference(db_path: Path) -> list[RealtimeROI]:
         blob: bytes = row["png_blob"]
         if not blob:
             continue
+        roi_id = int(row["id"])
         base64_png = base64.b64encode(blob).decode("ascii")
+        cached_result = cached.get(roi_id) if cached else None
+        if cached_result:
+            rois.append(
+                RealtimeROI(
+                    roi_id=roi_id,
+                    predicted_class=int(cached_result["predicted_class"]),
+                    confidence=float(cached_result["confidence"]),
+                    probabilities=[float(v) for v in cached_result["probabilities"]],
+                    model_path=str(cached_result["model_path"]),
+                    png_base64=base64_png,
+                )
+            )
+            continue
+
         data_url = f"data:image/png;base64,{base64_png}"
         try:
             result = inference_crud.predict_label(data_url)
@@ -274,7 +365,7 @@ def _load_rois_with_inference(db_path: Path) -> list[RealtimeROI]:
             continue
         rois.append(
             RealtimeROI(
-                roi_id=int(row["id"]),
+                roi_id=roi_id,
                 predicted_class=result.predicted_class,
                 confidence=result.confidence,
                 probabilities=result.probabilities,
@@ -282,9 +373,14 @@ def _load_rois_with_inference(db_path: Path) -> list[RealtimeROI]:
                 png_base64=base64_png,
             )
         )
+        cache_dirty = True
+
     if not rois and first_error:
         # surface inference failures instead of silently returning empty buckets
         raise HTTPException(status_code=500, detail=f"ROI推論に失敗しました: {first_error.detail}")
+
+    if cache_dirty:
+        _persist_roi_inference_cache(tif_path, db_path, rois)
     return rois
 
 
@@ -321,7 +417,7 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
 
     # Run ROI extraction -> DB and inference on ROIs (off main thread)
     db_path = await asyncio.to_thread(_create_db_from_tif, target_path)
-    rois = await asyncio.to_thread(_load_rois_with_inference, db_path)
+    rois = await asyncio.to_thread(_load_rois_with_inference, db_path, target_path)
     inference = _build_inference_summary(rois, target_path.name)
 
     _latest_status = RealtimeStatus(
@@ -369,7 +465,7 @@ async def get_latest_status() -> RealtimeStatus:
         else:
             db_path = await asyncio.to_thread(_create_db_from_tif, latest_local)
 
-        rois = await asyncio.to_thread(_load_rois_with_inference, db_path)
+        rois = await asyncio.to_thread(_load_rois_with_inference, db_path, latest_local)
         _latest_status = RealtimeStatus(
             tif_path=latest_local,
             saved_at=datetime.fromtimestamp(latest_mtime),
