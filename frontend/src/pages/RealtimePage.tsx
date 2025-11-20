@@ -154,6 +154,15 @@ const RealtimePage = () => {
   const [selectedOverlayRoiId, setSelectedOverlayRoiId] = useState<number | null>(null);
   const [selectedOverlayRoiSrc, setSelectedOverlayRoiSrc] = useState<string | null>(null);
 
+  useEffect(() => {
+    const root = document.documentElement;
+    const prevFontSize = root.style.fontSize;
+    root.style.fontSize = "20px"; // ~125% of default 16px
+    return () => {
+      root.style.fontSize = prevFontSize;
+    };
+  }, []);
+
   const recomputeImageLayout = useCallback(() => {
     const container = imageContainerRef.current;
     if (!container || !imageNaturalSize) return;
