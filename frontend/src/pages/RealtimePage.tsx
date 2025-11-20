@@ -168,6 +168,7 @@ const RealtimePage = () => {
   } | null>(null);
   const [selectedOverlayRoiId, setSelectedOverlayRoiId] = useState<number | null>(null);
   const [selectedOverlayRoiSrc, setSelectedOverlayRoiSrc] = useState<string | null>(null);
+  const [selectedOverlayRoiMeta, setSelectedOverlayRoiMeta] = useState<RealtimeROI | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -250,6 +251,7 @@ const RealtimePage = () => {
     setImageLayout(null);
     setSelectedOverlayRoiId(null);
     setSelectedOverlayRoiSrc(null);
+    setSelectedOverlayRoiMeta(null);
   }, [status?.tif_name]);
 
   useEffect(() => {
@@ -328,11 +330,13 @@ const RealtimePage = () => {
   useEffect(() => {
     if (!selectedOverlayRoiId || !status) {
       setSelectedOverlayRoiSrc(null);
+      setSelectedOverlayRoiMeta(null);
       return;
     }
     const roi = status.rois?.find((r) => r.roi_id === selectedOverlayRoiId);
     if (!roi) {
       setSelectedOverlayRoiSrc(null);
+      setSelectedOverlayRoiMeta(null);
       return;
     }
     const rawSrc = `data:image/png;base64,${roi.png_base64}`;
@@ -344,6 +348,7 @@ const RealtimePage = () => {
       .catch(() => {
         if (!cancelled) setSelectedOverlayRoiSrc(rawSrc);
       });
+    setSelectedOverlayRoiMeta(roi);
     return () => {
       cancelled = true;
     };
@@ -586,9 +591,16 @@ const RealtimePage = () => {
                       </Box>
                       {selectedOverlayRoiSrc && (
                         <Box sx={{ mt: "auto", pt: 1, borderTop: "1px solid rgba(15,23,42,0.08)" }}>
-                          <Typography variant="subtitle2" fontWeight={600} gutterBottom>
-                            選択 ROI プレビュー
-                          </Typography>
+                          <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" mb={0.5}>
+                            <Typography variant="subtitle2" fontWeight={600}>
+                              選択 ROI プレビュー
+                            </Typography>
+                            {selectedOverlayRoiMeta && (
+                              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                信頼度: {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
+                              </Typography>
+                            )}
+                          </Stack>
                           <Box
                             component="img"
                             src={selectedOverlayRoiSrc}
@@ -597,7 +609,9 @@ const RealtimePage = () => {
                               width: "100%",
                               maxWidth: 260,
                               borderRadius: 1,
-                              border: "1px solid rgba(15,23,42,0.12)",
+                              border: `3px solid ${
+                                selectedOverlayRoiMeta ? classColors[selectedOverlayRoiMeta.predicted_class] : "rgba(15,23,42,0.12)"
+                              }`,
                               backgroundColor: "#0f172a0d",
                               display: "block",
                               marginLeft: "auto",
