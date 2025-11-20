@@ -63,11 +63,11 @@ const classLabels = Array.from({ length: 4 }, (_, index) => {
   return description ? `Class ${index}（${description}）` : `Class ${index}`;
 });
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
-const overlayStaggerSeconds = 0.12;
+const overlayStaggerSeconds = 0.012;
 
 const drawFrame = keyframes`
   0% { clip-path: inset(65% 65% 65% 65%); opacity: 0; transform: scale(0.96); }
-  35% { opacity: 0.92; }
+  25% { opacity: 0.92; }
   100% { clip-path: inset(0 0 0 0); opacity: 1; transform: scale(1); }
 `;
 
@@ -609,7 +609,7 @@ const RealtimePage = () => {
                                     border: `1.5px solid ${color}`,
                                     clipPath: "inset(65% 65% 65% 65%)",
                                     opacity: 0,
-                                    animation: `${drawFrame} 0.9s cubic-bezier(0.18, 0.72, 0.25, 1) ${delay}s forwards`,
+                                    animation: `${drawFrame} 0.6s cubic-bezier(0.18, 0.72, 0.25, 1) ${delay}s forwards`,
                                   },
                                   "&::after": {
                                     content: '""',
@@ -619,7 +619,7 @@ const RealtimePage = () => {
                                     filter: "blur(0.2px)",
                                     transform: "translateX(-110%)",
                                     opacity: 0,
-                                    animation: `${scanLine} 1.2s ease-out ${delay + 0.18}s 1`,
+                                    animation: `${scanLine} 0.8s ease-out ${delay + 0.12}s 1`,
                                   },
                                 }}
                                 onClick={() => setSelectedOverlayRoiId(roi.roi_id)}
@@ -633,7 +633,7 @@ const RealtimePage = () => {
                                     filter: "blur(14px)",
                                     opacity: 0,
                                     pointerEvents: "none",
-                                    animation: `${capturePulse} 1.15s ease-out ${delay}s 1`,
+                                    animation: `${capturePulse} 0.75s ease-out ${delay}s 1`,
                                   }}
                                 />
                               </Box>
