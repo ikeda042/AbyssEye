@@ -228,41 +228,27 @@ const RealtimePage = () => {
                         {bucket.map((roi) => {
                           const imageSrc = `data:image/png;base64,${roi.png_base64}`;
                           return (
-                            <Card key={`${classIndex}-${roi.roi_id}`} variant="outlined" sx={{ borderRadius: 0 }}>
-                              <CardContent
+                            <Box
+                              key={`${classIndex}-${roi.roi_id}`}
+                              sx={{
+                                border: "1px solid #e2e8f0",
+                                borderRadius: 1,
+                                overflow: "hidden",
+                                backgroundColor: (theme) => theme.palette.background.paper,
+                              }}
+                            >
+                              <Box
+                                component="img"
+                                src={imageSrc}
+                                alt={`ROI ${roi.roi_id} class ${classIndex}`}
                                 sx={{
-                                  p: 0,
-                                  display: "flex",
-                                  flexDirection: "column",
-                                  "&:last-child": { pb: 0 },
+                                  width: "100%",
+                                  aspectRatio: "1 / 1",
+                                  objectFit: "cover",
+                                  display: "block",
                                 }}
-                              >
-                                <Box sx={{ px: 1.25, pt: 1, pb: 0.5 }}>
-                                  <Typography variant="caption" color="text.secondary">
-                                    ROI #{roi.roi_id}
-                                  </Typography>
-                                </Box>
-                                <Box
-                                  component="img"
-                                  src={imageSrc}
-                                  alt={`ROI ${roi.roi_id} class ${classIndex}`}
-                                  sx={{
-                                    width: "100%",
-                                    height: 80,
-                                    objectFit: "contain",
-                                    display: "block",
-                                    borderTop: "1px solid #e2e8f0",
-                                    borderBottom: "1px solid #e2e8f0",
-                                    backgroundColor: (theme) => theme.palette.background.paper,
-                                  }}
-                                />
-                                <Box sx={{ px: 1.25, py: 0.75 }}>
-                                  <Typography variant="caption" color="text.secondary">
-                                    確信度 {(roi.confidence * 100).toFixed(1)}%
-                                  </Typography>
-                                </Box>
-                              </CardContent>
-                            </Card>
+                              />
+                            </Box>
                           );
                         })}
                       </Box>
