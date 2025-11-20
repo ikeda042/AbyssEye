@@ -426,25 +426,6 @@ const RealtimePage = () => {
           </Typography>
         </Breadcrumbs>
 
-        <Stack
-          direction={{ xs: "column", sm: "row" }}
-          spacing={1}
-          alignItems={{ xs: "flex-start", sm: "center" }}
-          justifyContent="space-between"
-        >
-          <Typography variant="h6" sx={{ fontWeight: 700 }}>
-            最新のRealtimeデータを確認
-          </Typography>
-          <Button
-            variant="contained"
-            onClick={handleUseCurrent}
-            disabled={!status || usingCurrent}
-            sx={{ minWidth: 220, alignSelf: { xs: "stretch", sm: "flex-end" } }}
-          >
-            {usingCurrent ? "コピー中..." : "このデータを使用する"}
-          </Button>
-        </Stack>
-
         {error && <Alert severity="error">{error}</Alert>}
         {useCurrentError && <Alert severity="error">{useCurrentError}</Alert>}
         {useCurrentMessage && <Alert severity="success">{useCurrentMessage}</Alert>}
@@ -609,6 +590,14 @@ const RealtimePage = () => {
                     <Typography variant="body2" color="text.secondary">
                       サイズ: {formatBytes(status.size_bytes)}
                     </Typography>
+                    <Button
+                      variant="contained"
+                      onClick={handleUseCurrent}
+                      disabled={!status || usingCurrent}
+                      sx={{ mt: 1, width: "100%" }}
+                    >
+                      {usingCurrent ? "コピー中..." : "このデータを使用する"}
+                    </Button>
                     <Box
                       sx={{
                         flex: 1,
