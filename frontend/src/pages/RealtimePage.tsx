@@ -596,9 +596,20 @@ const RealtimePage = () => {
                               選択 ROI プレビュー
                             </Typography>
                             {selectedOverlayRoiMeta && (
-                              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
-                                信頼度: {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
-                              </Typography>
+                              <Stack direction="row" spacing={1} alignItems="center">
+                                <Box
+                                  sx={{
+                                    width: 10,
+                                    height: 10,
+                                    borderRadius: "50%",
+                                    bgcolor: classColors[selectedOverlayRoiMeta.predicted_class],
+                                  }}
+                                />
+                                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                  Class {selectedOverlayRoiMeta.predicted_class} / 信頼度:{" "}
+                                  {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
+                                </Typography>
+                              </Stack>
                             )}
                           </Stack>
                           <Box
