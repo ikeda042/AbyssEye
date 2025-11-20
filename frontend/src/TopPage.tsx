@@ -9,6 +9,7 @@ import DisplaySettingsIcon from "@mui/icons-material/DisplaySettings";
 import ApiIcon from "@mui/icons-material/Api";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import NotesIcon from "@mui/icons-material/Notes";
+import AutoGraphIcon from "@mui/icons-material/AutoGraph";
 import { API_BASE_URL } from "./config";
 
 const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
@@ -54,6 +55,13 @@ const TopPage = () => {
         path: "/model-manager",
         accent: ICON_COLOR,
         icon: <ModelTrainingIcon />,
+      },
+      {
+        title: "Realtime Monitor",
+        description: "最新のTIFFと推論結果を自動表示します。",
+        path: "/realtime",
+        accent: ICON_COLOR,
+        icon: <AutoGraphIcon />,
       },
       {
         title: "Swagger UI",

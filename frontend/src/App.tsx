@@ -9,6 +9,7 @@ import SingleCellPage from "./pages/SingleCellPage";
 import InferencePage from "./pages/InferencePage";
 import AnnotationPage from "./pages/AnnotationPage";
 import ModelManagerPage from "./pages/ModelManagerPage";
+import RealtimePage from "./pages/RealtimePage";
 import TempTextPage from "./pages/TempTextPage";
 import AppHeader from "./AppHeader";
 
@@ -55,6 +56,7 @@ const App = () => {
             <Route path="/inference" element={<InferencePage />} />
             <Route path="/annotation" element={<AnnotationPage />} />
             <Route path="/model-manager" element={<ModelManagerPage />} />
+            <Route path="/realtime" element={<RealtimePage />} />
             <Route path="/temptext" element={<TempTextPage />} />
           </Routes>
         </Box>
