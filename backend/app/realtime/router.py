@@ -33,6 +33,16 @@ async def get_latest_realtime_status(request: Request) -> dict:
             "model_path": status.inference.model_path,
             "created_at": status.inference.created_at.isoformat(),
         },
+        "rois": [
+            {
+                "roi_id": roi.roi_id,
+                "predicted_class": roi.predicted_class,
+                "confidence": roi.confidence,
+                "probabilities": roi.probabilities,
+                "png_base64": roi.png_base64,
+            }
+            for roi in status.rois
+        ],
     }
 
 

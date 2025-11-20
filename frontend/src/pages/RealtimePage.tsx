@@ -26,6 +26,14 @@ type Inference = {
   created_at: string;
 };
 
+type RealtimeROI = {
+  roi_id: number;
+  predicted_class: number;
+  confidence: number;
+  probabilities: number[];
+  png_base64: string;
+};
+
 type RealtimeStatus = {
   tif_name: string;
   saved_at: string;
@@ -33,6 +41,7 @@ type RealtimeStatus = {
   tif_url: string;
   tif_png_url?: string;
   inference: Inference;
+  rois?: RealtimeROI[];
 };
 
 const statusEndpoint = new URL("realtime/latest", API_BASE_URL).toString();
@@ -86,6 +95,24 @@ const RealtimePage = () => {
       percent: (p * 100).toFixed(1),
       isPredicted: idx === status.inference.predicted_class,
     }));
+  }, [status]);
+
+  const classBuckets = useMemo(() => {
+    const buckets: Record<number, RealtimeROI[]> = {
+      0: [],
+      1: [],
+      2: [],
+      3: [],
+    };
+    const others: RealtimeROI[] = [];
+    (status?.rois ?? []).forEach((roi) => {
+      if (roi.predicted_class in buckets) {
+        buckets[roi.predicted_class]?.push(roi);
+      } else {
+        others.push(roi);
+      }
+    });
+    return { buckets, others };
   }, [status]);
 
   return (
@@ -255,6 +282,90 @@ const RealtimePage = () => {
                 </Stack>
               </CardContent>
             </Card>
+
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" },
+                gap: 2,
+              }}
+            >
+              {classLabels.map((label, classIndex) => {
+                const bucket = classBuckets.buckets[classIndex] ?? [];
+                return (
+                  <Card key={label} variant="outlined" sx={{ p: { xs: 1.5, md: 2 } }}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        {label} ({bucket.length})
+                      </Typography>
+                    </Stack>
+                    {bucket.length === 0 ? (
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          minHeight: 140,
+                        }}
+                      >
+                        <Typography variant="body2" color="text.secondary">
+                          まだ割り当てられた画像がありません。
+                        </Typography>
+                      </Box>
+                    ) : (
+                      <Box
+                        sx={{
+                          display: "grid",
+                          gridTemplateColumns: "repeat(5, 1fr)",
+                          gap: 1.25,
+                        }}
+                      >
+                        {bucket.map((roi) => {
+                          const imageSrc = `data:image/png;base64,${roi.png_base64}`;
+                          return (
+                            <Card key={`${classIndex}-${roi.roi_id}`} variant="outlined" sx={{ borderRadius: 0 }}>
+                              <CardContent
+                                sx={{
+                                  p: 0,
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  "&:last-child": { pb: 0 },
+                                }}
+                              >
+                                <Box sx={{ px: 1.25, pt: 1, pb: 0.5 }}>
+                                  <Typography variant="caption" color="text.secondary">
+                                    ROI #{roi.roi_id}
+                                  </Typography>
+                                </Box>
+                                <Box
+                                  component="img"
+                                  src={imageSrc}
+                                  alt={`ROI ${roi.roi_id} class ${classIndex}`}
+                                  sx={{
+                                    width: "100%",
+                                    height: 140,
+                                    objectFit: "contain",
+                                    display: "block",
+                                    borderTop: "1px solid #e2e8f0",
+                                    borderBottom: "1px solid #e2e8f0",
+                                    backgroundColor: (theme) => theme.palette.background.paper,
+                                  }}
+                                />
+                                <Box sx={{ px: 1.25, py: 0.75 }}>
+                                  <Typography variant="caption" color="text.secondary">
+                                    確信度 {(roi.confidence * 100).toFixed(1)}%
+                                  </Typography>
+                                </Box>
+                              </CardContent>
+                            </Card>
+                          );
+                        })}
+                      </Box>
+                    )}
+                  </Card>
+                );
+              })}
+            </Box>
           </Stack>
         ) : (
           <Alert severity="info">まだRealtime TIFFがありません。アップロードをお待ちください。</Alert>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import base64
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
@@ -26,11 +27,21 @@ class InferenceResult:
 
 
 @dataclass
+class RealtimeROI:
+    roi_id: int
+    predicted_class: int
+    confidence: float
+    probabilities: list[float]
+    png_base64: str
+
+
+@dataclass
 class RealtimeStatus:
     tif_path: Path
     saved_at: datetime
     size_bytes: int
     inference: InferenceResult
+    rois: list[RealtimeROI]
 
 
 _latest_status: Optional[RealtimeStatus] = None
@@ -69,6 +80,59 @@ def _mock_inference(tif_name: str) -> InferenceResult:
     )
 
 
+def _mock_roi_inference(data: bytes, roi_id: int) -> InferenceResult:
+    digest = hashlib.sha256(data + roi_id.to_bytes(4, "big")).digest()
+    raw_vals = [int.from_bytes(digest[i : i + 2], "big") for i in range(0, 8, 2)]
+    total = sum(raw_vals) or 1
+    probabilities = [val / total for val in raw_vals]
+    predicted_class = int(max(range(len(probabilities)), key=lambda i: probabilities[i]))
+    confidence = float(probabilities[predicted_class])
+    return InferenceResult(
+        predicted_class=predicted_class,
+        confidence=confidence,
+        probabilities=probabilities,
+        model_path="realtime/mock-model",
+        created_at=datetime.now(),
+    )
+
+
+def _generate_roi_previews(tif_path: Path, max_tiles: int = 12, thumb_size: int = 96) -> list[RealtimeROI]:
+    rois: list[RealtimeROI] = []
+
+    with Image.open(tif_path) as img:
+        img = img.convert("RGB")
+        width, height = img.size
+        tiles_per_row = max(1, int((max_tiles ** 0.5)))
+        tile_w = max(1, width // tiles_per_row)
+        tile_h = max(1, height // tiles_per_row)
+
+        roi_id = 1
+        for y in range(0, height, tile_h):
+            for x in range(0, width, tile_w):
+                if len(rois) >= max_tiles:
+                    break
+                box = (x, y, min(x + tile_w, width), min(y + tile_h, height))
+                tile = img.crop(box)
+                tile.thumbnail((thumb_size, thumb_size))
+                buf = BytesIO()
+                tile.save(buf, format="PNG")
+                png_bytes = buf.getvalue()
+                result = _mock_roi_inference(png_bytes, roi_id)
+                rois.append(
+                    RealtimeROI(
+                        roi_id=roi_id,
+                        predicted_class=result.predicted_class,
+                        confidence=result.confidence,
+                        probabilities=result.probabilities,
+                        png_base64=base64.b64encode(png_bytes).decode("ascii"),
+                    )
+                )
+                roi_id += 1
+            if len(rois) >= max_tiles:
+                break
+    return rois
+
+
 async def save_realtime_tif(upload_file: UploadFile) -> Path:
     """Save uploaded TIFF data under backend/app/realtime_tiff asynchronously and update latest status."""
     global _latest_status
@@ -88,11 +152,13 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
     await asyncio.to_thread(_write)
 
     inference = _mock_inference(target_path.name)
+    rois = _generate_roi_previews(target_path)
     _latest_status = RealtimeStatus(
         tif_path=target_path,
         saved_at=datetime.now(),
         size_bytes=target_path.stat().st_size,
         inference=inference,
+        rois=rois,
     )
     return target_path
 
@@ -115,6 +181,7 @@ def get_latest_status() -> RealtimeStatus:
             saved_at=datetime.fromtimestamp(latest.stat().st_mtime),
             size_bytes=latest.stat().st_size,
             inference=_mock_inference(latest.name),
+            rois=_generate_roi_previews(latest),
         )
     return _latest_status
 
