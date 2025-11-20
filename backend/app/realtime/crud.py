@@ -21,7 +21,6 @@ APP_DIR = Path(__file__).resolve().parents[1]
 REALTIME_TIFF_DIR = APP_DIR / "realtime_tiff"
 REALTIME_DB_DIR = APP_DIR / "realtime_databases"
 ALLOWED_EXTENSIONS = {".tif", ".tiff"}
-ROI_INFERENCE_LIMIT = 60  # cap to avoid very large responses
 # fmt: on
 
 
@@ -136,15 +135,15 @@ def _create_db_from_tif(tif_path: Path) -> Path:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _load_rois_with_inference(db_path: Path, limit: int = ROI_INFERENCE_LIMIT) -> list[RealtimeROI]:
-    """Read ROI png blobs from DB, run inference, and return grouped results."""
+def _load_rois_with_inference(db_path: Path) -> list[RealtimeROI]:
+    """Read all ROI png blobs from DB, run inference, and return grouped results."""
     if not db_path.is_file():
         raise HTTPException(status_code=404, detail=f"{db_path.name} が見つかりません。")
     rois: list[RealtimeROI] = []
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT id, png_blob FROM roi_records ORDER BY id LIMIT ?", (limit,)).fetchall()
+        rows = conn.execute("SELECT id, png_blob FROM roi_records ORDER BY id").fetchall()
 
     for row in rows:
         blob: bytes = row["png_blob"]
