@@ -139,7 +139,7 @@ const RealtimePage = () => {
   const latestStatusRef = useRef<RealtimeStatus | null>(null);
   const [tifDisplayMode, setTifDisplayMode] = useState<DisplayMode>("raw");
   const [roiDisplayMode, setRoiDisplayMode] = useState<DisplayMode>("raw");
-  const [scopeOverlayEnabled, setScopeOverlayEnabled] = useState(false);
+  const [deepVisionOverlayEnabled, setDeepVisionOverlayEnabled] = useState(false);
   const [renderedTifSrc, setRenderedTifSrc] = useState<string | null>(null);
   const [renderingTif, setRenderingTif] = useState(false);
   const [roiDisplaySources, setRoiDisplaySources] = useState<Record<number, string>>({});
@@ -387,11 +387,11 @@ const RealtimePage = () => {
                         </ToggleButtonGroup>
                         <ToggleButton
                           size="small"
-                          value="scopeml"
-                          selected={scopeOverlayEnabled}
-                          onChange={() => setScopeOverlayEnabled((prev) => !prev)}
+                          value="deepvision"
+                          selected={deepVisionOverlayEnabled}
+                          onChange={() => setDeepVisionOverlayEnabled((prev) => !prev)}
                         >
-                          ScopeML
+                          DeepVision
                         </ToggleButton>
                       </Stack>
                     </Stack>
@@ -417,7 +417,7 @@ const RealtimePage = () => {
                           display: "block",
                         }}
                       />
-                      {scopeOverlayEnabled && imageLayout && (status.rois?.length ?? 0) > 0 && (
+                      {deepVisionOverlayEnabled && imageLayout && (status.rois?.length ?? 0) > 0 && (
                         <Box
                           sx={{
                             position: "absolute",
