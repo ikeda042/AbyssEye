@@ -29,6 +29,12 @@ type RealtimeROI = {
   predicted_class: number;
   confidence: number;
   probabilities: number[];
+  roi_start_x: number;
+  roi_start_y: number;
+  roi_end_x: number;
+  roi_end_y: number;
+  image_width_px: number;
+  image_height_px: number;
   png_base64: string;
 };
 
@@ -49,6 +55,7 @@ const classLabels = Array.from({ length: 4 }, (_, index) => {
   const description = getInferenceClassDescription(index);
   return description ? `Class ${index}（${description}）` : `Class ${index}`;
 });
+const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
 const formatBytes = (bytes: number) => {
   if (!bytes) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
@@ -132,9 +139,38 @@ const RealtimePage = () => {
   const latestStatusRef = useRef<RealtimeStatus | null>(null);
   const [tifDisplayMode, setTifDisplayMode] = useState<DisplayMode>("raw");
   const [roiDisplayMode, setRoiDisplayMode] = useState<DisplayMode>("raw");
+  const [scopeOverlayEnabled, setScopeOverlayEnabled] = useState(false);
   const [renderedTifSrc, setRenderedTifSrc] = useState<string | null>(null);
   const [renderingTif, setRenderingTif] = useState(false);
   const [roiDisplaySources, setRoiDisplaySources] = useState<Record<number, string>>({});
+  const imageContainerRef = useRef<HTMLDivElement | null>(null);
+  const [imageNaturalSize, setImageNaturalSize] = useState<{ width: number; height: number } | null>(null);
+  const [imageLayout, setImageLayout] = useState<{
+    displayWidth: number;
+    displayHeight: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
+
+  const recomputeImageLayout = useCallback(() => {
+    const container = imageContainerRef.current;
+    if (!container || !imageNaturalSize) return;
+    const rect = container.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const scale = Math.min(rect.width / imageNaturalSize.width, rect.height / imageNaturalSize.height);
+    const displayWidth = imageNaturalSize.width * scale;
+    const displayHeight = imageNaturalSize.height * scale;
+    const offsetX = (rect.width - displayWidth) / 2;
+    const offsetY = (rect.height - displayHeight) / 2;
+    setImageLayout({ displayWidth, displayHeight, offsetX, offsetY });
+  }, [imageNaturalSize]);
+
+  const handleImageLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
+    const target = e.currentTarget;
+    const width = target.naturalWidth || target.width;
+    const height = target.naturalHeight || target.height;
+    setImageNaturalSize({ width, height });
+  }, []);
 
   const fetchStatus = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
@@ -171,6 +207,21 @@ const RealtimePage = () => {
   useEffect(() => {
     latestStatusRef.current = status;
   }, [status]);
+
+  useEffect(() => {
+    recomputeImageLayout();
+  }, [recomputeImageLayout, imageNaturalSize, renderedTifSrc, status, tifDisplayMode]);
+
+  useEffect(() => {
+    const handleResize = () => recomputeImageLayout();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [recomputeImageLayout]);
+
+  useEffect(() => {
+    setImageNaturalSize(null);
+    setImageLayout(null);
+  }, [status?.tif_name]);
 
   useEffect(() => {
     if (!status) {
@@ -305,13 +356,13 @@ const RealtimePage = () => {
                       borderRadius: 1,
                       overflow: "hidden",
                       border: "1px solid rgba(15,23,42,0.1)",
-                      position: "relative",
+                      backgroundColor: "#fff",
                     }}
                   >
                     <Stack
-                      direction="row"
-                      spacing={1}
-                      alignItems="center"
+                      direction={{ xs: "column", sm: "row" }}
+                      spacing={{ xs: 1, sm: 1.5 }}
+                      alignItems={{ xs: "flex-start", sm: "center" }}
                       justifyContent="space-between"
                       sx={{
                         px: 1.5,
@@ -323,42 +374,119 @@ const RealtimePage = () => {
                       <Typography variant="subtitle2" fontWeight={600}>
                         TIFF表示モード
                       </Typography>
-                      <ToggleButtonGroup
-                        size="small"
-                        exclusive
-                        value={tifDisplayMode}
-                        onChange={(_, value) => value && setTifDisplayMode(value)}
-                      >
-                        <ToggleButton value="raw">Raw</ToggleButton>
-                        <ToggleButton value="normalized">Normalized</ToggleButton>
-                        <ToggleButton value="jet">Jet</ToggleButton>
-                      </ToggleButtonGroup>
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <ToggleButtonGroup
+                          size="small"
+                          exclusive
+                          value={tifDisplayMode}
+                          onChange={(_, value) => value && setTifDisplayMode(value)}
+                        >
+                          <ToggleButton value="raw">Raw</ToggleButton>
+                          <ToggleButton value="normalized">Normalized</ToggleButton>
+                          <ToggleButton value="jet">Jet</ToggleButton>
+                        </ToggleButtonGroup>
+                        <ToggleButton
+                          size="small"
+                          value="scopeml"
+                          selected={scopeOverlayEnabled}
+                          onChange={() => setScopeOverlayEnabled((prev) => !prev)}
+                        >
+                          ScopeML
+                        </ToggleButton>
+                      </Stack>
                     </Stack>
                     <Box
-                      component="img"
-                      src={renderedTifSrc || status.tif_png_url || status.tif_url}
-                      alt={status.tif_name}
+                      ref={imageContainerRef}
                       sx={{
+                        position: "relative",
                         width: "100%",
                         height: { xs: 340, md: 460 },
-                        objectFit: "contain",
                         backgroundColor: "#0f172a0d",
+                        overflow: "hidden",
                       }}
-                    />
-                    {renderingTif && (
+                    >
                       <Box
+                        component="img"
+                        src={renderedTifSrc || status.tif_png_url || status.tif_url}
+                        alt={status.tif_name}
+                        onLoad={handleImageLoad}
                         sx={{
-                          position: "absolute",
-                          inset: 0,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          backgroundColor: "rgba(255,255,255,0.4)",
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "contain",
+                          display: "block",
                         }}
-                      >
-                        <CircularProgress size={42} />
-                      </Box>
-                    )}
+                      />
+                      {scopeOverlayEnabled && imageLayout && (status.rois?.length ?? 0) > 0 && (
+                        <Box
+                          sx={{
+                            position: "absolute",
+                            inset: 0,
+                            pointerEvents: "none",
+                          }}
+                        >
+                          {(status.rois ?? []).map((roi) => {
+                            const baseWidth = roi.image_width_px || 0;
+                            const baseHeight = roi.image_height_px || 0;
+                            if (!baseWidth || !baseHeight) return null;
+                            const scaleX = imageLayout.displayWidth / baseWidth;
+                            const scaleY = imageLayout.displayHeight / baseHeight;
+                            const left = imageLayout.offsetX + roi.roi_start_x * scaleX;
+                            const top = imageLayout.offsetY + roi.roi_start_y * scaleY;
+                            const width = (roi.roi_end_x - roi.roi_start_x) * scaleX;
+                            const height = (roi.roi_end_y - roi.roi_start_y) * scaleY;
+                            const color = classColors[roi.predicted_class] ?? "#6366f1";
+                            return (
+                              <Box
+                                key={`overlay-${roi.roi_id}`}
+                                sx={{
+                                  position: "absolute",
+                                  left,
+                                  top,
+                                  width,
+                                  height,
+                                  border: `2px solid ${color}`,
+                                  borderRadius: 0.75,
+                                  backgroundColor: `${color}22`,
+                                  boxShadow: "0 0 0 1px rgba(15,23,42,0.08)",
+                                }}
+                              >
+                                <Box
+                                  sx={{
+                                    position: "absolute",
+                                    top: 4,
+                                    left: 4,
+                                    px: 0.75,
+                                    py: 0.25,
+                                    borderRadius: 0.75,
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    color: "#fff",
+                                    backgroundColor: color,
+                                  }}
+                                >
+                                  ROI {roi.roi_id}
+                                </Box>
+                              </Box>
+                            );
+                          })}
+                        </Box>
+                      )}
+                      {renderingTif && (
+                        <Box
+                          sx={{
+                            position: "absolute",
+                            inset: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            backgroundColor: "rgba(255,255,255,0.4)",
+                          }}
+                        >
+                          <CircularProgress size={42} />
+                        </Box>
+                      )}
+                    </Box>
                   </Box>
                   <Stack spacing={1} sx={{ minWidth: { md: 280 } }}>
                     <Typography variant="subtitle1" fontWeight={600}>

@@ -48,6 +48,12 @@ class RealtimeROI:
     confidence: float
     probabilities: list[float]
     model_path: str
+    roi_start_x: int
+    roi_start_y: int
+    roi_end_x: int
+    roi_end_y: int
+    image_width_px: int
+    image_height_px: int
     png_base64: str
 
 
@@ -333,7 +339,21 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT id, png_blob FROM roi_records ORDER BY id").fetchall()
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                png_blob,
+                roi_start_x,
+                roi_start_y,
+                roi_end_x,
+                roi_end_y,
+                image_width_px,
+                image_height_px
+            FROM roi_records
+            ORDER BY id
+            """
+        ).fetchall()
 
     for row in rows:
         blob: bytes = row["png_blob"]
@@ -350,6 +370,12 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                     confidence=float(cached_result["confidence"]),
                     probabilities=[float(v) for v in cached_result["probabilities"]],
                     model_path=str(cached_result["model_path"]),
+                    roi_start_x=int(row["roi_start_x"]),
+                    roi_start_y=int(row["roi_start_y"]),
+                    roi_end_x=int(row["roi_end_x"]),
+                    roi_end_y=int(row["roi_end_y"]),
+                    image_width_px=int(row["image_width_px"]),
+                    image_height_px=int(row["image_height_px"]),
                     png_base64=base64_png,
                 )
             )
@@ -370,6 +396,12 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                 confidence=result.confidence,
                 probabilities=result.probabilities,
                 model_path=result.model_path,
+                roi_start_x=int(row["roi_start_x"]),
+                roi_start_y=int(row["roi_start_y"]),
+                roi_end_x=int(row["roi_end_x"]),
+                roi_end_y=int(row["roi_end_y"]),
+                image_width_px=int(row["image_width_px"]),
+                image_height_px=int(row["image_height_px"]),
                 png_base64=base64_png,
             )
         )

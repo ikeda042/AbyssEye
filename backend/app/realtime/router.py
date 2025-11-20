@@ -40,6 +40,12 @@ async def get_latest_realtime_status(request: Request) -> dict:
                 "predicted_class": roi.predicted_class,
                 "confidence": roi.confidence,
                 "probabilities": roi.probabilities,
+                "roi_start_x": roi.roi_start_x,
+                "roi_start_y": roi.roi_start_y,
+                "roi_end_x": roi.roi_end_x,
+                "roi_end_y": roi.roi_end_y,
+                "image_width_px": roi.image_width_px,
+                "image_height_px": roi.image_height_px,
                 "png_base64": roi.png_base64,
             }
             for roi in status.rois
