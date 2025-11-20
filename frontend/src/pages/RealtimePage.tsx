@@ -151,6 +151,8 @@ const RealtimePage = () => {
     offsetX: number;
     offsetY: number;
   } | null>(null);
+  const [selectedOverlayRoiId, setSelectedOverlayRoiId] = useState<number | null>(null);
+  const [selectedOverlayRoiSrc, setSelectedOverlayRoiSrc] = useState<string | null>(null);
 
   const recomputeImageLayout = useCallback(() => {
     const container = imageContainerRef.current;
@@ -221,6 +223,8 @@ const RealtimePage = () => {
   useEffect(() => {
     setImageNaturalSize(null);
     setImageLayout(null);
+    setSelectedOverlayRoiId(null);
+    setSelectedOverlayRoiSrc(null);
   }, [status?.tif_name]);
 
   useEffect(() => {
@@ -295,6 +299,30 @@ const RealtimePage = () => {
       cancelled = true;
     };
   }, [status, roiDisplayMode]);
+
+  useEffect(() => {
+    if (!selectedOverlayRoiId || !status) {
+      setSelectedOverlayRoiSrc(null);
+      return;
+    }
+    const roi = status.rois?.find((r) => r.roi_id === selectedOverlayRoiId);
+    if (!roi) {
+      setSelectedOverlayRoiSrc(null);
+      return;
+    }
+    const rawSrc = `data:image/png;base64,${roi.png_base64}`;
+    let cancelled = false;
+    void applyDisplayMode(rawSrc, tifDisplayMode)
+      .then((processed) => {
+        if (!cancelled) setSelectedOverlayRoiSrc(processed);
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedOverlayRoiSrc(rawSrc);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedOverlayRoiId, status?.tif_name, tifDisplayMode, status?.rois]);
 
   useEffect(() => {
     void fetchStatus();
@@ -429,7 +457,7 @@ const RealtimePage = () => {
                           sx={{
                             position: "absolute",
                             inset: 0,
-                            pointerEvents: "none",
+                            pointerEvents: "auto",
                           }}
                         >
                           {(status.rois ?? []).map((roi) => {
@@ -443,6 +471,7 @@ const RealtimePage = () => {
                             const width = (roi.roi_end_x - roi.roi_start_x) * scaleX;
                             const height = (roi.roi_end_y - roi.roi_start_y) * scaleY;
                             const color = classColors[roi.predicted_class] ?? "#6366f1";
+                            const isSelected = selectedOverlayRoiId === roi.roi_id;
                             return (
                               <Box
                                 key={`overlay-${roi.roi_id}`}
@@ -452,11 +481,15 @@ const RealtimePage = () => {
                                   top,
                                   width,
                                   height,
-                                  border: `1.2px solid ${color}`,
+                                  border: isSelected ? `2px solid ${color}` : `1.2px solid ${color}`,
                                   borderRadius: 0.5,
-                                  backgroundColor: `${color}18`,
-                                  boxShadow: "0 0 0 0.5px rgba(15,23,42,0.06)",
+                                  backgroundColor: isSelected ? `${color}28` : `${color}18`,
+                                  boxShadow: isSelected
+                                    ? `0 0 0 1px rgba(15,23,42,0.12), 0 0 0 2px ${color}33`
+                                    : "0 0 0 0.5px rgba(15,23,42,0.06)",
+                                  cursor: "pointer",
                                 }}
+                                onClick={() => setSelectedOverlayRoiId(roi.roi_id)}
                               />
                             );
                           })}
@@ -518,6 +551,26 @@ const RealtimePage = () => {
                           </Typography>
                         )}
                       </Stack>
+                      {selectedOverlayRoiSrc && (
+                        <Box sx={{ mt: 1, borderTop: "1px solid rgba(15,23,42,0.08)", pt: 1 }}>
+                          <Typography variant="subtitle2" fontWeight={600} gutterBottom>
+                            選択 ROI プレビュー
+                          </Typography>
+                          <Box
+                            component="img"
+                            src={selectedOverlayRoiSrc}
+                            alt="Selected ROI"
+                            sx={{
+                              width: "100%",
+                              maxWidth: 220,
+                              borderRadius: 1,
+                              border: "1px solid rgba(15,23,42,0.12)",
+                              backgroundColor: "#0f172a0d",
+                              display: "block",
+                            }}
+                          />
+                        </Box>
+                      )}
                     </Box>
                   </Stack>
                 </Stack>
