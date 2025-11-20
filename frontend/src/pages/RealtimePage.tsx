@@ -470,7 +470,7 @@ const RealtimePage = () => {
   }, [status?.rois, status?.tif_name]);
 
   return (
-    <Container maxWidth="xl" sx={{ py: 4.5, px: { xs: 2.5, sm: 3.5, md: 4.5 } }}>
+    <Container maxWidth="xl" sx={{ py: 4.25, px: { xs: 2, sm: 2.75, md: 3.25, lg: 3.75, xl: 4 } }}>
       <Stack spacing={2.5}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
@@ -686,7 +686,7 @@ const RealtimePage = () => {
                       )}
                     </Box>
                   </Box>
-                  <Stack spacing={1.25} sx={{ minWidth: { md: 300 }, width: { md: 320 }, alignSelf: "stretch" }}>
+                  <Stack spacing={1.25} sx={{ minWidth: { md: 280 }, width: { md: 300 }, maxWidth: 340, alignSelf: "stretch" }}>
                     <Typography variant="subtitle1" fontWeight={600}>
                       最新 TIFF
                     </Typography>
