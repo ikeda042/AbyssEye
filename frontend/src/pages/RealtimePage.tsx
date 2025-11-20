@@ -58,11 +58,17 @@ const formatBytes = (bytes: number) => {
 const RealtimePage = () => {
   const [status, setStatus] = useState<RealtimeStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchStatus = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const fetchStatus = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = Boolean(options?.silent);
+    if (silent) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const response = await fetch(statusEndpoint, { headers: { Accept: "application/json" }, cache: "no-store" });
       if (!response.ok) {
@@ -71,17 +77,23 @@ const RealtimePage = () => {
       }
       const json = (await response.json()) as RealtimeStatus;
       setStatus(json);
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "予期しないエラーが発生しました。");
-      setStatus(null);
     } finally {
-      setLoading(false);
+      if (silent) {
+        setRefreshing(false);
+      } else {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    fetchStatus();
-    const id = window.setInterval(fetchStatus, 5000);
+    void fetchStatus();
+    const id = window.setInterval(() => {
+      void fetchStatus({ silent: true });
+    }, 5000);
     return () => window.clearInterval(id);
   }, [fetchStatus]);
 
@@ -127,11 +139,11 @@ const RealtimePage = () => {
           <Button
             variant="contained"
             startIcon={<RefreshIcon />}
-            onClick={fetchStatus}
-            disabled={loading}
+            onClick={() => fetchStatus({ silent: Boolean(status) })}
+            disabled={loading || refreshing}
             sx={{ minWidth: 120 }}
           >
-            再読み込み
+            {refreshing ? "更新中..." : "再読み込み"}
           </Button>
         </Stack>
 
