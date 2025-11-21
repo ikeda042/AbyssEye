@@ -15,10 +15,11 @@ def _ensure_storage_dir() -> None:
 
 
 def _sanitize_filename(filename: str) -> str:
-    name = Path(filename or "").name
-    if not name:
+    raw = Path(filename or "").name
+    cleaned = raw.replace("#", "")
+    if not cleaned:
         raise HTTPException(status_code=400, detail="ファイル名が空です。")
-    return name
+    return cleaned
 
 
 def _validate_extension(filename: str) -> None:
