@@ -136,9 +136,9 @@ const TiffManagerPage = () => {
           <Typography variant="h5" fontWeight={600}>
             ROI Extraction
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          {/* <Typography variant="body2" color="text.secondary">
             TIFFファイルをアップロードし、検索やダウンロードを行うためのシンプルなコンソールです。
-          </Typography>
+          </Typography> */}
         </Box>
 
         <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 } }}>
