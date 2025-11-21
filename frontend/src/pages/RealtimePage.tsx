@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useTheme } from "@mui/material/styles";
 import { keyframes } from "@emotion/react";
 import {
   Alert,
@@ -191,6 +192,7 @@ const applyDisplayMode = async (src: string, mode: DisplayMode): Promise<string>
 };
 
 const RealtimePage = () => {
+  const theme = useTheme();
   const [status, setStatus] = useState<RealtimeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -198,6 +200,7 @@ const RealtimePage = () => {
   const [tifDisplayMode, setTifDisplayMode] = useState<DisplayMode>(() => loadStoredTifMode());
   const [roiDisplayMode, setRoiDisplayMode] = useState<DisplayMode>("raw");
   const [deepVisionOverlayEnabled, setDeepVisionOverlayEnabled] = useState<boolean>(() => loadStoredDeepVision());
+  const [gridOverlayEnabled, setGridOverlayEnabled] = useState(false);
   const [renderedTifSrc, setRenderedTifSrc] = useState<string | null>(null);
   const [renderingTif, setRenderingTif] = useState(false);
   const [roiDisplaySources, setRoiDisplaySources] = useState<Record<number, string>>({});
@@ -601,6 +604,27 @@ const RealtimePage = () => {
                             },
                           }}
                         />
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              size="medium"
+                              checked={gridOverlayEnabled}
+                              onChange={(_, checked) => setGridOverlayEnabled(checked)}
+                              color="primary"
+                            />
+                          }
+                          label="Grid"
+                          sx={{
+                            ml: 1,
+                            mr: 0,
+                            "& .MuiFormControlLabel-label": {
+                              fontWeight: 700,
+                              fontSize: 14,
+                              color: gridOverlayEnabled ? "primary.main" : "text.secondary",
+                              letterSpacing: "0.01em",
+                            },
+                          }}
+                        />
                       </Stack>
                     </Stack>
                     <Box
@@ -627,6 +651,19 @@ const RealtimePage = () => {
                           display: "block",
                         }}
                       />
+                      {gridOverlayEnabled && (
+                        <Box
+                          sx={{
+                            position: "absolute",
+                            inset: 0,
+                            pointerEvents: "none",
+                            opacity: 0.45,
+                            backgroundImage: `linear-gradient(${theme.palette.mode === "dark" ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)"} 1px, transparent 1px),
+                              linear-gradient(90deg, ${theme.palette.mode === "dark" ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)"} 1px, transparent 1px)`,
+                            backgroundSize: "80px 80px",
+                          }}
+                        />
+                      )}
                       {deepVisionOverlayEnabled && imageLayout && (status.rois?.length ?? 0) > 0 && (
                         <Box
                           sx={{
