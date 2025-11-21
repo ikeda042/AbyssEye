@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { Box, CssBaseline, ThemeProvider, createTheme, PaletteMode } from "@mui/material";
+import { Box, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
+import type { PaletteMode } from "@mui/material";
 import TopPage from "./TopPage";
 import TiffManagerPage from "./pages/TiffManagerPage";
 import RoiExtractPage from "./pages/RoiExtractPage";
