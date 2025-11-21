@@ -658,8 +658,8 @@ const RealtimePage = () => {
                             inset: 0,
                             pointerEvents: "none",
                             opacity: 0.45,
-                            backgroundImage: `linear-gradient(${theme.palette.mode === "dark" ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)"} 1px, transparent 1px),
-                              linear-gradient(90deg, ${theme.palette.mode === "dark" ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)"} 1px, transparent 1px)`,
+                            backgroundImage: `linear-gradient(${theme.palette.mode === "dark" ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.16)"} 2px, transparent 2px),
+                              linear-gradient(90deg, ${theme.palette.mode === "dark" ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.16)"} 2px, transparent 2px)`,
                             backgroundSize: "80px 80px",
                           }}
                         />
