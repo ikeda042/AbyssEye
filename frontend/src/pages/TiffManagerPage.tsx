@@ -59,7 +59,6 @@ const TiffManagerPage = () => {
       setIsLoading(false);
     }
   }, []);
-
   useEffect(() => {
     fetchTifFiles();
   }, [fetchTifFiles]);
