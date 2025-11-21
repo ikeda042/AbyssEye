@@ -18,14 +18,17 @@ import AppHeader from "./AppHeader";
 
 const storageKey = "abyssEye:colorMode";
 
+const successPrimary = "#22c55e";
+const darkBg = "#0b1120";
+
 const createAppTheme = (mode: PaletteMode) =>
   createTheme({
     palette: {
       mode,
-      primary: { main: mode === "dark" ? "#38bdf8" : "#0f172a" },
-      secondary: { main: mode === "dark" ? "#38bdf8" : "#0f172a" },
+      primary: { main: mode === "dark" ? successPrimary : "#0f172a" },
+      secondary: { main: mode === "dark" ? successPrimary : "#0f172a" },
       background: {
-        default: mode === "dark" ? "#0b1120" : "#f8fafc",
+        default: mode === "dark" ? darkBg : "#f8fafc",
         paper: mode === "dark" ? "#0f172a" : "#ffffff",
       },
       text: {
