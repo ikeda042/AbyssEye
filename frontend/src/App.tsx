@@ -47,9 +47,9 @@ const createAppTheme = (mode: PaletteMode) =>
   });
 
 const loadStoredMode = (): PaletteMode => {
-  if (typeof window === "undefined") return "light";
+  if (typeof window === "undefined") return "dark";
   const stored = window.localStorage.getItem(storageKey);
-  return stored === "dark" ? "dark" : "light";
+  return stored === "light" ? "light" : "dark";
 };
 
 const App = () => {
