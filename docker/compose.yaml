@@ -1,6 +1,6 @@
 services:
   traefik:
-    image: traefik:v3.1
+    image: traefik:latest
     container_name: abysseye-traefik
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
