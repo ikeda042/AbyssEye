@@ -533,9 +533,9 @@ const DeepScanPage = () => {
             <Typography variant="h5" fontWeight={700}>
               DeepScan
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            {/* <Typography variant="body2" color="text.secondary">
               既存のROIデータベースに対してRealtimeビューと同じ可視化を提供します。
-            </Typography>
+            </Typography> */}
           </Box>
           <Stack direction="row" spacing={1}>
             <Button
