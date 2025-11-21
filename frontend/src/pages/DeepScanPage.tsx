@@ -828,13 +828,15 @@ const DeepScanPage = () => {
                           <ToggleButtonGroup
                             size="small"
                             exclusive
-                            value={selectedOverlayRoiMeta?.manual_label ?? null}
+                            value={selectedOverlayRoiMeta?.manual_label ?? "none"}
                             onChange={(_, value) => {
                               if (value === null || manualLabelSaving) return;
-                              void handleManualLabelUpdate(String(value));
+                              const next = value === "none" ? null : String(value);
+                              void handleManualLabelUpdate(next);
                             }}
                             disabled={!selectedOverlayRoiMeta || manualLabelSaving || !dbName}
                           >
+                            <ToggleButton value="none">クリア</ToggleButton>
                             <ToggleButton value="0">0</ToggleButton>
                             <ToggleButton value="1">1</ToggleButton>
                             <ToggleButton value="2">2</ToggleButton>
