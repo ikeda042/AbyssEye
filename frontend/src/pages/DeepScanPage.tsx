@@ -836,7 +836,7 @@ const DeepScanPage = () => {
                             }}
                             disabled={!selectedOverlayRoiMeta || manualLabelSaving || !dbName}
                           >
-                            <ToggleButton value="none">クリア</ToggleButton>
+                            <ToggleButton value="none">ラベルなし</ToggleButton>
                             <ToggleButton value="0">0</ToggleButton>
                             <ToggleButton value="1">1</ToggleButton>
                             <ToggleButton value="2">2</ToggleButton>
