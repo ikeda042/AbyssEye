@@ -54,7 +54,7 @@ const TiffManagerPage = () => {
       const data: { tif_names?: string[] } = await response.json();
       setTifFiles(data.tif_names ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "予期しないエラーが発生しました。");
+      setError(err instanceof Error ? err.message : "予期しないエラーが発生しました。 ");
     } finally {
       setIsLoading(false);
     }
