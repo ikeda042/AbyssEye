@@ -22,6 +22,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
+import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import SearchIcon from "@mui/icons-material/Search";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
@@ -181,6 +182,11 @@ const DatabasesPage = () => {
     navigate(`/inference?${params.toString()}`);
   };
 
+  const handleOpenDeepScan = (dbName: string) => {
+    const params = new URLSearchParams({ db_name: dbName });
+    navigate(`/deepscan?${params.toString()}`);
+  };
+
   const handleOpenAnnotation = (dbName: string) => {
     const params = new URLSearchParams({ db_name: dbName });
     navigate(`/annotation?${params.toString()}`);
@@ -283,6 +289,7 @@ const DatabasesPage = () => {
                     <TableCell>最終更新</TableCell>
                     <TableCell align="right">ダウンロード</TableCell>
                     <TableCell align="center">推論</TableCell>
+                    <TableCell align="center">Deep Scan</TableCell>
                     <TableCell align="center">単細胞ビュー</TableCell>
                     <TableCell align="center">アノテーション</TableCell>
                     <TableCell align="center">概要</TableCell>
@@ -317,22 +324,32 @@ const DatabasesPage = () => {
                         >
                           DL
                         </Button>
-                      </TableCell>
-                      <TableCell align="center">
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          startIcon={<ScienceIcon fontSize="small" />}
+                          </TableCell>
+                          <TableCell align="center">
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<ScienceIcon fontSize="small" />}
                           onClick={() => handleOpenInference(db.name)}
-                        >
-                          推論
-                        </Button>
-                      </TableCell>
-                      <TableCell align="center">
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          startIcon={<SlideshowIcon fontSize="small" />}
+                            >
+                              推論
+                            </Button>
+                          </TableCell>
+                          <TableCell align="center">
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<TravelExploreIcon fontSize="small" />}
+                              onClick={() => handleOpenDeepScan(db.name)}
+                            >
+                              DeepScan
+                            </Button>
+                          </TableCell>
+                          <TableCell align="center">
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<SlideshowIcon fontSize="small" />}
                           onClick={() => handleOpenSingleCell(db.name)}
                         >
                           ビュー

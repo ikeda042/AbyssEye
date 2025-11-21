@@ -10,6 +10,7 @@ import InferencePage from "./pages/InferencePage";
 import AnnotationPage from "./pages/AnnotationPage";
 import ModelManagerPage from "./pages/ModelManagerPage";
 import RealtimePage from "./pages/RealtimePage";
+import DeepScanPage from "./pages/DeepScanPage";
 import TempTextPage from "./pages/TempTextPage";
 import AppHeader from "./AppHeader";
 
@@ -57,6 +58,7 @@ const App = () => {
             <Route path="/annotation" element={<AnnotationPage />} />
             <Route path="/model-manager" element={<ModelManagerPage />} />
             <Route path="/realtime" element={<RealtimePage />} />
+            <Route path="/deepscan" element={<DeepScanPage />} />
             <Route path="/temptext" element={<TempTextPage />} />
           </Routes>
         </Box>
