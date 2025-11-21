@@ -454,17 +454,12 @@ const DeepScanPage = () => {
 
   const roiCaptureOrder = useMemo(() => {
     const rois = status?.rois ?? [];
-    const sortedByPosition = [...rois].sort((a, b) => {
-      const centerAy = (a.roi_start_y + a.roi_end_y) / 2;
-      const centerBy = (b.roi_start_y + b.roi_end_y) / 2;
-      if (centerAy === centerBy) {
-        const centerAx = (a.roi_start_x + a.roi_end_x) / 2;
-        const centerBx = (b.roi_start_x + b.roi_end_x) / 2;
-        return centerAx - centerBx;
-      }
-      return centerAy - centerBy;
-    });
-    return sortedByPosition.reduce<Record<number, number>>((acc, roi, index) => {
+    const shuffled = [...rois];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled.reduce<Record<number, number>>((acc, roi, index) => {
       acc[roi.roi_id] = index;
       return acc;
     }, {});
