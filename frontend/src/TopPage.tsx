@@ -128,12 +128,12 @@ const TopPage = () => {
     >
       <Container maxWidth="lg" sx={{ p: 0, pb: 6 }}>
         <Box textAlign="center" mb={6}>
-          <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, color: "text.primary" }}>
+          {/* <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, color: "text.primary" }}>
             AbyssEye local APIs
           </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
             Choose the module you need for ROI extraction, inference, or database management.
-          </Typography>
+          </Typography> */}
         </Box>
         <Box mb={4}>
           <Alert
