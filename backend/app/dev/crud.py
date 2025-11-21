@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import subprocess
+from pathlib import Path
+
 POWERSHELL_WATCH_SCRIPT = r"""# ============================================
 # 設定値（必要に応じて書き換えてください）
 # ============================================
@@ -142,6 +146,7 @@ finally {
 """
 
 _memory_text = POWERSHELL_WATCH_SCRIPT
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 async def get_temp_text() -> str:
@@ -153,3 +158,20 @@ async def set_temp_text(text: str) -> str:
     global _memory_text
     _memory_text = text
     return _memory_text
+
+
+async def git_pull() -> str:
+    """Run git pull --ff-only at the repository root and return combined output."""
+    def _task() -> str:
+        result = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        if result.returncode != 0:
+            raise RuntimeError(output.strip() or "git pull failed")
+        return output.strip() or "git pull completed (no output)"
+
+    return await asyncio.to_thread(_task)
