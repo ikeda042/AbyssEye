@@ -29,14 +29,14 @@ services:
       dockerfile: docker/backend.Dockerfile
     environment:
       APP_HOST: 0.0.0.0
-      APP_PORT: ${BACKEND_PORT:-8000}
+      APP_PORT: ${BACKEND_PORT:-3000}
       APP_RELOAD: "false"
     labels:
       - traefik.enable=true
-      - traefik.http.routers.backend.rule=Host(`${PUBLIC_HOSTNAME}`) && PathPrefix(`/api`)
+      - traefik.http.routers.backend.rule=Host(`${PUBLIC_HOSTNAME}`) && PathPrefix(`/api/v1`)
       - traefik.http.routers.backend.entrypoints=websecure
       - traefik.http.routers.backend.tls.certresolver=letsencrypt
-      - traefik.http.services.backend.loadbalancer.server.port=${BACKEND_PORT:-8000}
+      - traefik.http.services.backend.loadbalancer.server.port=${BACKEND_PORT:-3000}
     networks:
       - web
     volumes:
