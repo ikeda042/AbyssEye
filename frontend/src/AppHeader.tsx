@@ -53,6 +53,9 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
             sx={{
               fontWeight: 700,
               fontSize: { xs: "1.35rem", sm: "1.5rem" },
+              fontFamily: '"Space Grotesk", "Noto Sans JP", "Inter", system-ui, -apple-system, sans-serif',
+              letterSpacing: "0.04em",
+              textTransform: "lowercase",
               cursor: isHome ? "default" : "pointer",
               userSelect: "none",
             }}
