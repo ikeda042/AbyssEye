@@ -18,6 +18,7 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Typography,
+  useTheme,
 } from "@mui/material";
 import type { SelectChangeEvent } from "@mui/material/Select";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
@@ -423,7 +424,7 @@ const RoiLocationPreview = ({
           border: "1px solid",
           borderColor: "divider",
           borderRadius: 1,
-          backgroundColor: "#f8fafc",
+          backgroundColor: (theme) => theme.palette.background.default,
         }}
       >
         <rect
@@ -460,6 +461,7 @@ const SingleCellPage = () => {
   const [searchParams] = useSearchParams();
   const dbName = searchParams.get("db_name");
   const navigate = useNavigate();
+  const theme = useTheme();
 
   const dbNameRef = useRef<string | null>(dbName);
   useEffect(() => {
@@ -536,14 +538,14 @@ const SingleCellPage = () => {
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      bgcolor: "#0f172a08",
-      border: "1px dashed #cbd5f5",
+      bgcolor: theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a08",
+      border: `1px dashed ${theme.palette.divider}`,
       minHeight: 300,
       position: "relative",
       borderRadius: 1,
       p: 1.5,
     }),
-    [],
+    [theme.palette.divider, theme.palette.mode],
   );
 
   const fetchOverview = useCallback(async (targetDb: string) => {
@@ -1446,7 +1448,7 @@ const SingleCellPage = () => {
                           <Box
                             component="pre"
                             sx={{
-                              bgcolor: "#0f172a08",
+                              bgcolor: theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a08",
                               borderRadius: 1,
                               p: 2,
                               fontSize: 13,

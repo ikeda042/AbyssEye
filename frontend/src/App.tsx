@@ -1,5 +1,6 @@
+import { useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { Box, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
+import { Box, CssBaseline, ThemeProvider, createTheme, PaletteMode } from "@mui/material";
 import TopPage from "./TopPage";
 import TiffManagerPage from "./pages/TiffManagerPage";
 import RoiExtractPage from "./pages/RoiExtractPage";
@@ -14,39 +15,66 @@ import DeepScanPage from "./pages/DeepScanPage";
 import TempTextPage from "./pages/TempTextPage";
 import AppHeader from "./AppHeader";
 
-const theme = createTheme({
-  palette: {
-    mode: "light",
-    primary: { main: "#0f172a" },
-    secondary: { main: "#0f172a" },
-    background: {
-      default: "#f8fafc",
-      paper: "#ffffff",
+const storageKey = "abyssEye:colorMode";
+
+const createAppTheme = (mode: PaletteMode) =>
+  createTheme({
+    palette: {
+      mode,
+      primary: { main: mode === "dark" ? "#38bdf8" : "#0f172a" },
+      secondary: { main: mode === "dark" ? "#38bdf8" : "#0f172a" },
+      background: {
+        default: mode === "dark" ? "#0b1120" : "#f8fafc",
+        paper: mode === "dark" ? "#0f172a" : "#ffffff",
+      },
+      text: {
+        primary: mode === "dark" ? "#e2e8f0" : "#0f172a",
+        secondary: mode === "dark" ? "#94a3b8" : "#475569",
+      },
+      divider: mode === "dark" ? "rgba(226, 232, 240, 0.12)" : "rgba(15, 23, 42, 0.1)",
     },
-    text: {
-      primary: "#0f172a",
-      secondary: "#475569",
-    },
-  },
-  shape: { borderRadius: 0 },
-  components: {
-    MuiCssBaseline: {
-      styleOverrides: {
-        body: {
-          backgroundColor: "#f8fafc",
+    shape: { borderRadius: 0 },
+    components: {
+      MuiCssBaseline: {
+        styleOverrides: {
+          body: {
+            backgroundColor: mode === "dark" ? "#0b1120" : "#f8fafc",
+          },
         },
       },
     },
-  },
-});
+  });
+
+const loadStoredMode = (): PaletteMode => {
+  if (typeof window === "undefined") return "light";
+  const stored = window.localStorage.getItem(storageKey);
+  return stored === "dark" ? "dark" : "light";
+};
 
 const App = () => {
+  const [mode, setMode] = useState<PaletteMode>(() => loadStoredMode());
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(storageKey, mode);
+  }, [mode]);
+
+  const theme = useMemo(() => createAppTheme(mode), [mode]);
+
   return (
     <ThemeProvider theme={theme}>
       <BrowserRouter>
         <CssBaseline />
-        <AppHeader />
-        <Box component="main" sx={{ minHeight: "100vh", bgcolor: "background.default", color: "text.primary" }}>
+        <AppHeader mode={mode} onToggleMode={() => setMode((prev) => (prev === "light" ? "dark" : "light"))} />
+        <Box
+          component="main"
+          sx={{
+            minHeight: "100vh",
+            bgcolor: "background.default",
+            color: "text.primary",
+            transition: "background-color 160ms ease, color 160ms ease",
+          }}
+        >
           <Routes>
             <Route path="/" element={<TopPage />} />
             <Route path="/tiff-manager" element={<TiffManagerPage />} />

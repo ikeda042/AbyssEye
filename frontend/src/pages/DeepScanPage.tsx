@@ -579,7 +579,7 @@ const DeepScanPage = () => {
                       borderRadius: 1,
                       overflow: "hidden",
                       border: "1px solid rgba(15,23,42,0.1)",
-                      backgroundColor: "#fff",
+                      backgroundColor: (theme) => theme.palette.background.paper,
                       display: "flex",
                       flexDirection: "column",
                     }}
@@ -641,7 +641,8 @@ const DeepScanPage = () => {
                         position: "relative",
                         width: "100%",
                         minHeight: { xs: 340, md: 460 },
-                        backgroundColor: "#0f172a0d",
+                        backgroundColor: (theme) =>
+                          theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
                         overflow: "hidden",
                       }}
                     >
@@ -897,7 +898,8 @@ const DeepScanPage = () => {
                               border: `3px solid ${
                                 selectedOverlayRoiMeta ? classColors[selectedOverlayRoiMeta.predicted_class] : "rgba(15,23,42,0.12)"
                               }`,
-                              backgroundColor: "#0f172a0d",
+                              backgroundColor: (theme) =>
+                                theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
                               display: "block",
                               marginLeft: "auto",
                               marginRight: "auto",

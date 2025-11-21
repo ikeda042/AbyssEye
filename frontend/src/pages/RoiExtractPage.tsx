@@ -37,13 +37,6 @@ type ExtractionResult = {
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 
-const colors = {
-  pageBg: "#f8fafc",
-  panelBg: "#ffffff",
-  border: "rgba(15,23,42,0.08)",
-  textMuted: "#475569",
-};
-
 const formatDimensions = (dims?: Dimensions) => {
   if (!dims) return "-";
   const { width, height } = dims;
@@ -148,29 +141,35 @@ const RoiExtractPage = () => {
   };
 
   return (
-    <Box sx={{ minHeight: "100vh", backgroundColor: colors.pageBg, pb: { xs: 4, md: 6 } }}>
+    <Box
+      sx={{
+        minHeight: "100vh",
+        backgroundColor: (theme) => theme.palette.background.default,
+        pb: { xs: 4, md: 6 },
+      }}
+    >
       <Container
         maxWidth={false}
         disableGutters
         sx={{
           px: { xs: 2, sm: 4, md: 6, lg: 8 },
           pt: { xs: 4, md: 5 },
-          color: "#0f172a",
+          color: "text.primary",
         }}
       >
         <Stack spacing={3}>
           <Box>
-            <Typography variant="overline" sx={{ letterSpacing: 3, color: colors.textMuted }}>
+            <Typography variant="overline" sx={{ letterSpacing: 3, color: "text.secondary" }}>
               ROI Extract
             </Typography>
             <Typography variant="h4" sx={{ fontWeight: 600 }}>
               自動ROI抽出
             </Typography>
-            <Typography variant="body2" sx={{ color: colors.textMuted, mt: 0.5 }}>
+            <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
               TIFFを選んで抽出を開始すると、自動でSQLite DBにROIが保存されます。
             </Typography>
             {requestedTif && (
-              <Typography variant="body2" sx={{ color: colors.textMuted, mt: 0.5 }}>
+              <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
                 TIFF Managerで選択した {requestedTif} に対して実行できます。
               </Typography>
             )}
@@ -178,20 +177,20 @@ const RoiExtractPage = () => {
 
           <Paper
             sx={{
-              backgroundColor: colors.panelBg,
-              border: `1px solid ${colors.border}`,
+              backgroundColor: (theme) => theme.palette.background.paper,
+              border: (theme) => `1px solid ${theme.palette.divider}`,
               borderRadius: 0,
               p: { xs: 2, md: 3 },
             }}
           >
             <Stack spacing={3}>
               <Stack spacing={1}>
-                <Typography variant="subtitle2" sx={{ color: colors.textMuted }}>
+                <Typography variant="subtitle2" sx={{ color: "text.secondary" }}>
                   実行対象
                 </Typography>
                 <Box
                   sx={{
-                    border: `1px dashed ${colors.border}`,
+                    border: (theme) => `1px dashed ${theme.palette.divider}`,
                     borderRadius: 0,
                     p: 2,
                     minHeight: 100,
@@ -205,7 +204,7 @@ const RoiExtractPage = () => {
                   ) : selectedTif ? (
                     <Typography sx={{ fontSize: 18, fontWeight: 600 }}>{selectedTif}</Typography>
                   ) : (
-                    <Typography sx={{ color: colors.textMuted, textAlign: "center" }}>
+                    <Typography sx={{ color: "text.secondary", textAlign: "center" }}>
                       TIFF ManagerでTIFFファイルを選択してからこのページを開いてください。
                     </Typography>
                   )}
@@ -228,18 +227,16 @@ const RoiExtractPage = () => {
                     variant="contained"
                     fullWidth
                     startIcon={<PlayArrowIcon />}
-                    onClick={handleRunExtraction}
-                    disabled={!selectedTif || isSubmitting || isTargetMissing}
-                    sx={{
-                      flex: { xs: "unset", sm: 1.4 },
-                      minHeight: 56,
-                      bgcolor: "#0f172a",
-                      "&:hover": { bgcolor: "#1f2933" },
-                    }}
-                  >
-                    {isSubmitting ? "抽出中..." : "ROI抽出を実行"}
-                  </Button>
-                  <Button
+                  onClick={handleRunExtraction}
+                  disabled={!selectedTif || isSubmitting || isTargetMissing}
+                  sx={{
+                    flex: { xs: "unset", sm: 1.4 },
+                    minHeight: 56,
+                  }}
+                >
+                  {isSubmitting ? "抽出中..." : "ROI抽出を実行"}
+                </Button>
+                <Button
                     variant="outlined"
                     fullWidth
                     startIcon={<DoneAllIcon />}
@@ -247,28 +244,35 @@ const RoiExtractPage = () => {
                       setResult(null);
                       setInfo(null);
                     }}
-                    disabled={!result && !info}
-                    sx={{
-                      flex: { xs: "unset", sm: 1 },
-                      minHeight: 56,
-                      color: "#0f172a",
-                      borderColor: colors.border,
-                      bgcolor: "#fff",
-                      "&:hover": { bgcolor: "rgba(148,163,184,0.1)", borderColor: "#cbd5f5" },
-                    }}
-                  >
-                    リセット
-                  </Button>
-                </Stack>
+                  disabled={!result && !info}
+                  sx={{
+                    flex: { xs: "unset", sm: 1 },
+                    minHeight: 56,
+                    color: "text.primary",
+                    borderColor: "divider",
+                    bgcolor: (theme) => theme.palette.background.paper,
+                    "&:hover": {
+                      bgcolor: (theme) => (theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "rgba(148,163,184,0.1)"),
+                      borderColor: "divider",
+                    },
+                  }}
+                >
+                  リセット
+                </Button>
+              </Stack>
                 <Button
                   variant="outlined"
                   component={RouterLink}
                   to="/tiff-manager"
                   fullWidth
                   sx={{
-                    borderColor: colors.border,
-                    color: "#0f172a",
-                    "&:hover": { borderColor: "#cbd5f5", backgroundColor: "rgba(148,163,184,0.08)" },
+                    borderColor: "divider",
+                    color: "text.primary",
+                    "&:hover": {
+                      borderColor: "divider",
+                      backgroundColor: (theme) =>
+                        theme.palette.mode === "dark" ? "rgba(148,163,184,0.1)" : "rgba(148,163,184,0.08)",
+                    },
                   }}
                 >
                   TIFF Managerに戻る
@@ -280,7 +284,7 @@ const RoiExtractPage = () => {
               {result && (
                 <Box
                   sx={{
-                    border: `1px solid ${colors.border}`,
+                    border: (theme) => `1px solid ${theme.palette.divider}`,
                     borderRadius: 0,
                     p: 2,
                   }}
@@ -356,7 +360,7 @@ const ResultRow = ({ label, value }: ResultRowProps) => (
   <Stack direction={{ xs: "column", sm: "row" }} spacing={0.5}>
     <Typography
       variant="body2"
-      sx={{ minWidth: 160, fontWeight: 600, color: colors.textMuted }}
+      sx={{ minWidth: 160, fontWeight: 600, color: "text.secondary" }}
     >
       {label}
     </Typography>

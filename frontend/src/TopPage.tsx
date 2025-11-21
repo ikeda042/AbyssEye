@@ -1,7 +1,7 @@
 import { useMemo, useCallback, cloneElement, useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import { Alert, Box, Card, CardActionArea, CardContent, Container, Typography, Stack } from "@mui/material";
+import { Alert, Box, Card, CardActionArea, CardContent, Container, Typography, Stack, useTheme } from "@mui/material";
 import type { SvgIconProps } from "@mui/material/SvgIcon";
 import Grid from "@mui/material/GridLegacy";
 import StorageIcon from "@mui/icons-material/Storage";
@@ -14,7 +14,6 @@ import { API_BASE_URL } from "./config";
 
 const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
 const HEALTHCHECK_URL = API_BASE_URL;
-const ICON_COLOR = "#0f172a";
 
 type BaseCardItem = {
   title: string;
@@ -31,52 +30,54 @@ const TopPage = () => {
   const navigate = useNavigate();
   const [healthStatus, setHealthStatus] = useState<"loading" | "ok" | "error">("loading");
   const [healthMessage, setHealthMessage] = useState("Checking backend status…");
+  const theme = useTheme();
+  const accent = theme.palette.primary.main;
   const cards = useMemo<CardItem[]>(
     () => [
       {
         title: "TIFF Manager",
         description: "Inspect uploaded TIFF stacks and quickly preview metadata.",
         path: "/tiff-manager",
-        accent: ICON_COLOR,
+        accent,
         icon: <DisplaySettingsIcon />,
       },
       {
         title: "Databases",
         description: "Browse generated .db files and manage saved experiments.",
         path: "/databases",
-        accent: ICON_COLOR,
+        accent,
         icon: <StorageIcon />,
       },
       {
         title: "Model Manager",
         description: "Upload and review models stored under models/.",
         path: "/model-manager",
-        accent: ICON_COLOR,
+        accent,
         icon: <ModelTrainingIcon />,
       },
       {
         title: "Realtime engine",
         description: "最新のTIFFと推論結果を自動表示します。",
         path: "/realtime",
-        accent: ICON_COLOR,
+        accent,
         icon: <AutoGraphIcon />,
       },
       {
         title: "Swagger UI",
         description: "Open the backend API documentation and run sample requests.",
         href: SWAGGER_DOCS_URL,
-        accent: ICON_COLOR,
+        accent,
         icon: <ApiIcon />,
       },
       {
         title: "Temp Text",
         description: "Backendメモリに保存されたテキストを閲覧・編集します。",
         path: "/temptext",
-        accent: ICON_COLOR,
+        accent,
         icon: <NotesIcon />,
       },
     ],
-    []
+    [accent]
   );
 
   const handleNavigate = useCallback(
@@ -120,14 +121,14 @@ const TopPage = () => {
     <Box
       sx={{
         minHeight: "100vh",
-        backgroundColor: "#f8fafc",
+        backgroundColor: (theme) => theme.palette.background.default,
         py: { xs: 5, md: 8 },
         px: { xs: 2.5, sm: 3.5, md: 4.5 },
       }}
     >
       <Container maxWidth="lg" sx={{ p: 0, pb: 6 }}>
         <Box textAlign="center" mb={6}>
-          <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, color: "#0f172a" }}>
+          <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, color: "text.primary" }}>
             AbyssEye local APIs
           </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
@@ -150,9 +151,12 @@ const TopPage = () => {
                 elevation={2}
                 sx={{
                   borderRadius: 2,
-                  border: "1px solid rgba(15,23,42,0.06)",
-                  background: "#ffffff",
-                  boxShadow: "0 10px 30px rgba(15,23,42,0.08)",
+                  border: (theme) => `1px solid ${theme.palette.divider}`,
+                  background: (theme) => theme.palette.background.paper,
+                  boxShadow: (theme) =>
+                    theme.palette.mode === "dark"
+                      ? "0 10px 30px rgba(15,23,42,0.35)"
+                      : "0 10px 30px rgba(15,23,42,0.08)",
                   height: "100%",
                   display: "flex",
                   flexDirection: "column",

@@ -1,15 +1,21 @@
-import { AppBar, Box, Divider, Stack, Toolbar, Typography } from "@mui/material";
+import { AppBar, Box, Divider, Stack, Toolbar, Typography, IconButton, useTheme } from "@mui/material";
 import { useLocation, useNavigate } from "react-router-dom";
+import LightModeIcon from "@mui/icons-material/LightMode";
+import DarkModeIcon from "@mui/icons-material/DarkMode";
 
 import { API_BASE_URL } from "./config";
 
-const HEADER_BORDER = "rgba(15, 23, 42, 0.08)";
+type AppHeaderProps = {
+  mode: "light" | "dark";
+  onToggleMode: () => void;
+};
 
-const AppHeader = () => {
+const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const theme = useTheme();
   const isHome = location.pathname === "/";
-
+  const headerBorder = theme.palette.divider;
   const handleHomeClick = () => {
     if (!isHome) {
       navigate("/");
@@ -21,12 +27,12 @@ const AppHeader = () => {
       position="sticky"
       elevation={0}
       sx={{
-        backgroundColor: "#ffffff",
-        color: "#0f172a",
-        borderBottom: `1px solid ${HEADER_BORDER}`,
+        backgroundColor: "background.paper",
+        color: "text.primary",
+        borderBottom: `1px solid ${headerBorder}`,
       }}
     >
-      <Toolbar sx={{ px: { xs: 1, sm: 2, md: 3, lg: 4 }, gap: 1.5 }}>
+      <Toolbar sx={{ px: { xs: 1, sm: 2, md: 3, lg: 4 }, gap: 1.5, transition: "background-color 160ms ease" }}>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexGrow: 1 }}>
           <Box
             component="img"
@@ -54,16 +60,25 @@ const AppHeader = () => {
             AbyssEye
           </Typography>
         </Stack>
-        <Divider flexItem orientation="vertical" sx={{ borderColor: HEADER_BORDER }} />
+        <Divider flexItem orientation="vertical" sx={{ borderColor: headerBorder }} />
         <Typography
           variant="caption"
           sx={{
-            color: "#475569",
+            color: "text.secondary",
             display: { xs: "none", md: "block" },
           }}
         >
           API Base: {API_BASE_URL}
         </Typography>
+        <IconButton
+          color="inherit"
+          onClick={onToggleMode}
+          size="small"
+          sx={{ ml: 1, bgcolor: "transparent" }}
+          aria-label="toggle color mode"
+        >
+          {mode === "dark" ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
+        </IconButton>
       </Toolbar>
     </AppBar>
   );
