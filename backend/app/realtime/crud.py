@@ -20,6 +20,7 @@ from PIL import Image
 from sqlalchemy.exc import OperationalError as SAOperationalError
 
 from ..inference import crud as inference_crud
+from ..databases import crud as databases_crud
 from ..roi_extract.roi_module import ROIExtractor
 
 APP_DIR = Path(__file__).resolve().parents[1]
@@ -356,10 +357,12 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
     """Read all ROI png blobs from DB, reuse cached inference if available, otherwise run inference."""
     if not db_path.is_file():
         raise HTTPException(status_code=404, detail=f"{db_path.name} が見つかりません。")
+    databases_crud.ensure_label_columns(db_path)
     cached = _load_roi_inference_cache(tif_path, db_path)
     cache_dirty = cached is None
     rois: list[RealtimeROI] = []
     first_error: HTTPException | None = None
+    updates: list[tuple[str, str | None, int]] = []
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -373,7 +376,9 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                 roi_end_x,
                 roi_end_y,
                 image_width_px,
-                image_height_px
+                image_height_px,
+                ai_label,
+                ai_model_name
             FROM roi_records
             ORDER BY id
             """
@@ -386,6 +391,8 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
         roi_id = int(row["id"])
         base64_png = base64.b64encode(blob).decode("ascii")
         cached_result = cached.get(roi_id) if cached else None
+        ai_label_val = row["ai_label"] if "ai_label" in row.keys() else None
+        ai_model_val = row["ai_model_name"] if "ai_model_name" in row.keys() else None
         if cached_result:
             rois.append(
                 RealtimeROI(
@@ -403,6 +410,10 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                     png_base64=base64_png,
                 )
             )
+            predicted_class_str = str(int(cached_result["predicted_class"]))
+            model_name = str(cached_result["model_path"]) if cached_result["model_path"] else None
+            if ai_label_val != predicted_class_str or ai_model_val != model_name:
+                updates.append((predicted_class_str, model_name, roi_id))
             continue
 
         data_url = f"data:image/png;base64,{base64_png}"
@@ -430,6 +441,10 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
             )
         )
         cache_dirty = True
+        predicted_class_str = str(result.predicted_class)
+        model_name = result.model_path or None
+        if ai_label_val != predicted_class_str or ai_model_val != model_name:
+            updates.append((predicted_class_str, model_name, roi_id))
 
     if not rois and first_error:
         # surface inference failures instead of silently returning empty buckets
@@ -437,6 +452,17 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
 
     if cache_dirty:
         _persist_roi_inference_cache(tif_path, db_path, rois)
+    if updates:
+        try:
+            with sqlite3.connect(db_path) as conn:
+                conn.executemany(
+                    "UPDATE roi_records SET ai_label = ?, ai_model_name = ? WHERE id = ?",
+                    updates,
+                )
+                conn.commit()
+        except sqlite3.DatabaseError:
+            # updating ai_label/ai_model_name is best-effort
+            pass
     return rois
 
 

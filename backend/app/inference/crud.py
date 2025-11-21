@@ -540,4 +540,19 @@ def _fetch_roi_png_blob(db_name: str, record_id: int) -> bytes:
 def predict_label_for_record(db_name: str, record_id: int, model_path: str | None = None) -> InferenceResult:
     """Fetch ROI image bytes from a database record and run inference."""
     png_blob = _fetch_roi_png_blob(db_name, record_id)
-    return _predict_from_bytes(png_blob, model_path=model_path)
+    result = _predict_from_bytes(png_blob, model_path=model_path)
+
+    # Persist AI prediction to the DB (best-effort).
+    db_path = databases_crud.get_database_file_path(db_name)
+    databases_crud.ensure_label_columns(db_path)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE roi_records SET ai_label = ?, ai_model_name = ? WHERE id = ?",
+                (str(result.predicted_class), result.model_path, record_id),
+            )
+            conn.commit()
+    except sqlite3.DatabaseError:
+        pass
+
+    return result

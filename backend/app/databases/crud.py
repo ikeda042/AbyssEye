@@ -91,12 +91,31 @@ def get_database_file_path(db_name: str) -> Path:
 
 
 def _ensure_manual_label_column(conn: sqlite3.Connection) -> None:
-    """Ensure roi_records table contains manual_label column."""
+    """Ensure roi_records table contains manual_label/ai_label/ai_model_name columns."""
     cursor = conn.execute("PRAGMA table_info(roi_records)")
     columns = {row["name"] for row in cursor.fetchall()}
+    additions: list[tuple[str, str]] = []
     if "manual_label" not in columns:
-        conn.execute("ALTER TABLE roi_records ADD COLUMN manual_label TEXT")
+        additions.append(("manual_label", "TEXT"))
+    if "ai_label" not in columns:
+        additions.append(("ai_label", "TEXT"))
+    if "ai_model_name" not in columns:
+        additions.append(("ai_model_name", "TEXT"))
+
+    for name, type_ in additions:
+        conn.execute(f"ALTER TABLE roi_records ADD COLUMN {name} {type_}")
+    if additions:
         conn.commit()
+
+
+def ensure_label_columns(db_path: Path) -> None:
+    """Public helper to ensure label columns exist on roi_records."""
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            _ensure_manual_label_column(conn)
+    except sqlite3.DatabaseError:
+        return
 
 
 def _deserialize_roi_meta(raw_meta: Any) -> Any:
