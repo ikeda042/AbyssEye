@@ -16,7 +16,7 @@ DEFAULT_RELOAD_DIRS: Final[tuple[Path, ...]] = (
 )
 
 if str(PROJECT_ROOT) not in sys.path:
-    # Ensure projectlocal packages are importable when running via uvicorn
+    # Ensure projectlocal packages are importabe when running via uvicorn
     sys.path.append(str(PROJECT_ROOT))
 
 
