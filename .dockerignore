@@ -1,0 +1,13 @@
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.DS_Store
+.git
+.gitignore
+venv
+.venv
+frontend/node_modules
+frontend/dist
+frontend/.vite
+docker/letsencrypt
+docker/.env

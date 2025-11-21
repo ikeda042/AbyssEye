@@ -8,3 +8,5 @@
 *.pyc
 __pycache__/
 /backend/app/realtime_cache/
+docker/.env
+docker/letsencrypt/acme.json
