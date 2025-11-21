@@ -109,8 +109,11 @@ const loadStoredTifMode = (): DisplayMode => {
 };
 
 const loadStoredDeepVision = (): boolean => {
-  if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(storageKeys.deepVision) === "1";
+  if (typeof window === "undefined") return true;
+  const stored = window.localStorage.getItem(storageKeys.deepVision);
+  if (stored === "0") return false;
+  if (stored === "1") return true;
+  return true;
 };
 
 const loadImage = (src: string): Promise<HTMLImageElement> =>
