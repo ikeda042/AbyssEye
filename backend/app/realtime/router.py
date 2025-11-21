@@ -42,6 +42,7 @@ def _build_status_payload(status: crud.RealtimeStatus, request: Request) -> dict
                 "image_width_px": roi.image_width_px,
                 "image_height_px": roi.image_height_px,
                 "png_base64": roi.png_base64,
+                "manual_label": roi.manual_label,
             }
             for roi in status.rois
         ],

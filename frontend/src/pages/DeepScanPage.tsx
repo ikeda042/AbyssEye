@@ -45,6 +45,7 @@ type RealtimeROI = {
   image_width_px: number;
   image_height_px: number;
   png_base64: string;
+  manual_label?: string | null;
 };
 
 type DeepScanStatus = {
@@ -60,6 +61,11 @@ type DeepScanStatus = {
 
 const buildStatusEndpoint = (dbName: string) =>
   new URL(`deepscan/status?db_name=${encodeURIComponent(dbName)}`, API_BASE_URL).toString();
+const buildManualLabelEndpoint = (dbName: string, recordId: number) =>
+  new URL(
+    `databases/${encodeURIComponent(dbName)}/records/${recordId}/manual-label`,
+    API_BASE_URL,
+  ).toString();
 type DisplayMode = "raw" | "normalized" | "jet" | "opticalBoost";
 const storageKeys = {
   tifDisplayMode: "deepscan:tifDisplayMode",
@@ -219,6 +225,9 @@ const DeepScanPage = () => {
   const [selectedOverlayRoiId, setSelectedOverlayRoiId] = useState<number | null>(null);
   const [selectedOverlayRoiSrc, setSelectedOverlayRoiSrc] = useState<string | null>(null);
   const [selectedOverlayRoiMeta, setSelectedOverlayRoiMeta] = useState<RealtimeROI | null>(null);
+  const [manualLabelSaving, setManualLabelSaving] = useState(false);
+  const [manualLabelMessage, setManualLabelMessage] = useState<string | null>(null);
+  const [manualLabelError, setManualLabelError] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -302,6 +311,8 @@ const DeepScanPage = () => {
     setSelectedOverlayRoiId(null);
     setSelectedOverlayRoiSrc(null);
     setSelectedOverlayRoiMeta(null);
+    setManualLabelError(null);
+    setManualLabelMessage(null);
   }, [status?.tif_name]);
 
   useEffect(() => {
@@ -389,6 +400,8 @@ const DeepScanPage = () => {
       setSelectedOverlayRoiMeta(null);
       return;
     }
+    setManualLabelError(null);
+    setManualLabelMessage(null);
     const rawSrc = `data:image/png;base64,${roi.png_base64}`;
     let cancelled = false;
     void applyDisplayMode(rawSrc, tifDisplayMode)
@@ -460,6 +473,42 @@ const DeepScanPage = () => {
   const handleReload = () => {
     if (!dbName) return;
     void fetchStatus(dbName);
+  };
+
+  const handleManualLabelUpdate = async (label: string | null) => {
+    if (!dbName || !selectedOverlayRoiId) return;
+    setManualLabelSaving(true);
+    setManualLabelError(null);
+    setManualLabelMessage(null);
+    try {
+      const response = await fetch(buildManualLabelEndpoint(dbName, selectedOverlayRoiId), {
+        method: "PUT",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ manual_label: label }),
+      });
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null))?.detail;
+        throw new Error(detail || "manual_label の更新に失敗しました。");
+      }
+      setManualLabelMessage("manual label を更新しました。");
+      setStatus((prev) => {
+        if (!prev || !prev.rois) return prev;
+        return {
+          ...prev,
+          rois: prev.rois.map((roi) =>
+            roi.roi_id === selectedOverlayRoiId ? { ...roi, manual_label: label } : roi,
+          ),
+        };
+      });
+      setSelectedOverlayRoiMeta((prev) => (prev ? { ...prev, manual_label: label ?? null } : prev));
+    } catch (err) {
+      setManualLabelError(err instanceof Error ? err.message : "manual_label の更新に失敗しました。");
+    } finally {
+      setManualLabelSaving(false);
+    }
   };
 
   return (
@@ -755,6 +804,55 @@ const DeepScanPage = () => {
                           {classBuckets.counts.others > 0 && (
                             <Typography variant="body2" color="text.secondary">
                               その他: {classBuckets.counts.others}
+                            </Typography>
+                          )}
+                        </Stack>
+                      </Box>
+                      <Box
+                        sx={{
+                          pt: 1,
+                          borderTop: "1px solid rgba(15,23,42,0.08)",
+                        }}
+                      >
+                        <Stack direction="row" alignItems="center" justifyContent="space-between" mb={0.5}>
+                          <Typography variant="subtitle2" fontWeight={600}>
+                            Manual Label
+                          </Typography>
+                          {manualLabelSaving && (
+                            <Typography variant="caption" color="text.secondary">
+                              更新中…
+                            </Typography>
+                          )}
+                        </Stack>
+                        <Stack spacing={0.5}>
+                          <ToggleButtonGroup
+                            size="small"
+                            exclusive
+                            value={selectedOverlayRoiMeta?.manual_label ?? null}
+                            onChange={(_, value) => {
+                              if (value === null || manualLabelSaving) return;
+                              void handleManualLabelUpdate(String(value));
+                            }}
+                            disabled={!selectedOverlayRoiMeta || manualLabelSaving || !dbName}
+                          >
+                            <ToggleButton value="0">0</ToggleButton>
+                            <ToggleButton value="1">1</ToggleButton>
+                            <ToggleButton value="2">2</ToggleButton>
+                            <ToggleButton value="3">3</ToggleButton>
+                          </ToggleButtonGroup>
+                          {manualLabelError && (
+                            <Typography variant="caption" color="error">
+                              {manualLabelError}
+                            </Typography>
+                          )}
+                          {manualLabelMessage && (
+                            <Typography variant="caption" color="success.main">
+                              {manualLabelMessage}
+                            </Typography>
+                          )}
+                          {!selectedOverlayRoiMeta && (
+                            <Typography variant="caption" color="text.secondary">
+                              ROIを選択するとmanual labelを設定できます。
                             </Typography>
                           )}
                         </Stack>

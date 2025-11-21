@@ -39,6 +39,7 @@ def _build_status_payload(status: realtime_crud.RealtimeStatus, request: Request
                 "image_width_px": roi.image_width_px,
                 "image_height_px": roi.image_height_px,
                 "png_base64": roi.png_base64,
+                "manual_label": roi.manual_label,
             }
             for roi in status.rois
         ],
@@ -65,4 +66,3 @@ async def get_deepscan_tif_file(db_name: str):
 async def get_deepscan_tif_png(db_name: str) -> Response:
     png_bytes = await crud.render_tif_png(db_name)
     return Response(content=png_bytes, media_type="image/png")
-

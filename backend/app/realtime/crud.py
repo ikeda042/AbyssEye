@@ -58,6 +58,9 @@ class RealtimeROI:
     image_width_px: int
     image_height_px: int
     png_base64: str
+    manual_label: str | None = None
+    ai_label: str | None = None
+    ai_model_name: str | None = None
 
 
 @dataclass
@@ -377,6 +380,7 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                 roi_end_y,
                 image_width_px,
                 image_height_px,
+                manual_label,
                 ai_label,
                 ai_model_name
             FROM roi_records
@@ -391,6 +395,7 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
         roi_id = int(row["id"])
         base64_png = base64.b64encode(blob).decode("ascii")
         cached_result = cached.get(roi_id) if cached else None
+        manual_label_val = row["manual_label"] if "manual_label" in row.keys() else None
         ai_label_val = row["ai_label"] if "ai_label" in row.keys() else None
         ai_model_val = row["ai_model_name"] if "ai_model_name" in row.keys() else None
         if cached_result:
@@ -408,6 +413,9 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                     image_width_px=int(row["image_width_px"]),
                     image_height_px=int(row["image_height_px"]),
                     png_base64=base64_png,
+                    manual_label=manual_label_val,
+                    ai_label=ai_label_val,
+                    ai_model_name=ai_model_val,
                 )
             )
             predicted_class_str = str(int(cached_result["predicted_class"]))
@@ -438,6 +446,9 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                 image_width_px=int(row["image_width_px"]),
                 image_height_px=int(row["image_height_px"]),
                 png_base64=base64_png,
+                manual_label=manual_label_val,
+                ai_label=ai_label_val,
+                ai_model_name=ai_model_val,
             )
         )
         cache_dirty = True
