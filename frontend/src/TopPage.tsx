@@ -35,8 +35,8 @@ const TopPage = () => {
   const cards = useMemo<CardItem[]>(
     () => [
       {
-        title: "TIFF Manager",
-        description: "Inspect uploaded TIFF stacks and quickly preview metadata.",
+        title: "ROI Extraction",
+        description: "Upload TIFF stacks, inspect files, and jump into ROI processing.",
         path: "/tiff-manager",
         accent,
         icon: <DisplaySettingsIcon />,

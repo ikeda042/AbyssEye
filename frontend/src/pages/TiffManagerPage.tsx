@@ -128,13 +128,13 @@ const TiffManagerPage = () => {
             Home
           </Link>
           <Typography color="text.primary" fontSize={14}>
-            TIFF Manager
+            ROI Extraction
           </Typography>
         </Breadcrumbs>
 
         <Box>
           <Typography variant="h5" fontWeight={600}>
-            TIFF Manager
+            ROI Extraction
           </Typography>
           <Typography variant="body2" color="text.secondary">
             TIFFファイルをアップロードし、検索やダウンロードを行うためのシンプルなコンソールです。

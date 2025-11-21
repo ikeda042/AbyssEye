@@ -170,7 +170,7 @@ const RoiExtractPage = () => {
             </Typography>
             {requestedTif && (
               <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
-                TIFF Managerで選択した {requestedTif} に対して実行できます。
+                ROI Extractionで選択した {requestedTif} に対して実行できます。
               </Typography>
             )}
           </Box>
@@ -205,18 +205,18 @@ const RoiExtractPage = () => {
                     <Typography sx={{ fontSize: 18, fontWeight: 600 }}>{selectedTif}</Typography>
                   ) : (
                     <Typography sx={{ color: "text.secondary", textAlign: "center" }}>
-                      TIFF ManagerでTIFFファイルを選択してからこのページを開いてください。
+                      ROI ExtractionでTIFFファイルを選択してからこのページを開いてください。
                     </Typography>
                   )}
                 </Box>
                 {isTargetMissing && (
                   <Alert severity="warning" sx={{ borderRadius: 0 }}>
-                    指定されたTIFFファイルが見つかりません。TIFF Managerで状態を確認してください。
+                    指定されたTIFFファイルが見つかりません。ROI Extractionで状態を確認してください。
                   </Alert>
                 )}
                 {!selectedTif && !isLoading && (
                   <Alert severity="info" sx={{ borderRadius: 0 }}>
-                    対象となるTIFFファイルが指定されていません。先にTIFF Managerでファイルを選択してください。
+                    対象となるTIFFファイルが指定されていません。先にROI Extractionでファイルを選択してください。
                   </Alert>
                 )}
               </Stack>
@@ -275,7 +275,7 @@ const RoiExtractPage = () => {
                     },
                   }}
                 >
-                  TIFF Managerに戻る
+                  ROI Extractionに戻る
                 </Button>
               </Stack>
 
