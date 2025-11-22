@@ -27,14 +27,11 @@ import DownloadIcon from "@mui/icons-material/Download";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 
 import { API_BASE_URL } from "../config";
-import { INFERENCE_CLASS_DESCRIPTION_TEXT, getInferenceClassDescription } from "../constants/inference";
+import { getInferenceClassDescription, getInferenceClassDescriptionText } from "../constants/inference";
+import { useI18n } from "../i18n";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 const MAX_FETCH_LIMIT = 240;
-const CLASS_LABELS = Array.from({ length: 4 }, (_, index) => {
-  const description = getInferenceClassDescription(index);
-  return description ? `Class ${index}（${description}）` : `Class ${index}`;
-});
 
 type ROIRecord = {
   record_id: number;
@@ -180,6 +177,28 @@ const pixelsToDataUrl = (pixels: Uint8ClampedArray, width: number, height: numbe
 };
 
 const InferencePage = () => {
+  const { t, language } = useI18n();
+  const tt = (ja: string, en: string) => (language === "ja" ? ja : en);
+  const classLabels = useMemo(
+    () =>
+      Array.from({ length: 4 }, (_, index) => {
+        const description = getInferenceClassDescription(index, language);
+        return description ? `Class ${index} (${description})` : `Class ${index}`;
+      }),
+    [language],
+  );
+  const messages = {
+    recordsFetch: tt("レコードの取得に失敗しました。", "Failed to fetch records."),
+    modelSwitch: tt("モデルの切り替えに失敗しました。", "Failed to switch model."),
+    modelsFetch: tt("モデル一覧の取得に失敗しました。", "Failed to fetch models."),
+    dbMissing: tt("データベースが指定されていません。", "Database is not specified."),
+    modelMissing: tt("使用するモデルを選択してください。", "Select a model to use."),
+    recordsNotFound: tt("指定件数でレコードが見つかりません。", "No records found for the requested amount."),
+    inferenceFailed: tt("推論に失敗しました。", "Inference failed."),
+    inferenceError: tt("推論でエラーが発生しました。", "An error occurred during inference."),
+    drawError: tt("キャンバスの描画に失敗しました。", "Failed to draw on canvas."),
+    exportError: tt("画像の書き出しに失敗しました。", "Failed to export image."),
+  };
   const [searchParams] = useSearchParams();
   const dbName = searchParams.get("db_name");
 
@@ -222,12 +241,12 @@ const InferencePage = () => {
         );
         const payload: ROIRecord[] | null = await response.json().catch(() => null);
         if (!response.ok || !payload || !Array.isArray(payload)) {
-          throw new Error("レコードの取得に失敗しました。");
+          throw new Error(messages.recordsFetch);
         }
         setRecords(payload);
         return payload;
       } catch (err) {
-        const message = err instanceof Error ? err.message : "レコードの取得に失敗しました。";
+        const message = err instanceof Error ? err.message : messages.recordsFetch;
         setRecordsError(message);
         setRecords([]);
         throw err;
@@ -235,7 +254,7 @@ const InferencePage = () => {
         setIsRecordsLoading(false);
       }
     },
-    [],
+    [messages.recordsFetch],
   );
 
   const activateModel = useCallback(async (relativePath: string) => {
@@ -252,7 +271,7 @@ const InferencePage = () => {
       });
       const payload: InferenceModelEntry | null = await response.json().catch(() => null);
       if (!response.ok || !payload) {
-        const message = (payload as { detail?: string } | null)?.detail ?? "モデルの切り替えに失敗しました。";
+        const message = (payload as { detail?: string } | null)?.detail ?? messages.modelSwitch;
         throw new Error(message);
       }
       setAvailableModels((prev) =>
@@ -263,13 +282,13 @@ const InferencePage = () => {
       );
       return payload;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "モデルの切り替えに失敗しました。";
+      const message = err instanceof Error ? err.message : messages.modelSwitch;
       setModelActivationError(message);
       throw err;
     } finally {
       setIsActivatingModel(false);
     }
-  }, []);
+  }, [messages.modelSwitch]);
 
   useEffect(() => {
     let cancelled = false;
@@ -284,7 +303,7 @@ const InferencePage = () => {
       .then(async (response) => {
         const payload: InferenceModelEntry[] | null = await response.json().catch(() => null);
         if (!response.ok || !payload || !Array.isArray(payload)) {
-          const message = (payload as { detail?: string } | null)?.detail ?? "モデル一覧の取得に失敗しました。";
+          const message = (payload as { detail?: string } | null)?.detail ?? messages.modelsFetch;
           throw new Error(message);
         }
         return payload;
@@ -310,7 +329,7 @@ const InferencePage = () => {
         }
         setSelectedModelPath(null);
         setAvailableModels([]);
-        setModelsError(err instanceof Error ? err.message : "モデル一覧の取得に失敗しました。");
+        setModelsError(err instanceof Error ? err.message : messages.modelsFetch);
       })
       .finally(() => {
         if (!cancelled) {
@@ -322,7 +341,7 @@ const InferencePage = () => {
       cancelled = true;
       controller.abort();
     };
-  }, [activateModel]);
+  }, [activateModel, messages.modelsFetch]);
 
   const handleModelChange = useCallback(
     (event: SelectChangeEvent<string>) => {
@@ -343,24 +362,24 @@ const InferencePage = () => {
 
   const handleFetchAndRun = useCallback(async () => {
     if (!dbName) {
-      setRecordsError("データベースが指定されていません。");
+      setRecordsError(messages.dbMissing);
       return;
     }
     if (!selectedModelPath) {
-      setModelActivationError("使用するモデルを選択してください。");
+      setModelActivationError(messages.modelMissing);
       return;
     }
     try {
       const fetched = await fetchRecords(dbName, MAX_FETCH_LIMIT);
       if (fetched.length === 0) {
-        setRecordsError("指定件数でレコードが見つかりません。");
+        setRecordsError(messages.recordsNotFound);
         return;
       }
       await runInference(fetched);
-    } catch (err) {
+    } catch {
       // fetchRecords already handled error messaging
     }
-  }, [dbName, selectedModelPath, fetchRecords]);
+  }, [dbName, selectedModelPath, fetchRecords, runInference, messages.dbMissing, messages.modelMissing, messages.recordsNotFound]);
 
   const runInference = useCallback(
     async (targetRecords: ROIRecord[]) => {
@@ -382,7 +401,7 @@ const InferencePage = () => {
           });
           const payload: InferenceResultPayload | null = await response.json().catch(() => null);
           if (!response.ok || !payload) {
-            const message = (payload as { detail?: string } | null)?.detail ?? "推論に失敗しました。";
+            const message = (payload as { detail?: string } | null)?.detail ?? messages.inferenceFailed;
             throw new Error(message);
           }
           const previews = await generateProcessedVariants(record.png_base64);
@@ -391,13 +410,13 @@ const InferencePage = () => {
           setInferenceResults([...results]);
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "推論でエラーが発生しました。";
+        const message = err instanceof Error ? err.message : messages.inferenceError;
         setInferenceError(message);
       } finally {
         setIsRunningInference(false);
       }
     },
-    [],
+    [messages.inferenceError, messages.inferenceFailed],
   );
 
   const classBuckets = useMemo(() => {
@@ -485,7 +504,7 @@ const InferencePage = () => {
         canvas.height = canvasHeight;
         const context = canvas.getContext("2d");
         if (!context) {
-          throw new Error("キャンバスの描画に失敗しました。");
+          throw new Error(messages.drawError);
         }
 
         const colOffsets: number[] = [];
@@ -512,7 +531,7 @@ const InferencePage = () => {
 
         const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), "image/png"));
         if (!blob) {
-          throw new Error("画像の書き出しに失敗しました。");
+          throw new Error(messages.exportError);
         }
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -524,11 +543,11 @@ const InferencePage = () => {
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
       } catch (err) {
-        const message = err instanceof Error ? err.message : "画像の書き出しに失敗しました。";
+        const message = err instanceof Error ? err.message : messages.exportError;
         setInferenceError(message);
       }
     },
-    [classBuckets.buckets, dbName],
+    [classBuckets.buckets, dbName, messages.exportError],
   );
 
   const progressPercent =
@@ -540,10 +559,10 @@ const InferencePage = () => {
         <Paper sx={{ p: 4 }}>
           <Stack spacing={2} alignItems="flex-start">
             <Typography variant="h5" fontWeight={600}>
-              データベースが指定されていません
+              {messages.dbMissing}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Databasesページから対象DBを選択して「Inference」に進んでください。
+              {tt('Databasesページから対象DBを選択して「Inference」に進んでください。', 'Select a database on the Databases page and open "Inference".')}
             </Typography>
             <Button
               variant="contained"
@@ -551,7 +570,7 @@ const InferencePage = () => {
               component={RouterLink}
               to="/databases"
             >
-              Databasesへ戻る
+              {t("common.backToList")}
             </Button>
           </Stack>
         </Paper>
@@ -570,10 +589,10 @@ const InferencePage = () => {
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" component={RouterLink} to="/">
-            Home
+            {t("common.home")}
           </Link>
           <Link underline="hover" color="inherit" component={RouterLink} to="/databases">
-            Databases
+            {t("databases.breadcrumb")}
           </Link>
           <Typography color="text.primary" fontSize={14}>
             Inference
@@ -587,16 +606,16 @@ const InferencePage = () => {
                 {dbName}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                ROIを一括で推論し、クラスごとに分類します。
+                {tt("ROIを一括で推論し、クラスごとに分類します。", "Run batch inference and group by class.")}
               </Typography>
             </Box>
 
             <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "flex-end" }}>
               <FormControl size="small" sx={{ minWidth: 240 }}>
-                <InputLabel id="bulk-model-select-label">モデル</InputLabel>
+                <InputLabel id="bulk-model-select-label">{tt("モデル", "Model")}</InputLabel>
                 <Select
                   labelId="bulk-model-select-label"
-                  label="モデル"
+                  label={tt("モデル", "Model")}
                   value={selectedModelPath ?? ""}
                   onChange={handleModelChange}
                   disabled={isModelsLoading || isActivatingModel || availableModels.length === 0}
@@ -611,7 +630,7 @@ const InferencePage = () => {
 
               <Stack spacing={0.5}>
                 <Typography variant="caption" color="text.secondary">
-                  描画モード
+                  {tt("描画モード", "Display mode")}
                 </Typography>
                 <ToggleButtonGroup
                   size="small"
@@ -638,7 +657,7 @@ const InferencePage = () => {
                 onClick={handleFetchAndRun}
                 disabled={isRecordsLoading || isRunningInference || !selectedModelPath}
               >
-                {isRecordsLoading || isRunningInference ? "処理中…" : "推論を実行"}
+                {isRecordsLoading || isRunningInference ? tt("処理中…", "Processing...") : tt("推論を実行", "Run inference")}
               </Button>
             </Stack>
 
@@ -673,12 +692,15 @@ const InferencePage = () => {
 
             {records.length > 0 && (
               <Typography variant="body2" color="text.secondary">
-                対象レコード: {records.length.toLocaleString()} 件 / 推論完了: {processedCount.toLocaleString()} 件
+                {tt(
+                  `対象レコード: ${records.length.toLocaleString()} 件 / 推論完了: ${processedCount.toLocaleString()} 件`,
+                  `Records: ${records.length.toLocaleString(language === "ja" ? "ja-JP" : "en-US")} / Done: ${processedCount.toLocaleString(language === "ja" ? "ja-JP" : "en-US")}`,
+                )}
               </Typography>
             )}
             {records.length > 0 && (
               <Typography variant="caption" color="text.secondary">
-                {INFERENCE_CLASS_DESCRIPTION_TEXT}
+                {getInferenceClassDescriptionText(language)}
               </Typography>
             )}
           </Stack>
@@ -691,7 +713,7 @@ const InferencePage = () => {
             gap: 2,
           }}
         >
-          {CLASS_LABELS.map((label, classIndex) => {
+          {classLabels.map((label, classIndex) => {
             const bucket = classBuckets.buckets[classIndex] ?? [];
             return (
               <Paper key={label} variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, minHeight: 360 }}>
@@ -706,7 +728,7 @@ const InferencePage = () => {
                     onClick={() => handleDownloadComposite(classIndex)}
                     disabled={bucket.length === 0 || isRunningInference}
                   >
-                    結合画像をDL
+                    {tt("結合画像をDL", "Download combined")}
                   </Button>
                 </Stack>
                 <Divider sx={{ mb: 2 }} />
@@ -720,7 +742,7 @@ const InferencePage = () => {
                     }}
                   >
                     <Typography variant="body2" color="text.secondary">
-                      まだ割り当てられた画像がありません。
+                      {tt("まだ割り当てられた画像がありません。", "No images assigned yet.")}
                     </Typography>
                   </Box>
                 ) : (
@@ -764,7 +786,7 @@ const InferencePage = () => {
                             />
                             <Box sx={{ px: 1.25, py: 0.75 }}>
                               <Typography variant="caption" color="text.secondary">
-                                確信度 {(item.result.confidence * 100).toFixed(1)}%
+                                {tt("確信度", "Confidence")} {(item.result.confidence * 100).toFixed(1)}%
                               </Typography>
                             </Box>
                           </CardContent>
@@ -781,10 +803,10 @@ const InferencePage = () => {
         {classBuckets.others.length > 0 && (
           <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2 } }}>
             <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-              その他クラス ({classBuckets.others.length})
+              {tt("その他クラス", "Other classes")} ({classBuckets.others.length})
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              4分類以外のクラスに分類された画像です。
+              {tt("4分類以外のクラスに分類された画像です。", "Images classified outside the four main classes.")}
             </Typography>
           </Paper>
         )}

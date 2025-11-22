@@ -28,11 +28,13 @@ import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import ScienceIcon from "@mui/icons-material/Science";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { API_BASE_URL } from "../config";
+import { useI18n } from "../i18n";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 
 const TiffManagerPage = () => {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [tifFiles, setTifFiles] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -51,16 +53,16 @@ const TiffManagerPage = () => {
         cache: "no-store",
       });
       if (!response.ok) {
-        throw new Error("TIFFファイル一覧の取得に失敗しました。");
+        throw new Error(t("tiff.listError"));
       }
       const data: { tif_names?: string[] } = await response.json();
       setTifFiles(data.tif_names ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "予期しないエラーが発生しました");
+      setError(err instanceof Error ? err.message : t("common.unexpectedError"));
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [t]);
   useEffect(() => {
     fetchTifFiles();
   }, [fetchTifFiles]);
@@ -83,13 +85,13 @@ const TiffManagerPage = () => {
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.detail || "TIFFファイルのアップロードに失敗しました。");
+        throw new Error(payload.detail || t("tiff.uploadError"));
       }
       const result: { saved_name?: string } = await response.json();
-      setInfo(`${result.saved_name ?? file.name} をアップロードしました。`);
+      setInfo(t("tiff.uploadSuccess", { name: result.saved_name ?? file.name }));
       await fetchTifFiles();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "アップロード中にエラーが発生しました。");
+      setError(err instanceof Error ? err.message : t("tiff.uploadUnexpected"));
     } finally {
       setIsUploading(false);
       event.target.value = "";
@@ -107,18 +109,18 @@ const TiffManagerPage = () => {
         });
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.detail || "TIFFファイルの削除に失敗しました。");
+          throw new Error(payload.detail || t("tiff.deleteError"));
         }
         const result: { deleted_name?: string } = await response.json().catch(() => ({}));
-        setInfo(`${result.deleted_name ?? filename} を削除しました。`);
+        setInfo(t("tiff.deleteSuccess", { name: result.deleted_name ?? filename }));
         await fetchTifFiles();
       } catch (err) {
-        setError(err instanceof Error ? err.message : "削除中にエラーが発生しました。");
+        setError(err instanceof Error ? err.message : t("tiff.deleteUnexpected"));
       } finally {
         setDeletingFile(null);
       }
     },
-    [fetchTifFiles],
+    [fetchTifFiles, t],
   );
 
   const filteredFiles = useMemo(() => {
@@ -151,16 +153,16 @@ const TiffManagerPage = () => {
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
-            Home
+            {t("common.home")}
           </Link>
           <Typography color="text.primary" fontSize={14}>
-            ROI Extraction
+            {t("tiff.breadcrumb")}
           </Typography>
         </Breadcrumbs>
 
         <Box>
           <Typography variant="h5" fontWeight={600}>
-            ROI Extraction
+            {t("tiff.title")}
           </Typography>
           {/* <Typography variant="body2" color="text.secondary">
             TIFFファイルをアップロードし、検索やダウンロードを行うためのシンプルなコンソールです。
@@ -182,11 +184,11 @@ const TiffManagerPage = () => {
               onClick={handleOpenFileDialog}
               disabled={isUploading}
             >
-              {isUploading ? "アップロード中…" : "TIFFをアップロード"}
+              {isUploading ? t("tiff.uploading") : t("tiff.uploadCta")}
             </Button>
             <TextField
               size="small"
-              placeholder="ファイル名で検索"
+              placeholder={t("tiff.searchPlaceholder")}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               InputProps={{
@@ -202,8 +204,8 @@ const TiffManagerPage = () => {
                 flexGrow: 1,
               }}
             />
-         </Stack>
-       </Paper>
+          </Stack>
+        </Paper>
 
         <Stack spacing={1}>
           <CollapseAlert message={error} severity="error" />
@@ -218,10 +220,10 @@ const TiffManagerPage = () => {
           ) : filteredFiles.length === 0 ? (
             <Box textAlign="center" py={8}>
               <Typography variant="h6" fontWeight={600}>
-                ファイルが見つかりません
+                {t("tiff.notFoundTitle")}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {search.trim() ? "検索条件を変更して再度お試しください。" : "先にTIFFファイルをアップロードしてください。"}
+                {search.trim() ? t("tiff.notFoundBody.search") : t("tiff.notFoundBody.empty")}
               </Typography>
             </Box>
           ) : (
@@ -229,10 +231,10 @@ const TiffManagerPage = () => {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>ファイル名</TableCell>
-                    <TableCell align="right">ダウンロード</TableCell>
-                    <TableCell align="center">ROI抽出</TableCell>
-                    <TableCell align="center">削除</TableCell>
+                    <TableCell>{t("tiff.table.filename")}</TableCell>
+                    <TableCell align="right">{t("tiff.table.download")}</TableCell>
+                    <TableCell align="center">{t("tiff.table.roi")}</TableCell>
+                    <TableCell align="center">{t("tiff.table.delete")}</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -252,7 +254,7 @@ const TiffManagerPage = () => {
                           startIcon={<FileDownloadIcon />}
                           onClick={() => handleDownload(file)}
                         >
-                          ダウンロード
+                          {t("tiff.download")}
                         </Button>
                       </TableCell>
                       <TableCell align="center">
@@ -262,7 +264,7 @@ const TiffManagerPage = () => {
                           startIcon={<ScienceIcon fontSize="small" />}
                           onClick={() => handleNavigateToExtraction(file)}
                         >
-                          ROI抽出
+                          {t("tiff.roiExtract")}
                         </Button>
                       </TableCell>
                       <TableCell align="center">
@@ -274,7 +276,7 @@ const TiffManagerPage = () => {
                           onClick={() => handleDelete(file)}
                           disabled={deletingFile === file}
                         >
-                          {deletingFile === file ? "削除中…" : "削除"}
+                          {deletingFile === file ? t("tiff.deleting") : t("tiff.delete")}
                         </Button>
                       </TableCell>
                     </TableRow>

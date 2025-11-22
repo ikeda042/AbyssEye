@@ -16,6 +16,7 @@ import DoneAllIcon from "@mui/icons-material/DoneAll";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 
 import { API_BASE_URL } from "../config";
+import { Language, useI18n } from "../i18n";
 
 type Dimensions = {
   width: number;
@@ -62,14 +63,16 @@ const formatRoiDensity = (density?: number) => {
   return `${density.toFixed(2)} ROI/MP`;
 };
 
-const formatDateTime = (iso?: string) => {
+const formatDateTime = (iso?: string, language: Language = "ja") => {
   if (!iso) return "-";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString("ja-JP", { hour12: false });
+  const locale = language === "ja" ? "ja-JP" : "en-US";
+  return date.toLocaleString(locale, { hour12: false });
 };
 
 const RoiExtractPage = () => {
+  const { t, language } = useI18n();
   const [searchParams] = useSearchParams();
   const [tifFiles, setTifFiles] = useState<string[]>([]);
   const [selectedTif, setSelectedTif] = useState<string | null>(null);
@@ -88,16 +91,16 @@ const RoiExtractPage = () => {
         cache: "no-store",
       });
       if (!response.ok) {
-        throw new Error("TIFFファイルの取得に失敗しました。");
+        throw new Error(t("roi.error.fetchTifs"));
       }
       const data: { tif_names?: string[] } = await response.json();
       setTifFiles(data.tif_names ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "一覧の取得に失敗しました。");
+      setError(err instanceof Error ? err.message : t("roi.error.list"));
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     fetchTiffs();
@@ -110,10 +113,11 @@ const RoiExtractPage = () => {
   }, [requestedTif]);
 
   const isTargetMissing = Boolean(requestedTif && !isLoading && !tifFiles.includes(requestedTif));
+  const roiCountUnit = language === "ja" ? "個" : "ROIs";
 
   const handleRunExtraction = async () => {
     if (!selectedTif) {
-      setError("処理するTIFFファイルを選択してください。");
+      setError(t("roi.error.noSelection"));
       return;
     }
     setError(null);
@@ -128,13 +132,13 @@ const RoiExtractPage = () => {
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.detail || "ROI抽出の実行に失敗しました。");
+        throw new Error(payload.detail || t("roi.error.run"));
       }
       const payload: ExtractionResult = await response.json();
       setResult(payload);
-      setInfo(`${payload.db_name} を生成しました。`);
+      setInfo(t("roi.info.generated", { name: payload.db_name }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "ROI抽出の実行に失敗しました。");
+      setError(err instanceof Error ? err.message : t("roi.error.run"));
     } finally {
       setIsSubmitting(false);
     }
@@ -156,24 +160,24 @@ const RoiExtractPage = () => {
           pt: { xs: 4, md: 5 },
           color: "text.primary",
         }}
-      >
-        <Stack spacing={3}>
-          <Box>
-            <Typography variant="overline" sx={{ letterSpacing: 3, color: "text.secondary" }}>
-              ROI Extract
-            </Typography>
-            <Typography variant="h4" sx={{ fontWeight: 600 }}>
-              自動ROI抽出
-            </Typography>
-            <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
-              TIFFを選んで抽出を開始すると、自動でSQLite DBにROIが保存されます。
-            </Typography>
-            {requestedTif && (
-              <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
-                ROI Extractionで選択した {requestedTif} に対して実行できます。
+        >
+          <Stack spacing={3}>
+            <Box>
+              <Typography variant="overline" sx={{ letterSpacing: 3, color: "text.secondary" }}>
+                {t("roi.overline")}
               </Typography>
-            )}
-          </Box>
+              <Typography variant="h4" sx={{ fontWeight: 600 }}>
+                {t("roi.title")}
+              </Typography>
+              <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
+                {t("roi.description")}
+              </Typography>
+              {requestedTif && (
+                <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
+                  {t("roi.selectionFromTiff", { name: requestedTif })}
+                </Typography>
+              )}
+            </Box>
 
           <Paper
             sx={{
@@ -182,61 +186,61 @@ const RoiExtractPage = () => {
               borderRadius: 0,
               p: { xs: 2, md: 3 },
             }}
-          >
-            <Stack spacing={3}>
-              <Stack spacing={1}>
-                <Typography variant="subtitle2" sx={{ color: "text.secondary" }}>
-                  実行対象
-                </Typography>
-                <Box
-                  sx={{
-                    border: (theme) => `1px dashed ${theme.palette.divider}`,
-                    borderRadius: 0,
+            >
+              <Stack spacing={3}>
+                <Stack spacing={1}>
+                  <Typography variant="subtitle2" sx={{ color: "text.secondary" }}>
+                    {t("roi.targetLabel")}
+                  </Typography>
+                  <Box
+                    sx={{
+                      border: (theme) => `1px dashed ${theme.palette.divider}`,
+                      borderRadius: 0,
                     p: 2,
                     minHeight: 100,
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
                   }}
-                >
-                  {isLoading ? (
-                    <CircularProgress size={32} />
-                  ) : selectedTif ? (
-                    <Typography sx={{ fontSize: 18, fontWeight: 600 }}>{selectedTif}</Typography>
-                  ) : (
-                    <Typography sx={{ color: "text.secondary", textAlign: "center" }}>
-                      ROI ExtractionでTIFFファイルを選択してからこのページを開いてください。
-                    </Typography>
+                  >
+                    {isLoading ? (
+                      <CircularProgress size={32} />
+                    ) : selectedTif ? (
+                      <Typography sx={{ fontSize: 18, fontWeight: 600 }}>{selectedTif}</Typography>
+                    ) : (
+                      <Typography sx={{ color: "text.secondary", textAlign: "center" }}>
+                        {t("roi.targetPlaceholder")}
+                      </Typography>
+                    )}
+                  </Box>
+                  {isTargetMissing && (
+                    <Alert severity="warning" sx={{ borderRadius: 0 }}>
+                      {t("roi.targetMissing")}
+                    </Alert>
                   )}
-                </Box>
-                {isTargetMissing && (
-                  <Alert severity="warning" sx={{ borderRadius: 0 }}>
-                    指定されたTIFFファイルが見つかりません。ROI Extractionで状態を確認してください。
-                  </Alert>
-                )}
-                {!selectedTif && !isLoading && (
-                  <Alert severity="info" sx={{ borderRadius: 0 }}>
-                    対象となるTIFFファイルが指定されていません。先にROI Extractionでファイルを選択してください。
-                  </Alert>
-                )}
-              </Stack>
+                  {!selectedTif && !isLoading && (
+                    <Alert severity="info" sx={{ borderRadius: 0 }}>
+                      {t("roi.targetUnset")}
+                    </Alert>
+                  )}
+                </Stack>
 
-              <Stack spacing={2}>
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems="stretch">
-                  <Button
-                    variant="contained"
-                    fullWidth
-                    startIcon={<PlayArrowIcon />}
-                  onClick={handleRunExtraction}
-                  disabled={!selectedTif || isSubmitting || isTargetMissing}
-                  sx={{
-                    flex: { xs: "unset", sm: 1.4 },
-                    minHeight: 56,
-                  }}
-                >
-                  {isSubmitting ? "抽出中..." : "ROI抽出を実行"}
-                </Button>
-                <Button
+                <Stack spacing={2}>
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems="stretch">
+                    <Button
+                      variant="contained"
+                      fullWidth
+                      startIcon={<PlayArrowIcon />}
+                      onClick={handleRunExtraction}
+                      disabled={!selectedTif || isSubmitting || isTargetMissing}
+                      sx={{
+                        flex: { xs: "unset", sm: 1.4 },
+                        minHeight: 56,
+                      }}
+                    >
+                      {isSubmitting ? t("roi.running") : t("roi.run")}
+                    </Button>
+                    <Button
                     variant="outlined"
                     fullWidth
                     startIcon={<DoneAllIcon />}
@@ -244,22 +248,23 @@ const RoiExtractPage = () => {
                       setResult(null);
                       setInfo(null);
                     }}
-                  disabled={!result && !info}
-                  sx={{
-                    flex: { xs: "unset", sm: 1 },
-                    minHeight: 56,
-                    color: "text.primary",
-                    borderColor: "divider",
-                    bgcolor: (theme) => theme.palette.background.paper,
-                    "&:hover": {
-                      bgcolor: (theme) => (theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "rgba(148,163,184,0.1)"),
-                      borderColor: "divider",
-                    },
-                  }}
-                >
-                  リセット
-                </Button>
-              </Stack>
+                      disabled={!result && !info}
+                      sx={{
+                        flex: { xs: "unset", sm: 1 },
+                        minHeight: 56,
+                        color: "text.primary",
+                        borderColor: "divider",
+                        bgcolor: (theme) => theme.palette.background.paper,
+                        "&:hover": {
+                          bgcolor: (theme) =>
+                            theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "rgba(148,163,184,0.1)",
+                          borderColor: "divider",
+                        },
+                      }}
+                    >
+                      {t("roi.reset")}
+                    </Button>
+                  </Stack>
                 <Button
                   variant="outlined"
                   component={RouterLink}
@@ -275,7 +280,7 @@ const RoiExtractPage = () => {
                     },
                   }}
                 >
-                  ROI Extractionに戻る
+                  {t("roi.backToList")}
                 </Button>
               </Stack>
 
@@ -290,13 +295,13 @@ const RoiExtractPage = () => {
                   }}
                 >
                   <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5 }}>
-                    生成結果
+                    {t("roi.resultTitle")}
                   </Typography>
                   <Stack spacing={1}>
-                    <ResultRow label="TIFFファイル" value={result.tif_name} />
-                    <ResultRow label="保存DB" value={result.db_name} />
+                    <ResultRow label={t("roi.fields.tifName")} value={result.tif_name} />
+                    <ResultRow label={t("roi.fields.dbName")} value={result.db_name} />
                     <ResultRow
-                      label="DBパス"
+                      label={t("roi.fields.dbPath")}
                       value={
                         <Typography
                           variant="body2"
@@ -308,24 +313,24 @@ const RoiExtractPage = () => {
                       }
                     />
                     <ResultRow
-                      label="ROI検出数"
-                      value={`${result.roi_count.toLocaleString()} 個`}
+                      label={t("roi.fields.roiCount")}
+                      value={`${result.roi_count.toLocaleString()} ${roiCountUnit}`}
                     />
                     <ResultRow
-                      label="ROI密度"
+                      label={t("roi.fields.roiDensity")}
                       value={formatRoiDensity(result.roi_density_per_mp)}
                     />
-                    <ResultRow label="元画像解像度" value={formatDimensions(result.original_shape)} />
+                    <ResultRow label={t("roi.fields.originalShape")} value={formatDimensions(result.original_shape)} />
                     <ResultRow
-                      label="処理解像度"
+                      label={t("roi.fields.processedShape")}
                       value={formatDimensions(result.processed_shape)}
                     />
                     <ResultRow
-                      label="ROIパッチサイズ"
+                      label={t("roi.fields.patchSize")}
                       value={formatDimensions(result.roi_patch_shape)}
                     />
-                    <ResultRow label="DBファイルサイズ" value={formatFileSize(result.db_size_bytes)} />
-                    <ResultRow label="保存時刻" value={formatDateTime(result.saved_at)} />
+                    <ResultRow label={t("roi.fields.dbSize")} value={formatFileSize(result.db_size_bytes)} />
+                    <ResultRow label={t("roi.fields.savedAt")} value={formatDateTime(result.saved_at, language)} />
                     <Box sx={{ pt: 1.5 }}>
                       <Button
                         variant="contained"
@@ -335,7 +340,7 @@ const RoiExtractPage = () => {
                         to={`/databases?db_name=${encodeURIComponent(result.db_name)}`}
                         sx={{ borderRadius: 0 }}
                       >
-                        データベース一覧で確認
+                        {t("roi.viewDatabases")}
                       </Button>
                     </Box>
                   </Stack>

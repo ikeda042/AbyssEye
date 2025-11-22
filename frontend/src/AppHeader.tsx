@@ -1,9 +1,10 @@
-import { AppBar, Box, Divider, Stack, Toolbar, Typography, IconButton, useTheme } from "@mui/material";
+import { AppBar, Box, Divider, Stack, Toolbar, Typography, IconButton, useTheme, ToggleButton, ToggleButtonGroup } from "@mui/material";
 import { useLocation, useNavigate } from "react-router-dom";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 
 import { API_BASE_URL } from "./config";
+import { useI18n } from "./i18n";
 
 type AppHeaderProps = {
   mode: "light" | "dark";
@@ -14,6 +15,7 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
   const navigate = useNavigate();
   const location = useLocation();
   const theme = useTheme();
+  const { language, setLanguage, toggleLanguage, t } = useI18n();
   const isHome = location.pathname === "/";
   const headerBorder = theme.palette.divider;
   const handleHomeClick = () => {
@@ -37,8 +39,8 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
           <Box
             component="img"
             src="/logo.png"
-            alt="AbyssEye logo"
-            title="Go to home"
+            alt={t("header.logoAlt")}
+            title={t("header.logoTitle")}
             onClick={handleHomeClick}
             sx={{
               height: 40,
@@ -71,14 +73,35 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
             display: { xs: "none", md: "block" },
           }}
         >
-          API Base: {API_BASE_URL}
+          {t("header.apiBase", { url: API_BASE_URL })}
         </Typography>
+        <ToggleButtonGroup
+          value={language}
+          exclusive
+          size="small"
+          aria-label={t("header.languageToggle")}
+          onChange={(_event, value) => {
+            if (value === "ja" || value === "en") {
+              setLanguage(value);
+            }
+          }}
+          sx={{
+            ml: 1,
+            "& .MuiToggleButton-root": {
+              py: 0.5,
+              px: 1.25,
+            },
+          }}
+        >
+          <ToggleButton value="ja">{t("header.languageJa")}</ToggleButton>
+          <ToggleButton value="en">{t("header.languageEn")}</ToggleButton>
+        </ToggleButtonGroup>
         <IconButton
           color="inherit"
           onClick={onToggleMode}
           size="small"
           sx={{ ml: 1, bgcolor: "transparent" }}
-          aria-label="toggle color mode"
+          aria-label={t("header.toggleTheme")}
         >
           {mode === "dark" ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
         </IconButton>

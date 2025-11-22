@@ -25,7 +25,9 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 import { API_BASE_URL } from "../config";
-import { INFERENCE_CLASS_DESCRIPTION_TEXT, getInferenceClassDescription } from "../constants/inference";
+import { getInferenceClassDescription, getInferenceClassDescriptionText } from "../constants/inference";
+import { useI18n } from "../i18n";
+import type { Language } from "../i18n";
 
 type DatabaseOverview = {
   db_name: string;
@@ -311,14 +313,14 @@ const useProcessedPreviews = (imageSrc: string | null) => {
         const width = image.naturalWidth || image.width;
         const height = image.naturalHeight || image.height;
         if (!width || !height) {
-          throw new Error("画像サイズを取得できませんでした。");
+          throw new Error(tt("画像サイズを取得できませんでした。", "Failed to read image size."));
         }
         const baseCanvas = document.createElement("canvas");
         baseCanvas.width = width;
         baseCanvas.height = height;
         const context = baseCanvas.getContext("2d", { willReadFrequently: true });
         if (!context) {
-          throw new Error("キャンバスを作成できませんでした。");
+          throw new Error(tt("キャンバスを作成できませんでした。", "Failed to create canvas."));
         }
         context.drawImage(image, 0, 0, width, height);
         const imageData = context.getImageData(0, 0, width, height);
@@ -332,7 +334,7 @@ const useProcessedPreviews = (imageSrc: string | null) => {
             normalized,
             jet,
             isProcessing: false,
-            error: normalized || jet ? null : "プレビュー画像を生成できませんでした。",
+            error: normalized || jet ? null : tt("プレビュー画像を生成できませんでした。", "Failed to generate preview images."),
           });
         }
       } catch (err) {
@@ -341,7 +343,7 @@ const useProcessedPreviews = (imageSrc: string | null) => {
             normalized: null,
             jet: null,
             isProcessing: false,
-            error: err instanceof Error ? err.message : "描画処理でエラーが発生しました。",
+            error: err instanceof Error ? err.message : tt("描画処理でエラーが発生しました。", "An error occurred while processing the image."),
           });
         }
       }
@@ -352,7 +354,7 @@ const useProcessedPreviews = (imageSrc: string | null) => {
           normalized: null,
           jet: null,
           isProcessing: false,
-          error: "raw画像の読み込みに失敗しました。",
+          error: tt("raw画像の読み込みに失敗しました。", "Failed to load the raw image."),
         });
       }
     };
@@ -370,16 +372,19 @@ const RoiLocationPreview = ({
   meta,
   fullWidth,
   fullHeight,
+  language,
 }: {
   meta: NormalizedRoiMeta | null;
   fullWidth: number | null | undefined;
   fullHeight: number | null | undefined;
+  language: Language;
 }) => {
+  const tt = (ja: string, en: string) => (language === "ja" ? ja : en);
   const bounds = deriveRoiBounds(meta);
   if (!bounds) {
     return (
       <Typography variant="body2" color="text.secondary">
-        メタデータがないため位置を描画できません。
+        {tt("メタデータがないため位置を描画できません。", "Cannot draw position because metadata is missing.")}
       </Typography>
     );
   }
@@ -401,7 +406,7 @@ const RoiLocationPreview = ({
   if (!Number.isFinite(effectiveWidth) || !Number.isFinite(effectiveHeight) || effectiveWidth <= 0 || effectiveHeight <= 0) {
     return (
       <Typography variant="body2" color="text.secondary">
-        画像全体のサイズ情報が取得できません。
+        {tt("画像全体のサイズ情報が取得できません。", "Image size information is unavailable.")}
       </Typography>
     );
   }
@@ -450,14 +455,31 @@ const RoiLocationPreview = ({
         />
       </Box>
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-        左上: ({Math.round(bounds.startX)}, {Math.round(bounds.startY)}) / サイズ: {Math.round(bounds.width)} ×{" "}
-        {Math.round(bounds.height)} px （全体 {Math.round(effectiveWidth)} × {Math.round(effectiveHeight)} px）
+        {tt(
+          `左上: (${Math.round(bounds.startX)}, ${Math.round(bounds.startY)}) / サイズ: ${Math.round(bounds.width)} × ${Math.round(bounds.height)} px （全体 ${Math.round(effectiveWidth)} × ${Math.round(effectiveHeight)} px）`,
+          `Top-left: (${Math.round(bounds.startX)}, ${Math.round(bounds.startY)}) / Size: ${Math.round(bounds.width)} × ${Math.round(bounds.height)} px (Full ${Math.round(effectiveWidth)} × ${Math.round(effectiveHeight)} px)`
+        )}
       </Typography>
     </Box>
   );
 };
 
 const SingleCellPage = () => {
+  const { t, language } = useI18n();
+  const tt = (ja: string, en: string) => (language === "ja" ? ja : en);
+  const messages = {
+    overviewFetch: tt("データベース情報の取得に失敗しました。", "Failed to fetch database info."),
+    recordsFetch: tt("ROIレコードの取得に失敗しました。", "Failed to fetch ROI records."),
+    modelSwitch: tt("モデルの切り替えに失敗しました。", "Failed to switch model."),
+    modelsFetch: tt("モデル一覧の取得に失敗しました。", "Failed to fetch models."),
+    inferenceFailed: tt("推論に失敗しました。", "Inference failed."),
+    histogramFetch: tt("ヒストグラムの取得に失敗しました。", "Failed to fetch histogram."),
+    histogramEmpty: tt("ヒストグラム画像が空でした。", "Histogram image was empty."),
+    histogramGenerate: tt("ヒストグラムを生成できませんでした。", "Could not generate histogram."),
+    recordNotSpecified: tt("データベースが指定されていません。", "Database is not specified."),
+    modelNotSelected: tt("モデルを選択してください。", "Select a model to run inference."),
+    recordNotFoundAtLimit: tt("指定件数でレコードが見つかりません。", "No records found for the requested count."),
+  };
   const [searchParams] = useSearchParams();
   const dbName = searchParams.get("db_name");
   const navigate = useNavigate();
@@ -520,13 +542,13 @@ const SingleCellPage = () => {
   const drawModeDescription = useMemo(() => {
     switch (drawMode) {
       case "normalized":
-        return "raw画像の輝度をmin-max正規化して表示します。";
+        return tt("raw画像の輝度をmin-max正規化して表示します。", "Displays the raw image with min-max normalization.");
       case "jet":
-        return "raw画像をJetカラーマップでカラー表示します。";
+        return tt("raw画像をJetカラーマップでカラー表示します。", "Displays the raw image with a Jet colormap.");
       case "histogram":
-        return "輝度分布をヒストグラムで表示します（0-255 / 0-1 正規化を切替可能）。";
+        return tt("輝度分布をヒストグラムで表示します（0-255 / 0-1 正規化を切替可能）。", "Shows the intensity distribution as a histogram (switchable 0-255 / 0-1 normalization).");
       case "inference":
-        return "選択したモデルでROIを推論し、結果を表示します。";
+        return tt("選択したモデルでROIを推論し、結果を表示します。", "Runs inference with the selected model and shows the result.");
       default:
         return "";
     }
@@ -558,7 +580,7 @@ const SingleCellPage = () => {
       });
       const payload: DatabaseOverview | null = await response.json().catch(() => null);
       if (!response.ok || !payload) {
-        const message = (payload as { detail?: string } | null)?.detail ?? "データベース情報の取得に失敗しました。";
+        const message = (payload as { detail?: string } | null)?.detail ?? messages.overviewFetch;
         throw new Error(message);
       }
       if (dbNameRef.current === targetDb) {
@@ -567,14 +589,14 @@ const SingleCellPage = () => {
     } catch (err) {
       if (dbNameRef.current === targetDb) {
         setOverview(null);
-        setOverviewError(err instanceof Error ? err.message : "データベース情報の取得に失敗しました。");
+        setOverviewError(err instanceof Error ? err.message : messages.overviewFetch);
       }
     } finally {
       if (dbNameRef.current === targetDb) {
         setIsOverviewLoading(false);
       }
     }
-  }, []);
+  }, [messages.overviewFetch]);
 
   const fetchRecords = useCallback(async (targetDb: string, skip: number) => {
     setIsRecordsLoading(true);
@@ -593,7 +615,7 @@ const SingleCellPage = () => {
       );
       const payload: ROIRecord[] | null = await response.json().catch(() => null);
       if (!response.ok || !payload || !Array.isArray(payload)) {
-        const message = (payload as { detail?: string } | null)?.detail ?? "ROIレコードの取得に失敗しました。";
+        const message = (payload as { detail?: string } | null)?.detail ?? messages.recordsFetch;
         throw new Error(message);
       }
       if (dbNameRef.current !== targetDb) {
@@ -612,14 +634,14 @@ const SingleCellPage = () => {
         setRecords([]);
       }
       setHasMoreRecords(false);
-      setRecordsError(err instanceof Error ? err.message : "ROIレコードの取得に失敗しました。");
+      setRecordsError(err instanceof Error ? err.message : messages.recordsFetch);
       return 0;
     } finally {
       if (dbNameRef.current === targetDb) {
         setIsRecordsLoading(false);
       }
     }
-  }, []);
+  }, [messages.recordsFetch]);
 
   const activateModel = useCallback(
     async (relativePath: string) => {
@@ -636,7 +658,7 @@ const SingleCellPage = () => {
         });
         const payload: InferenceModelEntry | null = await response.json().catch(() => null);
         if (!response.ok || !payload) {
-          const message = (payload as { detail?: string } | null)?.detail ?? "モデルの切り替えに失敗しました。";
+          const message = (payload as { detail?: string } | null)?.detail ?? messages.modelSwitch;
           throw new Error(message);
         }
         setAvailableModels((prev) =>
@@ -647,14 +669,14 @@ const SingleCellPage = () => {
         );
         return payload;
       } catch (err) {
-        const message = err instanceof Error ? err.message : "モデルの切り替えに失敗しました。";
+        const message = err instanceof Error ? err.message : messages.modelSwitch;
         setModelActivationError(message);
         throw err;
       } finally {
         setIsActivatingModel(false);
       }
     },
-    [],
+    [messages.modelSwitch],
   );
 
   const handleModelChange = useCallback(
@@ -687,7 +709,7 @@ const SingleCellPage = () => {
       .then(async (response) => {
         const payload: InferenceModelEntry[] | null = await response.json().catch(() => null);
         if (!response.ok || !payload || !Array.isArray(payload)) {
-          const message = (payload as { detail?: string } | null)?.detail ?? "モデル一覧の取得に失敗しました。";
+          const message = (payload as { detail?: string } | null)?.detail ?? messages.modelsFetch;
           throw new Error(message);
         }
         return payload;
@@ -715,7 +737,7 @@ const SingleCellPage = () => {
         }
         setAvailableModels([]);
         setSelectedModelPath(null);
-        setModelsError(err instanceof Error ? err.message : "モデル一覧の取得に失敗しました。");
+        setModelsError(err instanceof Error ? err.message : messages.modelsFetch);
       })
       .finally(() => {
         if (!cancelled) {
@@ -727,7 +749,7 @@ const SingleCellPage = () => {
       cancelled = true;
       controller.abort();
     };
-  }, [activateModel]);
+  }, [activateModel, messages.modelsFetch]);
 
   useEffect(() => {
     inferenceCacheRef.current.clear();
@@ -789,7 +811,7 @@ const SingleCellPage = () => {
       .then(async (response) => {
         const payload: InferenceResultPayload | null = await response.json().catch(() => null);
         if (!response.ok || !payload) {
-          const message = (payload as { detail?: string } | null)?.detail ?? "推論に失敗しました。";
+          const message = (payload as { detail?: string } | null)?.detail ?? messages.inferenceFailed;
           throw new Error(message);
         }
         return payload;
@@ -807,7 +829,7 @@ const SingleCellPage = () => {
           return;
         }
         setInferenceResult(null);
-        setInferenceError(err instanceof Error ? err.message : "推論に失敗しました。");
+        setInferenceError(err instanceof Error ? err.message : messages.inferenceFailed);
       })
       .finally(() => {
         if (!cancelled) {
@@ -819,7 +841,7 @@ const SingleCellPage = () => {
       cancelled = true;
       controller.abort();
     };
-  }, [drawMode, dbName, currentRecord?.record_id, selectedModelPath, hasInferenceModels, isActivatingModel]);
+  }, [drawMode, dbName, currentRecord?.record_id, selectedModelPath, hasInferenceModels, isActivatingModel, messages.inferenceFailed]);
 
   useEffect(() => {
     if (drawMode !== "histogram" || !dbName || !currentRecordId) {
@@ -849,7 +871,7 @@ const SingleCellPage = () => {
     })
       .then(async (response) => {
         if (!response.ok) {
-          let message = "ヒストグラムの取得に失敗しました。";
+          let message = messages.histogramFetch;
           try {
             const payload: { detail?: string } = await response.json();
             if (payload?.detail) {
@@ -867,7 +889,7 @@ const SingleCellPage = () => {
           return;
         }
         if (blob.size === 0) {
-          throw new Error("ヒストグラム画像が空でした。");
+          throw new Error(messages.histogramEmpty);
         }
         const url = URL.createObjectURL(blob);
         revokeHistogramUrl();
@@ -879,7 +901,7 @@ const SingleCellPage = () => {
           return;
         }
         setHistogramSrc(null);
-        setHistogramError(err instanceof Error ? err.message : "ヒストグラムの取得に失敗しました。");
+        setHistogramError(err instanceof Error ? err.message : messages.histogramFetch);
       })
       .finally(() => {
         if (!controller.signal.aborted) {
@@ -890,7 +912,7 @@ const SingleCellPage = () => {
     return () => {
       controller.abort();
     };
-  }, [drawMode, dbName, currentRecordId, histogramScale, revokeHistogramUrl]);
+  }, [drawMode, dbName, currentRecordId, histogramScale, revokeHistogramUrl, messages.histogramFetch, messages.histogramEmpty]);
 
   useEffect(() => {
     if (!dbName) {
@@ -972,10 +994,10 @@ const SingleCellPage = () => {
         <Stack spacing={2}>
           <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
             <Link underline="hover" color="inherit" href="/">
-              Home
+              {t("common.home")}
             </Link>
             <Link underline="hover" color="inherit" component={RouterLink} to="/databases">
-              Databases
+              {t("databases.breadcrumb")}
             </Link>
             <Typography color="text.primary" fontSize={14}>
               Single Cell
@@ -984,13 +1006,13 @@ const SingleCellPage = () => {
           <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 } }}>
             <Stack spacing={2} alignItems="flex-start">
               <Typography variant="h6" fontWeight={600}>
-                データベースが指定されていません
+                {tt("データベースが指定されていません", "Database is not specified")}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                /databases ページから対象のDBを選択してください。
+                {tt("/databases ページから対象のDBを選択してください。", "Select a database on the /databases page first.")}
               </Typography>
               <Button variant="contained" startIcon={<ArrowBackIosNewIcon />} onClick={() => navigate("/databases")}>
-                一覧に戻る
+                {t("common.backToList")}
               </Button>
             </Stack>
           </Paper>
@@ -1004,10 +1026,10 @@ const SingleCellPage = () => {
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
-            Home
+            {t("common.home")}
           </Link>
           <Link underline="hover" color="inherit" component={RouterLink} to="/databases">
-            Databases
+            {t("databases.breadcrumb")}
           </Link>
           <Typography color="text.primary" fontSize={14}>
             Single Cell
@@ -1044,7 +1066,7 @@ const SingleCellPage = () => {
           >
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Typography variant="subtitle1" fontWeight={600}>
-                レコードプレビュー
+                {tt("レコードプレビュー", "Record preview")}
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 {currentRecord ? `${currentIndex + 1}${totalCount ? ` / ${totalCount}` : ""}` : "-"}
@@ -1058,7 +1080,7 @@ const SingleCellPage = () => {
                     Raw
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    取得した画像をそのまま表示します。
+                    {tt("取得した画像をそのまま表示します。", "Displays the raw image as-is.")}
                   </Typography>
                 </Stack>
                 <Box sx={previewContainerSx}>
@@ -1067,7 +1089,7 @@ const SingleCellPage = () => {
                   )}
                   {!isRecordsLoading && !currentRecord && (
                     <Typography variant="body2" color="text.secondary">
-                      レコードが見つかりません
+                      {tt("レコードが見つかりません", "No records found")}
                     </Typography>
                   )}
                   {currentRecord && rawImageSrc && (
@@ -1085,7 +1107,7 @@ const SingleCellPage = () => {
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
                   <Stack spacing={0.5}>
                     <Typography variant="subtitle2" color="text.secondary">
-                      描画モード
+                      {tt("描画モード", "Display mode")}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       {drawModeDescription}
@@ -1113,7 +1135,7 @@ const SingleCellPage = () => {
                       8bit
                     </ToggleButton>
                     <ToggleButton value="inference" disabled={!canUseInference}>
-                      推論
+                      {tt("推論", "Inference")}
                     </ToggleButton>
                   </ToggleButtonGroup>
                 </Stack>
@@ -1126,16 +1148,16 @@ const SingleCellPage = () => {
                         fullWidth
                         disabled={!hasInferenceModels || isModelsLoading || isActivatingModel}
                       >
-                        <InputLabel id="inference-model-select-label">モデル</InputLabel>
+                        <InputLabel id="inference-model-select-label">{tt("モデル", "Model")}</InputLabel>
                         <Select
                           labelId="inference-model-select-label"
-                          label="モデル"
+                          label={tt("モデル", "Model")}
                           value={selectedModelPath ?? ""}
                           onChange={handleModelChange}
                           displayEmpty
                           renderValue={(value) => {
                             if (!value) {
-                              return "モデルを選択";
+                              return tt("モデルを選択", "Select a model");
                             }
                             const model = availableModels.find((item) => item.relative_path === value);
                             return model ? `${model.name} (${model.kind})` : value;
@@ -1166,17 +1188,17 @@ const SingleCellPage = () => {
                       )}
                       {!isModelsLoading && !hasInferenceModels && (
                         <Typography variant="body2" color="text.secondary">
-                          {modelsError ?? "models/ ディレクトリに推論モデルが見つかりません。"}
+                          {modelsError ?? tt("models/ ディレクトリに推論モデルが見つかりません。", "No inference models found under models/.")}
                         </Typography>
                       )}
                       {hasInferenceModels && !selectedModelPath && !isModelsLoading && (
                         <Typography variant="body2" color="text.secondary">
-                          モデルを選択してください。
+                          {messages.modelNotSelected}
                         </Typography>
                       )}
                       {hasInferenceModels && selectedModelPath && !currentRecord && (
                         <Typography variant="body2" color="text.secondary">
-                          レコードを読み込み中です…
+                          {tt("レコードを読み込み中です…", "Loading records...")}
                         </Typography>
                       )}
                       {(isInferenceLoading || isActivatingModel) && (
@@ -1191,20 +1213,21 @@ const SingleCellPage = () => {
                         <Stack spacing={1.5} sx={{ width: "100%" }}>
                       <Box textAlign="center">
                         <Typography variant="subtitle1" fontWeight={600}>
-                          予測クラス: {inferenceResult.predicted_class}
+                          {tt("予測クラス", "Predicted class")}: {inferenceResult.predicted_class}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
-                          確信度 {formatPercentage(inferenceResult.confidence)}
+                          {tt("確信度", "Confidence")} {formatPercentage(inferenceResult.confidence)}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
-                          {INFERENCE_CLASS_DESCRIPTION_TEXT}
+                          {getInferenceClassDescriptionText(language)}
                         </Typography>
                       </Box>
                       <Divider />
                       <Stack spacing={0.5} sx={{ width: "100%", maxHeight: 260, overflow: "auto" }}>
                         {inferenceResult.probabilities.map((probability, index) => {
                           const isPredicted = index === inferenceResult.predicted_class;
-                          const description = getInferenceClassDescription(index);
+                          const description = getInferenceClassDescription(index, language);
+                          const descText = description ? (language === "ja" ? `（${description}）` : ` (${description})`) : "";
                               return (
                                 <Stack
                                   key={`${inferenceResult.model_path}-${index}`}
@@ -1220,7 +1243,7 @@ const SingleCellPage = () => {
                                 >
                                   <Typography variant="body2" fontWeight={isPredicted ? 600 : 400}>
                                     Class {index}
-                                    {description ? `（${description}）` : ""}
+                                    {descText}
                                   </Typography>
                                   <Typography variant="body2" fontWeight={isPredicted ? 600 : 400}>
                                     {formatPercentage(probability)}
@@ -1241,7 +1264,7 @@ const SingleCellPage = () => {
                         !inferenceResult &&
                         !inferenceError && (
                           <Typography variant="body2" color="text.secondary">
-                            推論結果を待機しています…
+                            {tt("推論結果を待機しています…", "Waiting for inference results...")}
                           </Typography>
                         )}
                     </Box>
@@ -1266,7 +1289,7 @@ const SingleCellPage = () => {
                     <Box sx={previewContainerSx}>
                       {!isRecordReady && (
                         <Typography variant="body2" color="text.secondary">
-                          レコードを読み込み中です…
+                          {tt("レコードを読み込み中です…", "Loading records...")}
                         </Typography>
                       )}
                       {isRecordReady && isHistogramLoading && (
@@ -1287,7 +1310,7 @@ const SingleCellPage = () => {
                       )}
                       {isRecordReady && !isHistogramLoading && !histogramSrc && !histogramError && (
                         <Typography variant="body2" color="text.secondary">
-                          ヒストグラムを生成できませんでした。
+                          {messages.histogramGenerate}
                         </Typography>
                       )}
                     </Box>
@@ -1297,7 +1320,7 @@ const SingleCellPage = () => {
                     <Box sx={previewContainerSx}>
                       {!isRecordReady && (
                         <Typography variant="body2" color="text.secondary">
-                          レコードを読み込み中です…
+                          {tt("レコードを読み込み中です…", "Loading records...")}
                         </Typography>
                       )}
                       {isRecordReady && processedPreviews.isProcessing && (
@@ -1313,7 +1336,7 @@ const SingleCellPage = () => {
                       )}
                       {isRecordReady && !processedPreviews.isProcessing && !processedImageSrc && (
                         <Typography variant="body2" color="text.secondary">
-                          プレビューを生成できませんでした。
+                          {tt("プレビューを生成できませんでした。", "Failed to generate preview.")}
                         </Typography>
                       )}
                     </Box>
@@ -1330,12 +1353,12 @@ const SingleCellPage = () => {
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1} justifyContent="space-between">
               <Button
                 fullWidth
-                variant="outlined"
-                startIcon={<ArrowBackIcon />}
-                onClick={handlePrev}
-                disabled={!currentRecord || !canGoPrev}
-              >
-                前へ (Space)
+              variant="outlined"
+              startIcon={<ArrowBackIcon />}
+              onClick={handlePrev}
+              disabled={!currentRecord || !canGoPrev}
+            >
+                {tt("前へ (Space)", "Prev (Space)")}
               </Button>
               <Button
                 fullWidth
@@ -1344,7 +1367,7 @@ const SingleCellPage = () => {
                 onClick={handleNext}
                 disabled={!currentRecord || !canGoNext}
               >
-                次へ (Enter)
+                {tt("次へ (Enter)", "Next (Enter)")}
               </Button>
             </Stack>
           </Paper>
@@ -1360,24 +1383,25 @@ const SingleCellPage = () => {
             }}
           >
             <Typography variant="subtitle1" fontWeight={600}>
-              切り出し位置
+              {tt("切り出し位置", "Crop position")}
             </Typography>
             {currentRecord ? (
               <RoiLocationPreview
                 meta={metaDetails}
                 fullWidth={overview?.image_width_px ?? null}
                 fullHeight={overview?.image_height_px ?? null}
+                language={language}
               />
             ) : (
               <Typography variant="body2" color="text.secondary">
-                レコードを読み込み中です…
+                {tt("レコードを読み込み中です…", "Loading records...")}
               </Typography>
             )}
 
             <Divider sx={{ my: 1 }} />
 
             <Typography variant="subtitle1" fontWeight={600}>
-              レコード情報
+              {tt("レコード情報", "Record info")}
             </Typography>
             {currentRecord ? (
               <>
@@ -1387,13 +1411,13 @@ const SingleCellPage = () => {
                   <>
                     <Divider />
                     <Typography variant="body2" color="text.secondary">
-                      基本情報
+                      {tt("基本情報", "Basic info")}
                     </Typography>
                     <Stack spacing={0.5} mt={0.5}>
-                      <MetaRow label="元画像" value={metaDetails.image ?? "-"} />
-                      <MetaRow label="縮小率" value={formatScale(metaDetails.scale)} />
+                      <MetaRow label={tt("元画像", "Source")} value={metaDetails.image ?? "-"} />
+                      <MetaRow label={tt("縮小率", "Scale")} value={formatScale(metaDetails.scale)} />
                       <MetaRow
-                        label="パッチサイズ"
+                        label={tt("パッチサイズ", "Patch size")}
                         value={
                           metaDetails.width !== null && metaDetails.height !== null
                             ? `${metaDetails.width} × ${metaDetails.height}`
@@ -1404,19 +1428,19 @@ const SingleCellPage = () => {
 
                     <Divider sx={{ my: 1.5 }} />
                     <Typography variant="body2" color="text.secondary">
-                      座標 (px)
+                      {tt("座標 (px)", "Coordinates (px)")}
                     </Typography>
                     <Stack spacing={0.5} mt={0.5}>
-                      <MetaRow label="左上 (ST)" value={formatPoint(metaDetails.start)} />
-                      <MetaRow label="右下 (EN)" value={formatPoint(metaDetails.end)} />
-                      <MetaRow label="中心 (CE)" value={formatPoint(metaDetails.center)} />
+                      <MetaRow label={tt("左上 (ST)", "Top-left (ST)")} value={formatPoint(metaDetails.start)} />
+                      <MetaRow label={tt("右下 (EN)", "Bottom-right (EN)")} value={formatPoint(metaDetails.end)} />
+                      <MetaRow label={tt("中心 (CE)", "Center (CE)")} value={formatPoint(metaDetails.center)} />
                     </Stack>
 
                     {metaDetails.extras.length > 0 && (
                       <>
                         <Divider sx={{ my: 1.5 }} />
                         <Typography variant="body2" color="text.secondary">
-                          追加情報
+                          {tt("追加情報", "Extra")}
                         </Typography>
                         <Stack spacing={0.5} mt={0.5}>
                           {metaDetails.extras.map((extra) => (
@@ -1443,7 +1467,7 @@ const SingleCellPage = () => {
                         <>
                           <Divider sx={{ my: 1.5 }} />
                           <Typography variant="body2" color="text.secondary" gutterBottom>
-                            メタデータ
+                            {tt("メタデータ", "Metadata")}
                           </Typography>
                           <Box
                             component="pre"
@@ -1461,18 +1485,18 @@ const SingleCellPage = () => {
                         </>
                       );
                     })()}
-                  </>
-                ) : (
-                  <Typography variant="body2" color="text.secondary">
-                    メタデータが見つかりません
-                  </Typography>
-                )}
               </>
             ) : (
               <Typography variant="body2" color="text.secondary">
-                レコードを読み込み中です…
+                {tt("メタデータが見つかりません", "No metadata found")}
               </Typography>
             )}
+          </>
+        ) : (
+          <Typography variant="body2" color="text.secondary">
+            {tt("レコードを読み込み中です…", "Loading records...")}
+          </Typography>
+        )}
           </Paper>
         </Stack>
       </Stack>

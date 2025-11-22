@@ -24,6 +24,7 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import DriveFolderUploadIcon from "@mui/icons-material/DriveFolderUpload";
 
 import { API_BASE_URL } from "../config";
+import { useI18n } from "../i18n";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 const ALLOWED_MODEL_EXTENSIONS = [".h5", ".hdf5", ".keras", ".pb", ".tflite"];
@@ -46,6 +47,7 @@ const isModelEntry = (value: unknown): value is ModelEntry =>
   typeof (value as Record<string, unknown>).is_active === "boolean";
 
 const ModelManagerPage = () => {
+  const { t } = useI18n();
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
@@ -65,17 +67,17 @@ const ModelManagerPage = () => {
       });
       const payload: ModelEntry[] | null = await response.json().catch(() => null);
       if (!response.ok || !payload || !Array.isArray(payload)) {
-        const detail = (payload as { detail?: string } | null)?.detail ?? "モデル一覧を取得できませんでした。";
+        const detail = (payload as { detail?: string } | null)?.detail ?? t("models.fetchError");
         throw new Error(detail);
       }
       setModels(payload);
     } catch (err) {
       setModels([]);
-      setError(err instanceof Error ? err.message : "予期しないエラーが発生しました。");
+      setError(err instanceof Error ? err.message : t("common.unexpectedError"));
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     const run = async () => {
@@ -124,18 +126,18 @@ const ModelManagerPage = () => {
         });
         const payload: unknown = await response.json().catch(() => null);
         if (!response.ok || !isModelEntry(payload)) {
-          const detail = (payload as { detail?: string } | null)?.detail ?? "モデルのアップロードに失敗しました。";
+          const detail = (payload as { detail?: string } | null)?.detail ?? t("models.uploadError");
           throw new Error(detail);
         }
-        setInfo(`${payload.name} をアップロードしました。`);
+        setInfo(t("models.uploadSuccess", { name: payload.name }));
         await fetchModels();
       } catch (err) {
-        setError(err instanceof Error ? err.message : "アップロード中にエラーが発生しました。");
+        setError(err instanceof Error ? err.message : t("models.uploadUnexpected"));
       } finally {
         setIsUploading(false);
       }
     },
-    [fetchModels],
+    [fetchModels, t],
   );
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -163,7 +165,7 @@ const ModelManagerPage = () => {
       });
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok || !isModelEntry(payload)) {
-        const detail = (payload as { detail?: string } | null)?.detail ?? "アクティブモデルの切り替えに失敗しました。";
+        const detail = (payload as { detail?: string } | null)?.detail ?? t("models.activateError");
         throw new Error(detail);
       }
       const updated = payload;
@@ -173,9 +175,9 @@ const ModelManagerPage = () => {
           is_active: model.relative_path === updated.relative_path,
         })),
       );
-      setInfo(`${updated.name} をアクティブモデルとして設定しました。`);
+      setInfo(t("models.activateSuccess", { name: updated.name }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "アクティブモデルの切り替えに失敗しました。");
+      setError(err instanceof Error ? err.message : t("models.activateError"));
     } finally {
       setIsActivating(false);
     }
@@ -192,20 +194,19 @@ const ModelManagerPage = () => {
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
-            Home
+            {t("common.home")}
           </Link>
           <Typography color="text.primary" fontSize={14}>
-            Model Manager
+            {t("models.breadcrumb")}
           </Typography>
         </Breadcrumbs>
 
         <Box>
           <Typography variant="h5" fontWeight={600}>
-            Model Manager
+            {t("models.title")}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Upload TensorFlow / Keras model artifacts into the backend <code>models/</code> directory and manage the
-            active model used for inference. Single model files or entire SavedModel folders can be uploaded directly.
+            {t("models.subtitle", { dir: "models/" })}
           </Typography>
         </Box>
 
@@ -225,7 +226,7 @@ const ModelManagerPage = () => {
               onClick={handleOpenFileDialog}
               disabled={isUploading}
             >
-              {isUploading ? "アップロード中…" : "モデルをアップロード"}
+              {isUploading ? t("models.uploading") : t("models.upload")}
             </Button>
             <Button
               variant="outlined"
@@ -233,7 +234,7 @@ const ModelManagerPage = () => {
               onClick={handleOpenDirectoryDialog}
               disabled={isUploading}
             >
-              {isUploading ? "アップロード中…" : "フォルダごとアップロード"}
+              {isUploading ? t("models.uploading") : t("models.uploadFolder")}
             </Button>
             <Button
               variant="outlined"
@@ -243,10 +244,10 @@ const ModelManagerPage = () => {
               }}
               disabled={isLoading}
             >
-              再読み込み
+              {t("models.reload")}
             </Button>
             <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
-              サポート形式: {ALLOWED_MODEL_EXTENSIONS.join(", ")} / SavedModel ディレクトリ
+              {t("models.supportedFormats", { formats: `${ALLOWED_MODEL_EXTENSIONS.join(", ")} / SavedModel` })}
             </Typography>
           </Stack>
         </Paper>
@@ -270,10 +271,10 @@ const ModelManagerPage = () => {
           ) : models.length === 0 ? (
             <Box textAlign="center" py={8}>
               <Typography variant="h6" fontWeight={600}>
-                モデルが見つかりません
+                {t("models.emptyTitle")}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                先にモデルファイルをアップロードしてください。
+                {t("models.emptyDescription")}
               </Typography>
             </Box>
           ) : (
@@ -281,10 +282,10 @@ const ModelManagerPage = () => {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>名前</TableCell>
-                    <TableCell>種類</TableCell>
-                    <TableCell>相対パス</TableCell>
-                    <TableCell align="right">操作</TableCell>
+                    <TableCell>{t("models.table.name")}</TableCell>
+                    <TableCell>{t("models.table.kind")}</TableCell>
+                    <TableCell>{t("models.table.path")}</TableCell>
+                    <TableCell align="right">{t("models.table.actions")}</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -293,7 +294,7 @@ const ModelManagerPage = () => {
                       <TableCell>
                         <Stack direction="row" spacing={1} alignItems="center">
                           <Typography fontWeight={600}>{model.name}</Typography>
-                          {model.is_active && <Chip label="Active" color="success" size="small" variant="outlined" />}
+                          {model.is_active && <Chip label={t("models.active")} color="success" size="small" variant="outlined" />}
                         </Stack>
                       </TableCell>
                       <TableCell>{model.kind}</TableCell>
@@ -309,7 +310,7 @@ const ModelManagerPage = () => {
                           disabled={model.is_active || isActivating}
                           onClick={() => handleSetActive(model.relative_path)}
                         >
-                          アクティブ化
+                          {t("models.activate")}
                         </Button>
                       </TableCell>
                     </TableRow>

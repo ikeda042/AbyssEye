@@ -25,7 +25,8 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import CloudDownloadIcon from "@mui/icons-material/CloudDownload";
 
 import { API_BASE_URL } from "../config";
-import { INFERENCE_CLASS_DESCRIPTION_TEXT, getInferenceClassDescription } from "../constants/inference";
+import { getInferenceClassDescription, getInferenceClassDescriptionText } from "../constants/inference";
+import { useI18n } from "../i18n";
 
 type DatabaseOverview = {
   db_name: string;
@@ -68,9 +69,10 @@ type RenderMode = "raw" | "normalized" | "jet";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 const PREVIEW_LIMIT = 200;
-const DEFAULT_OVERVIEW_ERROR = "データベース情報の取得に失敗しました。";
+const DEFAULT_OVERVIEW_ERROR = "Failed to fetch database details.";
 
 const DatabaseOverviewPage = () => {
+  const { t, language } = useI18n();
   const [searchParams] = useSearchParams();
   const dbName = searchParams.get("db_name");
 
@@ -88,6 +90,7 @@ const DatabaseOverviewPage = () => {
   const [isInferenceDialogOpen, setIsInferenceDialogOpen] = useState(false);
 
   const fetchOverview = useCallback(async (targetDb: string) => {
+    const overviewErrorText = t("overview.errors.overview");
     setIsOverviewLoading(true);
     setError(null);
     const buildQueryUrl = () => endpoint(`databases/overview?db_name=${encodeURIComponent(targetDb)}`);
@@ -107,7 +110,7 @@ const DatabaseOverviewPage = () => {
       const payload: unknown = await response.json().catch(() => null);
 
       if (!response.ok || !payload) {
-        const error: HttpError = new Error(extractDetailMessage(payload) || DEFAULT_OVERVIEW_ERROR);
+        const error: HttpError = new Error(extractDetailMessage(payload) || overviewErrorText);
         error.status = response.status;
         throw error;
       }
@@ -116,7 +119,7 @@ const DatabaseOverviewPage = () => {
 
     const handleError = (err: unknown) => {
       setOverview(null);
-      setError(err instanceof Error ? err.message : DEFAULT_OVERVIEW_ERROR);
+      setError(err instanceof Error ? err.message : overviewErrorText);
     };
 
     try {
@@ -137,9 +140,10 @@ const DatabaseOverviewPage = () => {
     } finally {
       setIsOverviewLoading(false);
     }
-  }, []);
+  }, [t]);
 
   const fetchPreviewRecords = useCallback(async (targetDb: string, mode: RenderMode) => {
+    const previewErrorText = t("overview.errors.preview");
     setIsPreviewLoading(true);
     setPreviewError(null);
     try {
@@ -156,17 +160,17 @@ const DatabaseOverviewPage = () => {
       );
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.detail || "ROIレコードの取得に失敗しました。");
+        throw new Error(payload.detail || previewErrorText);
       }
       const payload: ROIThumb[] = await response.json();
       setRecords(payload);
     } catch (err) {
       setRecords([]);
-      setPreviewError(err instanceof Error ? err.message : "ROIレコードの取得に失敗しました。");
+      setPreviewError(err instanceof Error ? err.message : previewErrorText);
     } finally {
       setIsPreviewLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!dbName) {
@@ -187,8 +191,10 @@ const DatabaseOverviewPage = () => {
 
   const handlePredictRecord = useCallback(
     async (record: ROIThumb) => {
+      const noDbMessage = t("overview.errors.noDb");
+      const inferenceErrorText = t("overview.errors.inference");
       if (!dbName) {
-        setInferenceError("データベースが指定されていません。");
+        setInferenceError(noDbMessage);
         return;
       }
       setIsInferenceDialogOpen(true);
@@ -210,7 +216,7 @@ const DatabaseOverviewPage = () => {
         });
         const payload: Partial<InferencePayload> & { detail?: string } = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(payload.detail || "ROI推論に失敗しました。");
+          throw new Error(payload.detail || inferenceErrorText);
         }
         setInferenceResult({
           record_id: record.record_id,
@@ -222,12 +228,12 @@ const DatabaseOverviewPage = () => {
         });
       } catch (err) {
         setInferenceResult(null);
-        setInferenceError(err instanceof Error ? err.message : "ROI推論に失敗しました。");
+        setInferenceError(err instanceof Error ? err.message : inferenceErrorText);
       } finally {
         setIsInferenceLoading(false);
       }
     },
-    [dbName],
+    [dbName, t],
   );
 
   const handleRefresh = () => {
@@ -251,13 +257,13 @@ const DatabaseOverviewPage = () => {
       <Container maxWidth="md" sx={{ py: 6 }}>
         <Stack spacing={3} textAlign="center">
           <Typography variant="h4" fontWeight={600}>
-            データベースが指定されていません
+            {t("overview.missingTitle")}
           </Typography>
           <Typography color="text.secondary">
-            一覧ページからデータベースを選択し、「overview」ボタンを押してこの画面に戻ってください。
+            {t("overview.missingDescription")}
           </Typography>
           <Button variant="contained" component={RouterLink} to="/databases" startIcon={<ArrowBackIcon />}>
-            データベース一覧へ
+            {t("common.backToList")}
           </Button>
         </Stack>
       </Container>
@@ -277,19 +283,19 @@ const DatabaseOverviewPage = () => {
       <Stack spacing={3}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
-            Home
+            {t("common.home")}
           </Link>
           <Link underline="hover" color="inherit" component={RouterLink} to="/databases">
-            Databases
+            {t("databases.breadcrumb")}
           </Link>
           <Typography color="text.primary" fontSize={14}>
-            Overview
+            {t("overview.breadcrumb")}
           </Typography>
         </Breadcrumbs>
 
         <Box>
           <Typography variant="overline" sx={{ letterSpacing: 3, color: "text.secondary" }}>
-            Database Overview
+            {t("overview.overline")}
           </Typography>
           <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" alignItems={{ md: "flex-end" }}>
             <Box>
@@ -297,7 +303,11 @@ const DatabaseOverviewPage = () => {
                 {dbName}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {overview ? `${overview.record_count.toLocaleString()} 件のROIレコード` : "情報を取得しています..."}
+                {overview
+                  ? t("overview.records", {
+                      count: overview.record_count.toLocaleString(language === "ja" ? "ja-JP" : "en-US"),
+                    })
+                  : t("overview.loading")}
               </Typography>
             </Box>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1} mt={{ xs: 2, md: 0 }}>
@@ -307,17 +317,17 @@ const DatabaseOverviewPage = () => {
                 component={RouterLink}
                 to="/databases"
               >
-                一覧へ戻る
+                {t("overview.backToList")}
               </Button>
               <Button
                 variant="outlined"
                 startIcon={<CloudDownloadIcon />}
                 onClick={handleDownload}
               >
-                DBをダウンロード
+                {t("overview.download")}
               </Button>
               <Button variant="contained" startIcon={<RefreshIcon />} onClick={handleRefresh} disabled={isOverviewLoading}>
-                {isOverviewLoading ? "更新中…" : "再取得"}
+                {isOverviewLoading ? t("overview.refreshing") : t("overview.refresh")}
               </Button>
             </Stack>
           </Stack>
@@ -335,10 +345,13 @@ const DatabaseOverviewPage = () => {
           <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" alignItems={{ md: "center" }} spacing={1}>
             <Box>
               <Typography variant="h6" fontWeight={600}>
-                ROIプレビュー
+                {t("overview.previewTitle")}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {records.length.toLocaleString()} / {PREVIEW_LIMIT.toLocaleString()} 件を表示
+                {t("overview.previewCount", {
+                  shown: records.length.toLocaleString(language === "ja" ? "ja-JP" : "en-US"),
+                  limit: PREVIEW_LIMIT.toLocaleString(language === "ja" ? "ja-JP" : "en-US"),
+                })}
               </Typography>
             </Box>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }}>
@@ -360,7 +373,7 @@ const DatabaseOverviewPage = () => {
                 onClick={() => fetchPreviewRecords(dbName, renderMode)}
                 disabled={isPreviewLoading}
               >
-                {isPreviewLoading ? "読込中…" : "再読込"}
+                {isPreviewLoading ? t("overview.previewReloading") : t("overview.previewReload")}
               </Button>
             </Stack>
           </Stack>
@@ -386,15 +399,16 @@ const DatabaseOverviewPage = () => {
               </Box>
             ) : records.length === 0 ? (
               <Box textAlign="center" py={8} color="text.secondary">
-                このデータベースにはROIレコードが見つかりません。
+                {t("overview.noRecords")}
               </Box>
             ) : (
               <Grid container spacing={1.5}>
                 {records.map((record) => {
                   const isCurrentInference = inferenceTarget?.record_id === record.record_id;
+                  const recordLabel = t("overview.recordLabel", { id: record.record_id });
                   return (
                     <Grid item xs={6} sm={4} md={2} key={record.record_id}>
-                      <Tooltip title={<span>Record #{record.record_id}</span>}>
+                      <Tooltip title={<span>{recordLabel}</span>}>
                         <Box
                           sx={{
                             border: (theme) => `1px solid ${theme.palette.divider}`,
@@ -411,7 +425,7 @@ const DatabaseOverviewPage = () => {
                           />
                           <Stack spacing={0.2} sx={{ mt: 0.5 }} alignItems="center">
                             <Typography variant="caption" sx={{ fontWeight: 600 }}>
-                              Record #{record.record_id}
+                              {recordLabel}
                             </Typography>
                           </Stack>
                           <Button
@@ -422,7 +436,7 @@ const DatabaseOverviewPage = () => {
                             onClick={() => handlePredictRecord(record)}
                             disabled={isInferenceLoading}
                           >
-                            {isInferenceLoading && isCurrentInference ? "推論中…" : "推論"}
+                            {isInferenceLoading && isCurrentInference ? t("overview.inferencing") : t("overview.infer")}
                           </Button>
                         </Box>
                       </Tooltip>
@@ -435,42 +449,49 @@ const DatabaseOverviewPage = () => {
         </Paper>
 
         <Dialog open={isInferenceDialogOpen} onClose={handleCloseInferenceDialog} fullWidth maxWidth="sm">
-          <DialogTitle>ROI推論</DialogTitle>
+          <DialogTitle>{t("overview.dialog.title")}</DialogTitle>
           <DialogContent dividers>
             <Stack spacing={1.5}>
               {inferenceTarget && (
                 <Typography variant="body2" color="text.secondary">
-                  Record #{inferenceTarget.record_id}
+                  {t("overview.dialog.record", { id: inferenceTarget.record_id })}
                 </Typography>
               )}
               {isInferenceLoading && (
                 <Stack direction="row" spacing={1} alignItems="center">
                   <CircularProgress size={20} />
-                  <Typography variant="body2">推論中…</Typography>
+                  <Typography variant="body2">{t("overview.dialog.running")}</Typography>
                 </Stack>
               )}
               {inferenceError && <Alert severity="error">{inferenceError}</Alert>}
               {inferenceResult && !isInferenceLoading && !inferenceError && (
                 <Stack spacing={1}>
                   <Typography variant="subtitle1" fontWeight={600}>
-                    クラス {inferenceResult.predicted_class}（{(inferenceResult.confidence * 100).toFixed(1)}%）
+                    {t("overview.dialog.classSummary", {
+                      index: inferenceResult.predicted_class,
+                      confidence: (inferenceResult.confidence * 100).toFixed(1),
+                    })}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    {INFERENCE_CLASS_DESCRIPTION_TEXT}
+                    {getInferenceClassDescriptionText(language)}
                   </Typography>
                   <Stack spacing={0.2}>
                     {inferenceResult.probabilities.map((probability, index) => {
-                      const description = getInferenceClassDescription(index);
+                      const description = getInferenceClassDescription(index, language);
+                      const descriptionText = description ? ` (${description})` : "";
                       return (
                         <Typography key={index} variant="caption" color="text.secondary">
-                          クラス {index}
-                          {description ? `（${description}）` : ""}: {(probability * 100).toFixed(1)}%
+                          {t("overview.dialog.classProbability", {
+                            index,
+                            description: descriptionText,
+                            probability: (probability * 100).toFixed(1),
+                          })}
                         </Typography>
                       );
                     })}
                   </Stack>
                   <Typography variant="caption" color="text.secondary">
-                    モデル: {inferenceResult.model_path}
+                    {t("overview.dialog.model", { path: inferenceResult.model_path })}
                   </Typography>
                 </Stack>
               )}
@@ -478,7 +499,7 @@ const DatabaseOverviewPage = () => {
           </DialogContent>
           <DialogActions>
             <Button onClick={handleCloseInferenceDialog} autoFocus>
-              閉じる
+              {t("overview.dialog.close")}
             </Button>
           </DialogActions>
         </Dialog>

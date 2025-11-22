@@ -31,6 +31,7 @@ import ScienceIcon from "@mui/icons-material/Science";
 import EditNoteIcon from "@mui/icons-material/EditNote";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { API_BASE_URL } from "../config";
+import { Language, useI18n } from "../i18n";
 
 type DatabaseEntry = {
   name: string;
@@ -62,11 +63,12 @@ const formatBytes = (value?: number) => {
   return `${size.toFixed(decimals)} ${units[unitIndex]}`;
 };
 
-const formatDateTime = (isoString?: string) => {
+const formatDateTime = (isoString?: string, language: Language = "ja") => {
   if (!isoString) return "-";
   const date = new Date(isoString);
   if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("ja-JP", { hour12: false });
+  const locale = language === "ja" ? "ja-JP" : "en-US";
+  return date.toLocaleString(locale, { hour12: false });
 };
 
 const pickString = (...values: unknown[]) => {
@@ -121,6 +123,7 @@ const normalizeDatabasesResponse = (payload: unknown): DatabaseEntry[] => {
 };
 
 const DatabasesPage = () => {
+  const { t, language } = useI18n();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const urlSearch = searchParams.get("db_name") ?? "";
@@ -141,18 +144,18 @@ const DatabasesPage = () => {
     try {
       const response = await fetch(endpoint("databases/"), { headers: { Accept: "application/json" }, cache: "no-store" });
       if (!response.ok) {
-        throw new Error("データベース一覧の取得に失敗しました。");
+        throw new Error(t("databases.fetchError"));
       }
       const data: unknown = await response.json();
       const normalized = normalizeDatabasesResponse(data);
       setDatabases(normalized);
-      setInfo(`データベースを ${normalized.length} 件取得しました。`);
+      setInfo(t("databases.fetchInfo", { count: normalized.length }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "一覧の取得に失敗しました。");
+      setError(err instanceof Error ? err.message : t("databases.fetchError"));
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     fetchDatabases();
@@ -205,19 +208,19 @@ const DatabasesPage = () => {
         });
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.detail || "データベースの削除に失敗しました。");
+          throw new Error(payload.detail || t("databases.deleteError"));
         }
         const result: { deleted_name?: string } = await response.json().catch(() => ({}));
         const deletedName = result.deleted_name ?? dbName;
         await fetchDatabases();
-        setInfo(`${deletedName} を削除しました。`);
+        setInfo(t("databases.deleteSuccess", { name: deletedName }));
       } catch (err) {
-        setError(err instanceof Error ? err.message : "削除中にエラーが発生しました。");
+        setError(err instanceof Error ? err.message : t("databases.deleteUnexpected"));
       } finally {
         setDeletingDb(null);
       }
     },
-    [fetchDatabases],
+    [fetchDatabases, t],
   );
 
   return (
@@ -231,19 +234,19 @@ const DatabasesPage = () => {
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
-            Home
+            {t("common.home")}
           </Link>
           <Typography color="text.primary" fontSize={14}>
-            Databases
+            {t("databases.breadcrumb")}
           </Typography>
         </Breadcrumbs>
 
         <Box>
           <Typography variant="h5" fontWeight={600}>
-            Databases
+            {t("databases.title")}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            生成済みのROI SQLiteファイルを検索し、overview画面に遷移して中身を確認できます。
+            {t("databases.subtitle")}
           </Typography>
         </Box>
 
@@ -251,7 +254,7 @@ const DatabasesPage = () => {
           <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
             <TextField
               size="small"
-              placeholder="DB名で検索"
+              placeholder={t("databases.searchPlaceholder")}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               InputProps={{
@@ -268,10 +271,10 @@ const DatabasesPage = () => {
               }}
             />
             <Button variant="outlined" onClick={() => setSearch("")} disabled={!search.trim()}>
-              クリア
+              {t("databases.clear")}
             </Button>
             <Button variant="contained" onClick={fetchDatabases} disabled={isLoading}>
-              {isLoading ? "更新中…" : "一覧を更新"}
+              {isLoading ? t("databases.refreshing") : t("databases.refresh")}
             </Button>
           </Stack>
         </Paper>
@@ -301,10 +304,10 @@ const DatabasesPage = () => {
           ) : filteredDatabases.length === 0 ? (
             <Box textAlign="center" py={8}>
               <Typography variant="h6" fontWeight={600}>
-                データベースが見つかりません
+                {t("databases.emptyTitle")}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {search.trim() ? "検索条件を変更して再度お試しください。" : "まずはROI抽出を実行してDBを生成してください。"}
+                {search.trim() ? t("databases.emptySearch") : t("databases.emptyNoSearch")}
               </Typography>
             </Box>
           ) : (
@@ -312,16 +315,16 @@ const DatabasesPage = () => {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>DB名</TableCell>
-                    <TableCell>サイズ</TableCell>
-                    <TableCell>最終更新</TableCell>
-                    <TableCell align="right">ダウンロード</TableCell>
-                    <TableCell align="center">推論</TableCell>
-                    <TableCell align="center">Deep Scan</TableCell>
-                    <TableCell align="center">単細胞ビュー</TableCell>
-                    <TableCell align="center">アノテーション</TableCell>
-                    <TableCell align="center">概要</TableCell>
-                    <TableCell align="center">削除</TableCell>
+                    <TableCell>{t("databases.table.name")}</TableCell>
+                    <TableCell>{t("databases.table.size")}</TableCell>
+                    <TableCell>{t("databases.table.updated")}</TableCell>
+                    <TableCell align="right">{t("databases.table.download")}</TableCell>
+                    <TableCell align="center">{t("databases.table.inference")}</TableCell>
+                    <TableCell align="center">{t("databases.table.deepScan")}</TableCell>
+                    <TableCell align="center">{t("databases.table.singleCell")}</TableCell>
+                    <TableCell align="center">{t("databases.table.annotation")}</TableCell>
+                    <TableCell align="center">{t("databases.table.overview")}</TableCell>
+                    <TableCell align="center">{t("databases.table.delete")}</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -341,7 +344,7 @@ const DatabasesPage = () => {
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2" color="text.secondary">
-                          {formatDateTime(db.updated_at)}
+                          {formatDateTime(db.updated_at, language)}
                         </Typography>
                       </TableCell>
                       <TableCell align="right">
@@ -351,7 +354,7 @@ const DatabasesPage = () => {
                           startIcon={<FileDownloadIcon />}
                           onClick={() => handleDownload(db.name)}
                         >
-                          DL
+                          {t("databases.table.downloadShort")}
                         </Button>
                       </TableCell>
                       <TableCell align="center">
@@ -361,7 +364,7 @@ const DatabasesPage = () => {
                           startIcon={<ScienceIcon fontSize="small" />}
                           onClick={() => handleOpenInference(db.name)}
                         >
-                          推論
+                          {t("databases.table.inference")}
                         </Button>
                       </TableCell>
                       <TableCell align="center">
@@ -371,7 +374,7 @@ const DatabasesPage = () => {
                           startIcon={<TravelExploreIcon fontSize="small" />}
                           onClick={() => handleOpenDeepScan(db.name)}
                         >
-                          DeepScan
+                          {t("databases.table.deepScan")}
                         </Button>
                       </TableCell>
                       <TableCell align="center">
@@ -381,7 +384,7 @@ const DatabasesPage = () => {
                           startIcon={<SlideshowIcon fontSize="small" />}
                           onClick={() => handleOpenSingleCell(db.name)}
                         >
-                          ビュー
+                          {t("databases.table.singleCell")}
                         </Button>
                       </TableCell>
                       <TableCell align="center">
@@ -391,7 +394,7 @@ const DatabasesPage = () => {
                           startIcon={<EditNoteIcon fontSize="small" />}
                           onClick={() => handleOpenAnnotation(db.name)}
                         >
-                          アノテーション
+                          {t("databases.table.annotation")}
                         </Button>
                       </TableCell>
                       <TableCell align="center">
@@ -401,7 +404,7 @@ const DatabasesPage = () => {
                           startIcon={<InfoOutlinedIcon fontSize="small" />}
                           onClick={() => handleOpenOverview(db.name)}
                         >
-                          概要
+                          {t("databases.table.overview")}
                         </Button>
                       </TableCell>
                       <TableCell align="center">
@@ -413,7 +416,7 @@ const DatabasesPage = () => {
                           onClick={() => handleDelete(db.name)}
                           disabled={deletingDb === db.name || isLoading}
                         >
-                          {deletingDb === db.name ? "削除中…" : "削除"}
+                          {deletingDb === db.name ? t("databases.table.deleting") : t("databases.table.delete")}
                         </Button>
                       </TableCell>
                     </TableRow>

@@ -9,6 +9,7 @@ import DisplaySettingsIcon from "@mui/icons-material/DisplaySettings";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import AutoGraphIcon from "@mui/icons-material/AutoGraph";
 import { API_BASE_URL } from "./config";
+import { useI18n } from "./i18n";
 
 const HEALTHCHECK_URL = API_BASE_URL;
 
@@ -25,42 +26,43 @@ type CardItem =
 
 const TopPage = () => {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [healthStatus, setHealthStatus] = useState<"loading" | "ok" | "error">("loading");
-  const [healthMessage, setHealthMessage] = useState("Checking backend status…");
+  const [backendStatusText, setBackendStatusText] = useState<string | null>(null);
   const theme = useTheme();
   const accent = theme.palette.primary.main;
   const cards = useMemo<CardItem[]>(
     () => [
       {
-        title: "ROI Extraction",
-        description: "Upload TIFF stacks, inspect files, and jump into ROI processing.",
+        title: t("top.cards.roi.title"),
+        description: t("top.cards.roi.desc"),
         path: "/tiff-manager",
         accent,
         icon: <DisplaySettingsIcon />,
       },
       {
-        title: "Databases",
-        description: "Browse generated .db files and manage saved experiments.",
+        title: t("top.cards.databases.title"),
+        description: t("top.cards.databases.desc"),
         path: "/databases",
         accent,
         icon: <StorageIcon />,
       },
       {
-        title: "Model Manager",
-        description: "Upload and review models stored under models/.",
+        title: t("top.cards.models.title"),
+        description: t("top.cards.models.desc"),
         path: "/model-manager",
         accent,
         icon: <ModelTrainingIcon />,
       },
       {
-        title: "Realtime engine",
-        description: "最新のTIFFと推論結果を自動表示します。",
+        title: t("top.cards.realtime.title"),
+        description: t("top.cards.realtime.desc"),
         path: "/realtime",
         accent,
         icon: <AutoGraphIcon />,
       },
     ],
-    [accent]
+    [accent, t]
   );
 
   const handleNavigate = useCallback(
@@ -83,12 +85,12 @@ const TopPage = () => {
         if (isMounted) {
           setHealthStatus("ok");
           const statusText = payload && typeof payload.status === "string" ? payload.status : "ok";
-          setHealthMessage(`Backend API is available (status: ${statusText}).`);
+          setBackendStatusText(statusText);
         }
       } catch {
         if (isMounted) {
           setHealthStatus("error");
-          setHealthMessage("Unable to reach the backend. Please start the server and try again.");
+          setBackendStatusText(null);
         }
       }
     };
@@ -99,6 +101,12 @@ const TopPage = () => {
       isMounted = false;
     };
   }, []);
+
+  const healthMessage = useMemo(() => {
+    if (healthStatus === "loading") return t("top.health.checking");
+    if (healthStatus === "ok") return t("top.health.ok", { status: backendStatusText ?? "ok" });
+    return t("top.health.error");
+  }, [backendStatusText, healthStatus, t]);
 
   return (
     <Box
