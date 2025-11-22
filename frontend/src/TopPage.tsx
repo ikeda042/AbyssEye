@@ -6,13 +6,10 @@ import type { SvgIconProps } from "@mui/material/SvgIcon";
 import Grid from "@mui/material/GridLegacy";
 import StorageIcon from "@mui/icons-material/Storage";
 import DisplaySettingsIcon from "@mui/icons-material/DisplaySettings";
-import ApiIcon from "@mui/icons-material/Api";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
-import NotesIcon from "@mui/icons-material/Notes";
 import AutoGraphIcon from "@mui/icons-material/AutoGraph";
 import { API_BASE_URL } from "./config";
 
-const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
 const HEALTHCHECK_URL = API_BASE_URL;
 
 type BaseCardItem = {
@@ -61,20 +58,6 @@ const TopPage = () => {
         path: "/realtime",
         accent,
         icon: <AutoGraphIcon />,
-      },
-      {
-        title: "Swagger UI",
-        description: "Open the backend API documentation and run sample requests.",
-        href: SWAGGER_DOCS_URL,
-        accent,
-        icon: <ApiIcon />,
-      },
-      {
-        title: "Dev tools",
-        description: "temptext・git pull・各ページへのショートカット。",
-        path: "/dev",
-        accent,
-        icon: <NotesIcon />,
       },
     ],
     [accent]
@@ -146,7 +129,7 @@ const TopPage = () => {
 
         <Grid container spacing={3} justifyContent="flex-start" alignItems="stretch">
           {cards.map((card) => (
-            <Grid item xs={12} sm={6} md={4} key={card.title} sx={{ display: "flex" }}>
+            <Grid item xs={12} sm={6} md={6} lg={6} key={card.title} sx={{ display: "flex" }}>
               <Card
                 elevation={2}
                 sx={{
