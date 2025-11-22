@@ -5,8 +5,6 @@ import {
   Box,
   Breadcrumbs,
   Button,
-  Card,
-  CardContent,
   CircularProgress,
   Container,
   Link,
@@ -14,59 +12,18 @@ import {
   Stack,
   TextField,
   Typography,
-  Grid,
 } from "@mui/material";
 import SaveIcon from "@mui/icons-material/Save";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import GitHubIcon from "@mui/icons-material/GitHub";
 import NotesIcon from "@mui/icons-material/Notes";
-import StorageIcon from "@mui/icons-material/Storage";
-import DisplaySettingsIcon from "@mui/icons-material/DisplaySettings";
 import ApiIcon from "@mui/icons-material/Api";
 import ReplayIcon from "@mui/icons-material/Replay";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import LaunchIcon from "@mui/icons-material/Launch";
 import { API_BASE_URL } from "../config";
 
 const TEMP_TEXT_ENDPOINT = new URL("dev/temptext", API_BASE_URL).toString();
 const GIT_PULL_ENDPOINT = new URL("dev/git/pull", API_BASE_URL).toString();
 const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
-
-type Shortcut = {
-  title: string;
-  description: string;
-  icon: JSX.Element;
-  to: string;
-  external?: boolean;
-};
-
-const shortcuts: Shortcut[] = [
-  {
-    title: "ROI Extraction",
-    description: "TIFFアップロードとROI抽出ページへ移動します。",
-    icon: <DisplaySettingsIcon />,
-    to: "/tiff-manager",
-  },
-  {
-    title: "Databases",
-    description: "生成済みDBの一覧管理に移動します。",
-    icon: <StorageIcon />,
-    to: "/databases",
-  },
-  {
-    title: "Realtime",
-    description: "最新TIFFの推論結果をモニタリングします。",
-    icon: <PlayArrowIcon />,
-    to: "/realtime",
-  },
-  {
-    title: "Swagger UI",
-    description: "APIドキュメントを開きます。",
-    icon: <ApiIcon />,
-    to: SWAGGER_DOCS_URL,
-    external: true,
-  },
-];
 
 const DevPage = () => {
   const [tempText, setTempText] = useState("");
@@ -155,61 +112,6 @@ const DevPage = () => {
     }
   };
 
-  const shortcutCards = useMemo(
-    () =>
-      shortcuts.map((item) => (
-        <Grid item xs={12} sm={6} md={6} key={item.title}>
-          <Card
-            variant="outlined"
-            sx={{
-              height: "100%",
-              borderRadius: 2,
-              borderColor: "divider",
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            <CardContent sx={{ display: "flex", flexDirection: "column", gap: 1.25, flex: 1 }}>
-              <Stack direction="row" spacing={1.25} alignItems="center">
-                <Box
-                  sx={{
-                    width: 42,
-                    height: 42,
-                    borderRadius: 2,
-                    backgroundColor: "rgba(15,23,42,0.06)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  {item.icon}
-                </Box>
-                <Typography variant="subtitle1" fontWeight={700}>
-                  {item.title}
-                </Typography>
-              </Stack>
-              <Typography variant="body2" color="text.secondary">
-                {item.description}
-              </Typography>
-              <Box sx={{ mt: "auto" }}>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  endIcon={item.external ? <LaunchIcon /> : <PlayArrowIcon />}
-                  {...(item.external
-                    ? { component: "a", href: item.to, target: "_blank", rel: "noopener noreferrer" }
-                    : { component: RouterLink, to: item.to })}
-                >
-                  Open
-                </Button>
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-      )),
-    [],
-  );
-
   return (
     <Container
       maxWidth="lg"
@@ -237,122 +139,101 @@ const DevPage = () => {
           </Typography>
         </Box>
 
-        <Grid container spacing={2.5}>
-          <Grid item xs={12} md={5}>
-            <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, height: "100%" }}>
-              <Stack spacing={1.5}>
-                <Stack direction="row" alignItems="center" spacing={1}>
-                  <GitHubIcon fontSize="small" color="action" />
-                  <Typography variant="subtitle1" fontWeight={700}>
-                    Git pull
-                  </Typography>
-                </Stack>
-                {gitError && <Alert severity="error">{gitError}</Alert>}
-                {gitMessage && <Alert severity="success">{gitMessage}</Alert>}
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="center">
-                  <Button
-                    variant="contained"
-                    startIcon={<RefreshIcon />}
-                    onClick={handleGitPull}
-                    disabled={gitPulling}
-                  >
-                    {gitPulling ? "実行中..." : "git pull --ff-only"}
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    startIcon={<LaunchIcon />}
-                    component="a"
-                    href={SWAGGER_DOCS_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Swagger UI
-                  </Button>
-                </Stack>
+        <Stack spacing={2.5}>
+          <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 } }}>
+            <Stack spacing={1.5}>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <GitHubIcon fontSize="small" color="action" />
+                <Typography variant="subtitle1" fontWeight={700}>
+                  Git pull
+                </Typography>
               </Stack>
-            </Paper>
-          </Grid>
-
-          <Grid item xs={12} md={7}>
-            <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, height: "100%" }}>
-              <Stack spacing={1.5} sx={{ height: "100%" }}>
-                <Stack direction="row" alignItems="center" spacing={1}>
-                  <NotesIcon fontSize="small" color="action" />
-                  <Typography variant="subtitle1" fontWeight={700}>
-                    Temp text (in-memory)
-                  </Typography>
-                </Stack>
-                <Stack spacing={1}>
-                  {error && <Alert severity="error">{error}</Alert>}
-                  {info && <Alert severity="success">{info}</Alert>}
-                </Stack>
-                {loading ? (
-                  <Box display="flex" justifyContent="center" py={6}>
-                    <CircularProgress />
-                  </Box>
-                ) : (
-                  <Stack spacing={2} sx={{ flex: 1 }}>
-                    <TextField
-                      label="Temp text"
-                      multiline
-                      minRows={12}
-                      value={tempText}
-                      onChange={(e) => {
-                        setTempText(e.target.value);
-                        setDirty(true);
-                      }}
-                      onKeyDown={(e) => {
-                        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                          e.preventDefault();
-                          handleSave();
-                        }
-                      }}
-                      fullWidth
-                      InputProps={{
-                        sx: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
-                      }}
-                    />
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} justifyContent="space-between" alignItems="center">
-                      <Typography variant="caption" color="text.secondary">
-                        Ctrl/⌘ + Enter で保存 {lastSaved ? `・ 最終保存: ${lastSaved}` : ""}
-                      </Typography>
-                      <Box display="flex" gap={1.25}>
-                        <Button variant="outlined" startIcon={<ReplayIcon />} onClick={fetchText} disabled={loading || saving}>
-                          再読み込み
-                        </Button>
-                        <Button
-                          variant="contained"
-                          startIcon={<SaveIcon />}
-                          onClick={handleSave}
-                          disabled={saving || !dirty}
-                        >
-                          {saving ? "保存中..." : dirty ? "保存" : "保存済み"}
-                        </Button>
-                      </Box>
-                    </Stack>
-                  </Stack>
-                )}
+              {gitError && <Alert severity="error">{gitError}</Alert>}
+              {gitMessage && <Alert severity="success">{gitMessage}</Alert>}
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="center">
+                <Button
+                  variant="contained"
+                  startIcon={<RefreshIcon />}
+                  onClick={handleGitPull}
+                  disabled={gitPulling}
+                >
+                  {gitPulling ? "実行中..." : "git pull --ff-only"}
+                </Button>
+                <Button
+                  variant="outlined"
+                  startIcon={<ApiIcon />}
+                  component="a"
+                  href={SWAGGER_DOCS_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Swagger UI
+                </Button>
               </Stack>
-            </Paper>
-          </Grid>
-        </Grid>
-
-        <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 } }}>
-          <Stack spacing={2} mb={1}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <StorageIcon fontSize="small" color="action" />
-              <Typography variant="subtitle1" fontWeight={700}>
-                Shortcuts
-              </Typography>
             </Stack>
-            <Typography variant="body2" color="text.secondary">
-              よく使うページへのショートカットをまとめました。
-            </Typography>
-          </Stack>
-          <Grid container spacing={2}>
-            {shortcutCards}
-          </Grid>
-        </Paper>
+          </Paper>
+
+          <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 } }}>
+            <Stack spacing={1.5}>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <NotesIcon fontSize="small" color="action" />
+                <Typography variant="subtitle1" fontWeight={700}>
+                  Temp text (in-memory)
+                </Typography>
+              </Stack>
+              <Stack spacing={1}>
+                {error && <Alert severity="error">{error}</Alert>}
+                {info && <Alert severity="success">{info}</Alert>}
+              </Stack>
+              {loading ? (
+                <Box display="flex" justifyContent="center" py={6}>
+                  <CircularProgress />
+                </Box>
+              ) : (
+                <Stack spacing={2}>
+                  <TextField
+                    label="Temp text"
+                    multiline
+                    minRows={12}
+                    value={tempText}
+                    onChange={(e) => {
+                      setTempText(e.target.value);
+                      setDirty(true);
+                    }}
+                    onKeyDown={(e) => {
+                      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                        e.preventDefault();
+                        handleSave();
+                      }
+                    }}
+                    fullWidth
+                    InputProps={{
+                      sx: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
+                    }}
+                  />
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} justifyContent="space-between" alignItems="center">
+                    <Typography variant="caption" color="text.secondary">
+                      Ctrl/⌘ + Enter で保存 {lastSaved ? `・ 最終保存: ${lastSaved}` : ""}
+                    </Typography>
+                    <Box display="flex" gap={1.25}>
+                      <Button variant="outlined" startIcon={<ReplayIcon />} onClick={fetchText} disabled={loading || saving}>
+                        再読み込み
+                      </Button>
+                      <Button
+                        variant="contained"
+                        startIcon={<SaveIcon />}
+                        onClick={handleSave}
+                        disabled={saving || !dirty}
+                      >
+                        {saving ? "保存中..." : dirty ? "保存" : "保存済み"}
+                      </Button>
+                    </Box>
+                  </Stack>
+                </Stack>
+              )}
+            </Stack>
+          </Paper>
+        </Stack>
       </Stack>
     </Container>
   );
