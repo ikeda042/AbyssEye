@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link as RouterLink } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Box,
@@ -24,6 +23,8 @@ import { API_BASE_URL } from "../config";
 const TEMP_TEXT_ENDPOINT = new URL("dev/temptext", API_BASE_URL).toString();
 const GIT_PULL_ENDPOINT = new URL("dev/git/pull", API_BASE_URL).toString();
 const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
+const DEFAULT_WATCH_PATH = "C:\\Users\\YOUR_WINDOWS_USER_NAME\\Desktop\\morono";
+const DEFAULT_API_URL = "http://192.168.10.1:8000/api/v1/realtime/tiff";
 
 const DevPage = () => {
   const [tempText, setTempText] = useState("");
@@ -37,6 +38,10 @@ const DevPage = () => {
   const [gitPulling, setGitPulling] = useState(false);
   const [gitMessage, setGitMessage] = useState<string | null>(null);
   const [gitError, setGitError] = useState<string | null>(null);
+  const [watchPath, setWatchPath] = useState(DEFAULT_WATCH_PATH);
+  const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
+  const [ps1Message, setPs1Message] = useState<string | null>(null);
+  const [ps1Error, setPs1Error] = useState<string | null>(null);
 
   const fetchText = useCallback(async () => {
     setLoading(true);
@@ -112,6 +117,178 @@ const DevPage = () => {
     }
   };
 
+  const escapeForPs = (value: string): string =>
+    value.replace(/`/g, "``").replace(/\"/g, '``"');
+
+  const buildPs1Content = () => {
+    const safeWatchPath = escapeForPs(watchPath.trim() || DEFAULT_WATCH_PATH);
+    const safeApiUrl = escapeForPs(apiUrl.trim() || DEFAULT_API_URL);
+    const lines = [
+      "# ============================================",
+      "# 設定値（必要に応じて書き換えてください）",
+      "# ============================================",
+      "",
+      "# 監視対象フォルダ",
+      "# 例: C:\\Users\\YourUserName\\Desktop\\morono",
+      `$WatchPath = "${safeWatchPath}"`,
+      "",
+      "# POST 先の API URL",
+      `$ApiUrl = "${safeApiUrl}"`,
+      "# ローカルでテストする場合はこちらでも可",
+      '# $ApiUrl = "http://localhost:8000/api/v1/realtime/tiff"',
+      "",
+      "# 監視間隔（秒）",
+      "$IntervalSeconds = 1",
+      "",
+      "# ============================================",
+      "# ここから下は基本的にそのままで OK",
+      "# ============================================",
+      "",
+      "function Send-TiffFile {",
+      "    param(",
+      "        [string]$FilePath,",
+      "        [string]$ApiUrl",
+      "    )",
+      "",
+      "    if (-not (Test-Path -LiteralPath $FilePath)) {",
+      '        Write-Warning "ファイルが見つかりません: $FilePath"',
+      "        return",
+      "    }",
+      "",
+      '    Write-Host "[INFO] 新規 TIFF ファイル検出: $FilePath"',
+      "",
+      "    # ファイル書き込み中の可能性があるので、一定時間リトライしながらオープンできるのを待つ",
+      "    $maxRetry = 10",
+      "    $opened = $false",
+      "    for ($i = 0; $i -lt $maxRetry; $i++) {",
+      "        try {",
+      "            $stream = [System.IO.File]::Open($FilePath,",
+      "                [System.IO.FileMode]::Open,",
+      "                [System.IO.FileAccess]::Read,",
+      "                [System.IO.FileShare]::Read)",
+      "            $stream.Close()",
+      "            $opened = $true",
+      "            break",
+      "        } catch {",
+      "            Start-Sleep -Milliseconds 500",
+      "        }",
+      "    }",
+      "",
+      "    if (-not $opened) {",
+      '        Write-Warning "[WARN] ファイルがロックされているため読み込めませんでした: $FilePath"',
+      "        return",
+      "    }",
+      "",
+      "    try {",
+      "        $fileName = [System.IO.Path]::GetFileName($FilePath)",
+      "        $fileBytes = [System.IO.File]::ReadAllBytes($FilePath)",
+      "",
+      "        # multipart/form-data のボディを手動で作成",
+      '        $boundary = "---------------------------" + ([System.Guid]::NewGuid().ToString("N"))',
+      '        $lf = "`r`n"',
+      '        $encoding = [System.Text.Encoding]::UTF8',
+      "",
+      "        $bodyStart =",
+      '            "--$boundary$lf" +',
+      '            "Content-Disposition: form-data; name=`"file`"; filename=`"$fileName`"$lf" +',
+      '            "Content-Type: image/tiff$lf$lf"',
+      "",
+      '        $bodyEnd = "$lf--$boundary--$lf"',
+      "",
+      "        $bodyStartBytes = $encoding.GetBytes($bodyStart)",
+      "        $bodyEndBytes   = $encoding.GetBytes($bodyEnd)",
+      "",
+      "        $bodyBytes = New-Object byte[] ($bodyStartBytes.Length + $fileBytes.Length + $bodyEndBytes.Length)",
+      "        [System.Array]::Copy($bodyStartBytes, 0, $bodyBytes, 0, $bodyStartBytes.Length)",
+      "        [System.Array]::Copy($fileBytes,      0, $bodyBytes, $bodyStartBytes.Length, $fileBytes.Length)",
+      "        [System.Array]::Copy($bodyEndBytes,   0, $bodyBytes, $bodyStartBytes.Length + $fileBytes.Length, $bodyEndBytes.Length)",
+      "",
+      '        $contentType = "multipart/form-data; boundary=$boundary"',
+      "",
+      '        Write-Host "[INFO] アップロード開始: $fileName -> $ApiUrl"',
+      "",
+      "        $response = Invoke-WebRequest -Uri $ApiUrl -Method Post -ContentType $contentType -Body $bodyBytes -TimeoutSec 60",
+      "",
+      '        Write-Host "[INFO] アップロード完了: StatusCode = $($response.StatusCode)"',
+      "        if ($response.Content) {",
+      '            Write-Host "[INFO] レスポンス本文:"',
+      "            Write-Host $response.Content",
+      "        }",
+      "    }",
+      "    catch {",
+      '        Write-Error "[ERROR] アップロード中にエラーが発生しました: $($_.Exception.Message)"',
+      "    }",
+      "}",
+      "",
+      "# ============================================",
+      "# メインループ：フォルダをポーリング監視",
+      "# ============================================",
+      "",
+      "if (-not (Test-Path -LiteralPath $WatchPath)) {",
+      '    Write-Error "[ERROR] 監視対象フォルダが存在しません: $WatchPath"',
+      '    Write-Host "       パスが正しいか、フォルダが作成されているか確認してください。"',
+      "    exit 1",
+      "}",
+      "",
+      'Write-Host "[INFO] フォルダ監視を開始します: $WatchPath"',
+      'Write-Host "[INFO] 新しい .tif / .tiff ファイルが作成されると自動で POST します。"',
+      'Write-Host "[INFO] 停止するには Ctrl + C を押してください。"',
+      "",
+      "# すでに存在するファイルは「既に送信済み」とみなす",
+      "$seen = New-Object 'System.Collections.Generic.HashSet[string]'",
+      "Get-ChildItem -Path $WatchPath -File | Where-Object {",
+      '    $_.Extension.ToLower() -in @(".tif", ".tiff")',
+      "} | ForEach-Object {",
+      "    [void]$seen.Add($_.FullName)",
+      "}",
+      "",
+      "try {",
+      "    while ($true) {",
+      "        Get-ChildItem -Path $WatchPath -File | Where-Object {",
+      '            $_.Extension.ToLower() -in @(".tif", ".tiff")',
+      "        } | ForEach-Object {",
+      "            if (-not $seen.Contains($_.FullName)) {",
+      "                # 新しく見つかった TIFF ファイル",
+      "                [void]$seen.Add($_.FullName)",
+      "                Send-TiffFile -FilePath $_.FullName -ApiUrl $ApiUrl",
+      "            }",
+      "        }",
+      "",
+      "        Start-Sleep -Seconds $IntervalSeconds",
+      "    }",
+      "}",
+      "catch [System.Exception] {",
+      '    Write-Error "[ERROR] 監視ループでエラーが発生しました: $($_.Exception.Message)"',
+      "}",
+      "finally {",
+      '    Write-Host "[INFO] 監視を終了します。"',
+      "}",
+      "",
+    ];
+    return lines.join("\r\n");
+  };
+
+  const handleDownloadPs1 = () => {
+    try {
+      setPs1Error(null);
+      const content = buildPs1Content();
+      const bomPrefixed = "\uFEFF" + content;
+      const blob = new Blob([bomPrefixed], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "watch_and_upload_tiff.ps1";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setPs1Message("watch_and_upload_tiff.ps1 をダウンロードしました（UTF-8 BOM）。");
+    } catch (err) {
+      setPs1Error(err instanceof Error ? err.message : "ps1の生成に失敗しました。");
+      setPs1Message(null);
+    }
+  };
+
   return (
     <Container
       maxWidth="lg"
@@ -135,11 +312,45 @@ const DevPage = () => {
             Developer Utilities
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            temptext のメモリ保存、git pull、各ページへのショートカットをまとめました。
+            temptext のメモリ保存、git pull、PowerShell スクリプト生成をまとめました。
           </Typography>
         </Box>
 
         <Stack spacing={2.5}>
+          <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 } }}>
+            <Stack spacing={1.5}>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Typography variant="subtitle1" fontWeight={700}>
+                  make ps1 (TIFF watcher)
+                </Typography>
+              </Stack>
+              <Typography variant="body2" color="text.secondary">
+                WatchPath と ApiUrl を設定して、UTF-8 BOM 付きの PowerShell スクリプトを生成・ダウンロードします。
+              </Typography>
+              {ps1Error && <Alert severity="error">{ps1Error}</Alert>}
+              {ps1Message && <Alert severity="success">{ps1Message}</Alert>}
+              <Stack spacing={1.5}>
+                <TextField
+                  label="WatchPath (例: C:\\Users\\YourUserName\\Desktop\\morono)"
+                  value={watchPath}
+                  onChange={(e) => setWatchPath(e.target.value)}
+                  fullWidth
+                />
+                <TextField
+                  label="API URL (例: http://192.168.10.1:8000/api/v1/realtime/tiff)"
+                  value={apiUrl}
+                  onChange={(e) => setApiUrl(e.target.value)}
+                  fullWidth
+                />
+              </Stack>
+              <Box>
+                <Button variant="contained" onClick={handleDownloadPs1}>
+                  .ps1 をダウンロード
+                </Button>
+              </Box>
+            </Stack>
+          </Paper>
+
           <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 } }}>
             <Stack spacing={1.5}>
               <Stack direction="row" alignItems="center" spacing={1}>
