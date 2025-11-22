@@ -16,7 +16,7 @@ import DoneAllIcon from "@mui/icons-material/DoneAll";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 
 import { API_BASE_URL } from "../config";
-import { Language, useI18n } from "../i18n";
+import { type Language, useI18n } from "../i18n";
 
 type Dimensions = {
   width: number;

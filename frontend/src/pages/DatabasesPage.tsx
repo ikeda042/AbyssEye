@@ -31,7 +31,7 @@ import ScienceIcon from "@mui/icons-material/Science";
 import EditNoteIcon from "@mui/icons-material/EditNote";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { API_BASE_URL } from "../config";
-import { Language, useI18n } from "../i18n";
+import { type Language, useI18n } from "../i18n";
 
 type DatabaseEntry = {
   name: string;
