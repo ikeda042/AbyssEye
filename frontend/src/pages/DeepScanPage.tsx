@@ -214,6 +214,7 @@ const DeepScanPage = () => {
   const [renderedTifSrc, setRenderedTifSrc] = useState<string | null>(null);
   const [renderingTif, setRenderingTif] = useState(false);
   const [roiDisplaySources, setRoiDisplaySources] = useState<Record<number, string>>({});
+  const [overlayRevision, setOverlayRevision] = useState(0);
   const imageContainerRef = useRef<HTMLDivElement | null>(null);
   const [imageNaturalSize, setImageNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const [imageLayout, setImageLayout] = useState<{
@@ -313,7 +314,24 @@ const DeepScanPage = () => {
     setSelectedOverlayRoiMeta(null);
     setManualLabelError(null);
     setManualLabelMessage(null);
+    setOverlayRevision((prev) => prev + 1);
   }, [status?.tif_name]);
+
+  useEffect(() => {
+    if (!status) return;
+    if (!imageLayout) return;
+    if ((status.rois?.length ?? 0) === 0) return;
+    setOverlayRevision((prev) => prev + 1);
+  }, [
+    status?.tif_name,
+    status?.saved_at,
+    status?.rois?.length,
+    imageLayout?.displayWidth,
+    imageLayout?.displayHeight,
+    imageLayout?.offsetX,
+    imageLayout?.offsetY,
+    renderedTifSrc,
+  ]);
 
   useEffect(() => {
     if (!status) {
@@ -456,6 +474,7 @@ const DeepScanPage = () => {
     if (!status) return "overlay";
     return `${status.tif_name || "tif"}-${status.saved_at || "ts"}`;
   }, [status?.tif_name, status?.saved_at]);
+  const overlayKey = `${overlayKeyPrefix}-${overlayRevision}`;
 
   const roiCaptureOrder = useMemo(() => {
     const rois = status?.rois ?? [];
@@ -665,7 +684,7 @@ const DeepScanPage = () => {
                       />
                       {deepVisionOverlayEnabled && imageLayout && (status.rois?.length ?? 0) > 0 && (
                         <Box
-                          key={overlayKeyPrefix}
+                          key={overlayKey}
                           sx={{
                             position: "absolute",
                             inset: 0,
@@ -688,7 +707,7 @@ const DeepScanPage = () => {
                             const delay = sequenceIndex * overlayStaggerSeconds;
                             return (
                               <Box
-                                key={`overlay-${overlayKeyPrefix}-${roi.roi_id}`}
+                                key={`overlay-${overlayKey}-${roi.roi_id}`}
                                 sx={{
                                   position: "absolute",
                                   left,
