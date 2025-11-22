@@ -26,6 +26,7 @@ import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import SearchIcon from "@mui/icons-material/Search";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import ScienceIcon from "@mui/icons-material/Science";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { API_BASE_URL } from "../config";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
@@ -36,6 +37,7 @@ const TiffManagerPage = () => {
   const [search, setSearch] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  const [deletingFile, setDeletingFile] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -93,6 +95,31 @@ const TiffManagerPage = () => {
       event.target.value = "";
     }
   };
+
+  const handleDelete = useCallback(
+    async (filename: string) => {
+      setError(null);
+      setInfo(null);
+      setDeletingFile(filename);
+      try {
+        const response = await fetch(endpoint(`tiff/${encodeURIComponent(filename)}`), {
+          method: "DELETE",
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || "TIFFファイルの削除に失敗しました。");
+        }
+        const result: { deleted_name?: string } = await response.json().catch(() => ({}));
+        setInfo(`${result.deleted_name ?? filename} を削除しました。`);
+        await fetchTifFiles();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "削除中にエラーが発生しました。");
+      } finally {
+        setDeletingFile(null);
+      }
+    },
+    [fetchTifFiles],
+  );
 
   const filteredFiles = useMemo(() => {
     if (!search.trim()) return tifFiles;
@@ -205,6 +232,7 @@ const TiffManagerPage = () => {
                     <TableCell>ファイル名</TableCell>
                     <TableCell align="right">ダウンロード</TableCell>
                     <TableCell align="center">ROI抽出</TableCell>
+                    <TableCell align="center">削除</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -235,6 +263,18 @@ const TiffManagerPage = () => {
                           onClick={() => handleNavigateToExtraction(file)}
                         >
                           ROI抽出
+                        </Button>
+                      </TableCell>
+                      <TableCell align="center">
+                        <Button
+                          variant="outlined"
+                          color="error"
+                          size="small"
+                          startIcon={<DeleteOutlineIcon />}
+                          onClick={() => handleDelete(file)}
+                          disabled={deletingFile === file}
+                        >
+                          {deletingFile === file ? "削除中…" : "削除"}
                         </Button>
                       </TableCell>
                     </TableRow>

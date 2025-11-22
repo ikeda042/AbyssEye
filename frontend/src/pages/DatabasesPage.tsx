@@ -29,6 +29,7 @@ import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import SlideshowIcon from "@mui/icons-material/Slideshow";
 import ScienceIcon from "@mui/icons-material/Science";
 import EditNoteIcon from "@mui/icons-material/EditNote";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { API_BASE_URL } from "../config";
 
 type DatabaseEntry = {
@@ -126,6 +127,7 @@ const DatabasesPage = () => {
   const [databases, setDatabases] = useState<DatabaseEntry[]>([]);
   const [search, setSearch] = useState(() => urlSearch);
   const [isLoading, setIsLoading] = useState(true);
+  const [deletingDb, setDeletingDb] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -191,6 +193,32 @@ const DatabasesPage = () => {
     const params = new URLSearchParams({ db_name: dbName });
     navigate(`/annotation?${params.toString()}`);
   };
+
+  const handleDelete = useCallback(
+    async (dbName: string) => {
+      setError(null);
+      setInfo(null);
+      setDeletingDb(dbName);
+      try {
+        const response = await fetch(endpoint(`databases/${encodeURIComponent(dbName)}`), {
+          method: "DELETE",
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || "データベースの削除に失敗しました。");
+        }
+        const result: { deleted_name?: string } = await response.json().catch(() => ({}));
+        const deletedName = result.deleted_name ?? dbName;
+        await fetchDatabases();
+        setInfo(`${deletedName} を削除しました。`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "削除中にエラーが発生しました。");
+      } finally {
+        setDeletingDb(null);
+      }
+    },
+    [fetchDatabases],
+  );
 
   return (
     <Container
@@ -293,6 +321,7 @@ const DatabasesPage = () => {
                     <TableCell align="center">単細胞ビュー</TableCell>
                     <TableCell align="center">アノテーション</TableCell>
                     <TableCell align="center">概要</TableCell>
+                    <TableCell align="center">削除</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -324,32 +353,32 @@ const DatabasesPage = () => {
                         >
                           DL
                         </Button>
-                          </TableCell>
-                          <TableCell align="center">
-                            <Button
-                              variant="outlined"
-                              size="small"
-                              startIcon={<ScienceIcon fontSize="small" />}
+                      </TableCell>
+                      <TableCell align="center">
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          startIcon={<ScienceIcon fontSize="small" />}
                           onClick={() => handleOpenInference(db.name)}
-                            >
-                              推論
-                            </Button>
-                          </TableCell>
-                          <TableCell align="center">
-                            <Button
-                              variant="outlined"
-                              size="small"
-                              startIcon={<TravelExploreIcon fontSize="small" />}
-                              onClick={() => handleOpenDeepScan(db.name)}
-                            >
-                              DeepScan
-                            </Button>
-                          </TableCell>
-                          <TableCell align="center">
-                            <Button
-                              variant="outlined"
-                              size="small"
-                              startIcon={<SlideshowIcon fontSize="small" />}
+                        >
+                          推論
+                        </Button>
+                      </TableCell>
+                      <TableCell align="center">
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          startIcon={<TravelExploreIcon fontSize="small" />}
+                          onClick={() => handleOpenDeepScan(db.name)}
+                        >
+                          DeepScan
+                        </Button>
+                      </TableCell>
+                      <TableCell align="center">
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          startIcon={<SlideshowIcon fontSize="small" />}
                           onClick={() => handleOpenSingleCell(db.name)}
                         >
                           ビュー
@@ -373,6 +402,18 @@ const DatabasesPage = () => {
                           onClick={() => handleOpenOverview(db.name)}
                         >
                           概要
+                        </Button>
+                      </TableCell>
+                      <TableCell align="center">
+                        <Button
+                          variant="outlined"
+                          color="error"
+                          size="small"
+                          startIcon={<DeleteOutlineIcon />}
+                          onClick={() => handleDelete(db.name)}
+                          disabled={deletingDb === db.name || isLoading}
+                        >
+                          {deletingDb === db.name ? "削除中…" : "削除"}
                         </Button>
                       </TableCell>
                     </TableRow>

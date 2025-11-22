@@ -131,3 +131,9 @@ async def get_roi_histogram(
 async def download_database(db_name: str) -> FileResponse:
     db_path = crud.get_database_file_path(db_name)
     return FileResponse(db_path, media_type="application/octet-stream", filename=db_path.name)
+
+
+@router.delete("/{db_name}")
+async def delete_database(db_name: str) -> dict:
+    deleted_name = crud.delete_database_file(db_name)
+    return {"deleted_name": deleted_name}

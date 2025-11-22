@@ -24,3 +24,9 @@ async def list_tif_files() -> dict:
 async def download_tif_file(tif_name: str):
     tif_path = await crud.get_tif_file_path(tif_name)
     return FileResponse(tif_path, media_type="image/tiff", filename=tif_path.name)
+
+
+@router.delete("/{tif_name}")
+async def delete_tif_file(tif_name: str) -> dict:
+    deleted_name = await crud.delete_tif_file(tif_name)
+    return {"deleted_name": deleted_name}

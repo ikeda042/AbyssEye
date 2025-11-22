@@ -90,6 +90,18 @@ def get_database_file_path(db_name: str) -> Path:
     return _resolve_db_path(db_name)
 
 
+def delete_database_file(db_name: str) -> str:
+    """Delete a `.db` file and return its name."""
+    db_path = _resolve_db_path(db_name)
+    if db_path.suffix.lower() != ".db":
+        raise HTTPException(status_code=400, detail=".db ファイルのみ削除できます。")
+    try:
+        db_path.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"データベース削除中にエラー: {exc}") from exc
+    return db_path.name
+
+
 def _ensure_manual_label_column(conn: sqlite3.Connection) -> None:
     """Ensure roi_records table contains manual_label/ai_label/ai_model_name columns."""
     cursor = conn.execute("PRAGMA table_info(roi_records)")

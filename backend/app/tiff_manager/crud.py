@@ -68,3 +68,17 @@ async def get_tif_file_path(tif_name: str) -> Path:
     if not tif_path.is_file():
         raise HTTPException(status_code=404, detail=f"{safe_name} が見つかりませんでした。")
     return tif_path
+
+
+async def delete_tif_file(tif_name: str) -> str:
+    """Remove a TIFF file from storage."""
+    _ensure_storage_dir()
+    safe_name = _sanitize_filename(tif_name)
+    _validate_extension(safe_name)
+
+    target_path = TIFF_STORAGE_DIR / safe_name
+    if not target_path.is_file():
+        raise HTTPException(status_code=404, detail=f"{safe_name} が見つかりませんでした。")
+
+    await asyncio.to_thread(target_path.unlink)
+    return target_path.name
