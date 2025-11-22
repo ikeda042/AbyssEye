@@ -68,6 +68,13 @@ def _candidate_image_stems(db_path: Path) -> list[str]:
             continue
         seen.add(cleaned)
         normalized.append(cleaned)
+
+        # Add a variant without '#' to match tiff_manager's sanitization.
+        if "#" in cleaned:
+            hashless = cleaned.replace("#", "")
+            if hashless and hashless not in seen:
+                seen.add(hashless)
+                normalized.append(hashless)
     return normalized
 
 
@@ -126,4 +133,3 @@ async def get_deepscan_status(db_name: str) -> realtime_crud.RealtimeStatus:
         inference=inference,
         rois=rois,
     )
-
