@@ -452,6 +452,11 @@ const DeepScanPage = () => {
     return { buckets, others, counts };
   }, [status]);
 
+  const overlayKeyPrefix = useMemo(() => {
+    if (!status) return "overlay";
+    return `${status.tif_name || "tif"}-${status.saved_at || "ts"}`;
+  }, [status?.tif_name, status?.saved_at]);
+
   const roiCaptureOrder = useMemo(() => {
     const rois = status?.rois ?? [];
     const sortedByPosition = [...rois].sort((a, b) => {
@@ -660,6 +665,7 @@ const DeepScanPage = () => {
                       />
                       {deepVisionOverlayEnabled && imageLayout && (status.rois?.length ?? 0) > 0 && (
                         <Box
+                          key={overlayKeyPrefix}
                           sx={{
                             position: "absolute",
                             inset: 0,
@@ -682,7 +688,7 @@ const DeepScanPage = () => {
                             const delay = sequenceIndex * overlayStaggerSeconds;
                             return (
                               <Box
-                                key={`overlay-${roi.roi_id}`}
+                                key={`overlay-${overlayKeyPrefix}-${roi.roi_id}`}
                                 sx={{
                                   position: "absolute",
                                   left,
