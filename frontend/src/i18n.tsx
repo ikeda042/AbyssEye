@@ -188,7 +188,7 @@ const translations: Record<Language, TranslationDict> = {
     "top.cards.roi.title": "ROI抽出",
     "top.cards.roi.desc": "TIF画像をアップロードし、確認してROI処理に進みます。",
     "top.cards.databases.title": "データベース",
-    "top.cards.databases.desc": "生成済みの.dbファイルを参照し、実験を管理します。",
+    "top.cards.databases.desc": "生成済みの.dbファイルを参照し、実験データを管理します。",
     "top.cards.models.title": "モデル管理",
     "top.cards.models.desc": "models/ 配下に保存されたモデルをアップロード・確認します。",
     "top.cards.realtime.title": "リアルタイムエンジン",
