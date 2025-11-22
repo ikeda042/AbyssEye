@@ -33,6 +33,30 @@ def _deserialize_roi_meta(raw_meta: object) -> object:
     return raw_meta
 
 
+def _normalize_stem_variants(raw: str) -> list[str]:
+    """Return possible stem variants while preserving dots like 'No.4'."""
+    name = Path(str(raw)).name
+    lower = name.lower()
+    for suffix in (*TIFF_SUFFIXES, ".db"):
+        if lower.endswith(suffix.lower()):
+            name = name[: -len(suffix)]
+            break
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for variant in (
+        name,
+        name.replace("#", ""),
+        name.replace(".", ""),
+        name.replace("#", "").replace(".", ""),
+    ):
+        cleaned = variant.strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            candidates.append(cleaned)
+    return candidates
+
+
 def _candidate_image_stems(db_path: Path) -> list[str]:
     """Return likely image stems for a given ROI database."""
     stems: list[str] = [db_path.stem]
@@ -63,18 +87,11 @@ def _candidate_image_stems(db_path: Path) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()
     for stem in stems:
-        cleaned = Path(stem).stem.strip()
-        if not cleaned or cleaned in seen:
-            continue
-        seen.add(cleaned)
-        normalized.append(cleaned)
-
-        # Add a variant without '#' to match tiff_manager's sanitization.
-        if "#" in cleaned:
-            hashless = cleaned.replace("#", "")
-            if hashless and hashless not in seen:
-                seen.add(hashless)
-                normalized.append(hashless)
+        for candidate in _normalize_stem_variants(stem):
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            normalized.append(candidate)
     return normalized
 
 
