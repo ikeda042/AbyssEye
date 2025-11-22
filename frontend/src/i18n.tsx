@@ -192,7 +192,7 @@ const translations: Record<Language, TranslationDict> = {
     "top.cards.models.title": "モデル管理",
     "top.cards.models.desc": "models/ 配下に保存されたモデルをアップロード・確認します。",
     "top.cards.realtime.title": "リアルタイムエンジン",
-    "top.cards.realtime.desc": "最新のTIFFと推論結果を自動表示します。",
+    "top.cards.realtime.desc": "リアルタイムでDeppScanを使用できます。",
     "tiff.breadcrumb": "ROI Extraction",
     "tiff.title": "ROI抽出",
     "tiff.uploadCta": "TIFFをアップロード",
