@@ -186,7 +186,7 @@ const translations: Record<Language, TranslationDict> = {
     "top.health.ok": "バックエンドAPIが利用可能です（ステータス: {status}）。",
     "top.health.error": "バックエンドに接続できません。サーバーを起動してから再度お試しください。",
     "top.cards.roi.title": "ROI抽出",
-    "top.cards.roi.desc": "TIFFスタックをアップロードし、確認してROI処理に進みます。",
+    "top.cards.roi.desc": "TIF画像をアップロードし、確認してROI処理に進みます。",
     "top.cards.databases.title": "データベース",
     "top.cards.databases.desc": "生成済みの.dbファイルを参照し、実験を管理します。",
     "top.cards.models.title": "モデル管理",
