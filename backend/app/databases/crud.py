@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
+import time
+import gc
 from dataclasses import dataclass
 from datetime import datetime
 import io
@@ -90,15 +92,33 @@ def get_database_file_path(db_name: str) -> Path:
     return _resolve_db_path(db_name)
 
 
+def _unlink_with_retry(db_path: Path, retries: int = 3, delay: float = 0.2) -> None:
+    """Best-effort unlink with small retries to handle Windows file locks."""
+    last_exc: OSError | None = None
+    for attempt in range(retries + 1):
+        try:
+            db_path.unlink()
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt == retries:
+                break
+            # Give the OS a moment to release handles (common on Windows).
+            gc.collect()
+            time.sleep(delay * (attempt + 1))
+        except OSError as exc:
+            last_exc = exc
+            break
+    if last_exc:
+        raise HTTPException(status_code=500, detail=f"データベース削除中にエラー: {last_exc}") from last_exc
+
+
 def delete_database_file(db_name: str) -> str:
     """Delete a `.db` file and return its name."""
     db_path = _resolve_db_path(db_name)
     if db_path.suffix.lower() != ".db":
         raise HTTPException(status_code=400, detail=".db ファイルのみ削除できます。")
-    try:
-        db_path.unlink()
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"データベース削除中にエラー: {exc}") from exc
+    _unlink_with_retry(db_path)
     return db_path.name
 
 
