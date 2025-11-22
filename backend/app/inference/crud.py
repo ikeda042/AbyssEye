@@ -11,6 +11,7 @@ from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from typing import Iterable, Protocol, Sequence
+from contextlib import nullcontext
 
 import numpy as np
 from fastapi import HTTPException, UploadFile
@@ -32,6 +33,7 @@ MODELS_DIR = PROJECT_ROOT / "models"
 MODEL_FILE_SUFFIXES = {".h5", ".hdf5", ".keras", ".pb", ".tflite"}
 DIRECTORY_DISALLOWED_PARTS = {"", ".", ".."}
 DEFAULT_ACTIVE_KEYWORD = "four"
+INFERENCE_DEVICE_ENV = "INFERENCE_DEVICE"
 
 _active_model_path: Path | None = None
 _active_model_relative_path: str | None = None
@@ -53,6 +55,26 @@ class InferenceResult:
     confidence: float
     probabilities: list[float]
     model_path: str
+
+
+def _tf_device_scope():
+    """Select TensorFlow device based on env var INFERENCE_DEVICE."""
+    value = os.getenv(INFERENCE_DEVICE_ENV, "").strip().lower()
+    if value in {"", "auto", "default"}:
+        return nullcontext()
+    if value in {"cpu", "cpu:0", "/cpu:0"}:
+        return tf.device("/CPU:0")
+    if value in {"gpu", "gpu:0", "/gpu:0", "rocm", "amd"}:
+        gpus = tf.config.list_physical_devices("GPU")
+        if not gpus:
+            raise HTTPException(status_code=500, detail="GPUを要求しましたがTensorFlowがGPUを検出できませんでした。")
+        for gpu in gpus:
+            try:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            except Exception:
+                pass
+        return tf.device("/GPU:0")
+    raise HTTPException(status_code=400, detail="INFERENCE_DEVICE は auto/cpu/gpu のいずれかで指定してください。")
 
 
 def _models_root() -> Path:
@@ -430,7 +452,8 @@ class _SavedModelSession:
 
     def predict(self, batch: np.ndarray, **_: object) -> np.ndarray:
         try:
-            result = self._session.run(self._output_tensor, feed_dict={self._input_tensor: batch})
+            with _tf_device_scope():
+                result = self._session.run(self._output_tensor, feed_dict={self._input_tensor: batch})
         except Exception as exc:  # pragma: no cover - TF runtime error
             raise HTTPException(status_code=500, detail=f"SavedModel推論中にエラー: {exc}") from exc
         return np.asarray(result)
@@ -493,7 +516,8 @@ def _predict_from_bytes(image_bytes: bytes, model_path: str | None = None) -> In
     resolved_path = _resolve_model_path(model_path)
     model = _load_model(str(resolved_path))
 
-    predictions = model.predict(batch, verbose=0)
+    with _tf_device_scope():
+        predictions = model.predict(batch, verbose=0)
     if predictions.ndim != 2 or predictions.shape[0] != 1:
         raise HTTPException(status_code=500, detail="推論結果の形状が不正です。")
 
