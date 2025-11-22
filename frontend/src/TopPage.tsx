@@ -70,9 +70,9 @@ const TopPage = () => {
         icon: <ApiIcon />,
       },
       {
-        title: "Temp Text",
-        description: "Backendメモリに保存されたテキストを閲覧・編集します。",
-        path: "/temptext",
+        title: "Dev tools",
+        description: "temptext・git pull・各ページへのショートカット。",
+        path: "/dev",
         accent,
         icon: <NotesIcon />,
       },

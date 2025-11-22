@@ -13,7 +13,7 @@ import AnnotationPage from "./pages/AnnotationPage";
 import ModelManagerPage from "./pages/ModelManagerPage";
 import RealtimePage from "./pages/RealtimePage";
 import DeepScanPage from "./pages/DeepScanPage";
-import TempTextPage from "./pages/TempTextPage";
+import DevPage from "./pages/DevPage";
 import AppHeader from "./AppHeader";
 
 const storageKey = "abyssEye:colorMode";
@@ -91,7 +91,8 @@ const App = () => {
             <Route path="/model-manager" element={<ModelManagerPage />} />
             <Route path="/realtime" element={<RealtimePage />} />
             <Route path="/deepscan" element={<DeepScanPage />} />
-            <Route path="/temptext" element={<TempTextPage />} />
+            <Route path="/dev" element={<DevPage />} />
+            <Route path="/temptext" element={<DevPage />} />
           </Routes>
         </Box>
       </BrowserRouter>
