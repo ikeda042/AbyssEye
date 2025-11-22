@@ -391,7 +391,7 @@ const DatabasesPage = () => {
                           startIcon={<EditNoteIcon fontSize="small" />}
                           onClick={() => handleOpenAnnotation(db.name)}
                         >
-                          注釈
+                          アノテーション
                         </Button>
                       </TableCell>
                       <TableCell align="center">
