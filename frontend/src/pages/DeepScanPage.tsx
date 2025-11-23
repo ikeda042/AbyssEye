@@ -45,7 +45,7 @@ type RealtimeROI = {
   image_width_px: number;
   image_height_px: number;
   png_base64: string;
-  manual_label?: string | null;
+  manual_label?: string | number | null;
 };
 
 type DeepScanStatus = {
@@ -67,9 +67,11 @@ const buildManualLabelEndpoint = (dbName: string, recordId: number) =>
     API_BASE_URL,
   ).toString();
 type DisplayMode = "raw" | "normalized" | "jet" | "opticalBoost";
+type LabelMode = "ai" | "manual";
 const storageKeys = {
   tifDisplayMode: "deepscan:tifDisplayMode",
   deepVision: "deepscan:deepVisionEnabled",
+  labelMode: "deepscan:labelMode",
 };
 
 const classLabels = Array.from({ length: 4 }, (_, index) => {
@@ -126,6 +128,29 @@ const loadStoredDeepVision = (): boolean => {
   if (stored === "0") return false;
   if (stored === "1") return true;
   return true;
+};
+
+const loadStoredLabelMode = (): LabelMode => {
+  if (typeof window === "undefined") return "ai";
+  const stored = window.localStorage.getItem(storageKeys.labelMode);
+  return stored === "manual" ? "manual" : "ai";
+};
+
+const parseManualLabel = (value: string | number | null | undefined): number | null => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return null;
+  return parsed;
+};
+
+const resolveLabel = (roi: RealtimeROI, mode: LabelMode): { label: number; source: LabelMode } => {
+  if (mode === "manual") {
+    const manualLabel = parseManualLabel(roi.manual_label);
+    if (manualLabel !== null && manualLabel >= 0 && manualLabel < classColors.length) {
+      return { label: manualLabel, source: "manual" };
+    }
+  }
+  return { label: roi.predicted_class, source: "ai" };
 };
 
 const loadImage = (src: string): Promise<HTMLImageElement> =>
@@ -209,6 +234,7 @@ const DeepScanPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tifDisplayMode, setTifDisplayMode] = useState<DisplayMode>(() => loadStoredTifMode());
+  const [frameLabelMode, setFrameLabelMode] = useState<LabelMode>(() => loadStoredLabelMode());
   const [roiDisplayMode, setRoiDisplayMode] = useState<DisplayMode>("raw");
   const [deepVisionOverlayEnabled, setDeepVisionOverlayEnabled] = useState<boolean>(() => loadStoredDeepVision());
   const [renderedTifSrc, setRenderedTifSrc] = useState<string | null>(null);
@@ -234,6 +260,11 @@ const DeepScanPage = () => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(storageKeys.tifDisplayMode, tifDisplayMode);
   }, [tifDisplayMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(storageKeys.labelMode, frameLabelMode);
+  }, [frameLabelMode]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -446,16 +477,13 @@ const DeepScanPage = () => {
   }, [dbName, fetchStatus]);
 
   const classBuckets = useMemo(() => {
-    const buckets: Record<number, RealtimeROI[]> = {
-      0: [],
-      1: [],
-      2: [],
-      3: [],
-    };
+    const buckets: Record<number, RealtimeROI[]> = { 0: [], 1: [], 2: [], 3: [] };
     const others: RealtimeROI[] = [];
     (status?.rois ?? []).forEach((roi) => {
-      if (roi.predicted_class in buckets) {
-        buckets[roi.predicted_class]?.push(roi);
+      const { label } = resolveLabel(roi, frameLabelMode);
+      if (label >= 0 && label < 4) {
+        const bucketKey = label as 0 | 1 | 2 | 3;
+        buckets[bucketKey]?.push(roi);
       } else {
         others.push(roi);
       }
@@ -468,13 +496,28 @@ const DeepScanPage = () => {
       others: others.length,
     };
     return { buckets, others, counts };
-  }, [status]);
+  }, [status, frameLabelMode]);
 
   const overlayKeyPrefix = useMemo(() => {
     if (!status) return "overlay";
     return `${status.tif_name || "tif"}-${status.saved_at || "ts"}`;
   }, [status?.tif_name, status?.saved_at]);
   const overlayKey = `${overlayKeyPrefix}-${overlayRevision}`;
+
+  const selectedOverlayLabelInfo = useMemo(() => {
+    if (!selectedOverlayRoiMeta) return null;
+    const { label, source } = resolveLabel(selectedOverlayRoiMeta, frameLabelMode);
+    return {
+      label,
+      source,
+      manualLabel: parseManualLabel(selectedOverlayRoiMeta.manual_label),
+      predictedClass: selectedOverlayRoiMeta.predicted_class,
+    };
+  }, [selectedOverlayRoiMeta, frameLabelMode]);
+
+  const selectedRoiColor =
+    (selectedOverlayLabelInfo && classColors[selectedOverlayLabelInfo.label]) ||
+    (selectedOverlayRoiMeta ? classColors[selectedOverlayRoiMeta.predicted_class] : undefined);
 
   const roiCaptureOrder = useMemo(() => {
     const rois = status?.rois ?? [];
@@ -623,39 +666,58 @@ const DeepScanPage = () => {
                       <Typography variant="subtitle2" fontWeight={600}>
                         TIFF表示モード
                       </Typography>
-                      <Stack direction="row" spacing={1} alignItems="center">
-                        <ToggleButtonGroup
-                          size="small"
-                          exclusive
-                          value={tifDisplayMode}
-                          onChange={(_, value) => value && setTifDisplayMode(value)}
-                        >
-                          <ToggleButton value="raw">Raw</ToggleButton>
-                          <ToggleButton value="normalized">Normalized</ToggleButton>
-                          <ToggleButton value="jet">Jet</ToggleButton>
-                          <ToggleButton value="opticalBoost">Optical Boost</ToggleButton>
-                        </ToggleButtonGroup>
-                        <FormControlLabel
-                          control={
-                            <Switch
-                              size="medium"
-                              checked={deepVisionOverlayEnabled}
-                              onChange={(_, checked) => setDeepVisionOverlayEnabled(checked)}
-                              color="primary"
-                            />
-                          }
-                          label="Deep Scan"
-                          sx={{
-                            ml: 1,
-                            mr: 0,
-                            "& .MuiFormControlLabel-label": {
-                              fontWeight: 700,
-                              fontSize: 14,
-                              color: deepVisionOverlayEnabled ? "primary.main" : "text.secondary",
-                              letterSpacing: "0.01em",
-                            },
-                          }}
-                        />
+                      <Stack spacing={0.5} alignItems={{ xs: "flex-start", sm: "flex-end" }} sx={{ minWidth: 0 }}>
+                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                          <ToggleButtonGroup
+                            size="small"
+                            exclusive
+                            value={tifDisplayMode}
+                            onChange={(_, value) => value && setTifDisplayMode(value)}
+                          >
+                            <ToggleButton value="raw">Raw</ToggleButton>
+                            <ToggleButton value="normalized">Normalized</ToggleButton>
+                            <ToggleButton value="jet">Jet</ToggleButton>
+                            <ToggleButton value="opticalBoost">Optical Boost</ToggleButton>
+                          </ToggleButtonGroup>
+                          <Stack direction="row" spacing={0.75} alignItems="center">
+                            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                              フレーム基準
+                            </Typography>
+                            <ToggleButtonGroup
+                              size="small"
+                              exclusive
+                              value={frameLabelMode}
+                              onChange={(_, value) => value && setFrameLabelMode(value)}
+                            >
+                              <ToggleButton value="ai">AI</ToggleButton>
+                              <ToggleButton value="manual">Manual</ToggleButton>
+                            </ToggleButtonGroup>
+                          </Stack>
+                          <FormControlLabel
+                            control={
+                              <Switch
+                                size="medium"
+                                checked={deepVisionOverlayEnabled}
+                                onChange={(_, checked) => setDeepVisionOverlayEnabled(checked)}
+                                color="primary"
+                              />
+                            }
+                            label="Deep Scan"
+                            sx={{
+                              ml: 1,
+                              mr: 0,
+                              "& .MuiFormControlLabel-label": {
+                                fontWeight: 700,
+                                fontSize: 14,
+                                color: deepVisionOverlayEnabled ? "primary.main" : "text.secondary",
+                                letterSpacing: "0.01em",
+                              },
+                            }}
+                          />
+                        </Stack>
+                        <Typography variant="caption" color="text.secondary">
+                          Manualモードでもラベルが無いROIはAIラベルで描画します。
+                        </Typography>
                       </Stack>
                     </Stack>
                     <Box
@@ -701,7 +763,8 @@ const DeepScanPage = () => {
                             const top = imageLayout.offsetY + roi.roi_start_y * scaleY;
                             const width = (roi.roi_end_x - roi.roi_start_x) * scaleX;
                             const height = (roi.roi_end_y - roi.roi_start_y) * scaleY;
-                            const color = classColors[roi.predicted_class] ?? "#6366f1";
+                            const { label } = resolveLabel(roi, frameLabelMode);
+                            const color = classColors[label] ?? "#6366f1";
                             const isSelected = selectedOverlayRoiId === roi.roi_id;
                             const sequenceIndex = roiCaptureOrder[roi.roi_id] ?? index;
                             const delay = sequenceIndex * overlayStaggerSeconds;
@@ -832,6 +895,9 @@ const DeepScanPage = () => {
                               その他: {classBuckets.counts.others}
                             </Typography>
                           )}
+                          <Typography variant="caption" color="text.secondary">
+                            フレーム描画ラベル: {frameLabelMode === "manual" ? "Manual優先（無ければAI）" : "AI推論"}
+                          </Typography>
                         </Stack>
                       </Box>
                       <Box
@@ -897,13 +963,21 @@ const DeepScanPage = () => {
                                   width: 10,
                                   height: 10,
                                   borderRadius: "50%",
-                                  bgcolor: classColors[selectedOverlayRoiMeta.predicted_class],
+                                  bgcolor: selectedRoiColor ?? "rgba(148,163,184,0.6)",
                                 }}
                               />
-                              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
-                                Class {selectedOverlayRoiMeta.predicted_class} / 信頼度:{" "}
-                                {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
-                              </Typography>
+                              <Box>
+                                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                  Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
+                                  {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}基準) / 信頼度(AI):{" "}
+                                  {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
+                                </Typography>
+                                {frameLabelMode === "manual" && selectedOverlayLabelInfo?.source === "ai" && (
+                                  <Typography variant="caption" color="text.secondary">
+                                    manual label が無いため AI ラベルを使用しています。
+                                  </Typography>
+                                )}
+                              </Box>
                             </Stack>
                           ) : (
                             <Typography variant="body2" color="text.secondary">
@@ -920,9 +994,7 @@ const DeepScanPage = () => {
                               width: "100%",
                               maxWidth: 260,
                               borderRadius: 1,
-                              border: `3px solid ${
-                                selectedOverlayRoiMeta ? classColors[selectedOverlayRoiMeta.predicted_class] : "rgba(15,23,42,0.12)"
-                              }`,
+                              border: `3px solid ${selectedRoiColor ?? "rgba(15,23,42,0.12)"}`,
                               backgroundColor: (theme) =>
                                 theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
                               display: "block",
