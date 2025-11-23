@@ -18,7 +18,6 @@ import AppHeader from "./AppHeader";
 
 const storageKey = "abyssEye:colorMode";
 
-const successPrimary = "#22c55e";
 const darkBg = "#0b1120";
 const darkPrimary = "#e5e7eb";
 const darkSecondary = "#cbd5e1";
