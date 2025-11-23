@@ -24,12 +24,17 @@ FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 
 app = FastAPI(
     title="AbyssEye APIs",
-    docs_url=f"{API_PREFIX}/docs",  # expose docs under API prefix
-    swagger_ui_oauth2_redirect_url=f"{API_PREFIX}/docs/oauth2-redirect",
+    docs_url=None,  # handled by fastapi_swagger
+    swagger_ui_oauth2_redirect_url=None,
     redoc_url=f"{API_PREFIX}/redoc",
     openapi_url=f"{API_PREFIX}/openapi.json",
 )
-patch_fastapi(app)  # enable offline Swagger UI using bundled assets
+patch_fastapi(
+    app,
+    docs_url=f"{API_PREFIX}/docs",
+    redirect_from_root_to_docs=False,  # keep "/" for frontend
+    oauth2_redirect_url=f"{API_PREFIX}/docs/oauth2-redirect",
+)  # enable offline Swagger UI using bundled assets
 
 app.add_middleware(
     CORSMiddleware,
