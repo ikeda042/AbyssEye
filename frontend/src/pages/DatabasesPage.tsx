@@ -25,7 +25,6 @@ import {
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import SearchIcon from "@mui/icons-material/Search";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
-import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import SlideshowIcon from "@mui/icons-material/Slideshow";
 import ScienceIcon from "@mui/icons-material/Science";
 import EditNoteIcon from "@mui/icons-material/EditNote";
@@ -170,11 +169,6 @@ const DatabasesPage = () => {
   const handleDownload = (dbName: string) => {
     const url = endpoint(`databases/${encodeURIComponent(dbName)}`);
     window.open(url, "_blank");
-  };
-
-  const handleOpenOverview = (dbName: string) => {
-    const params = new URLSearchParams({ db_name: dbName });
-    navigate(`/databases/overview?${params.toString()}`);
   };
 
   const handleOpenSingleCell = (dbName: string) => {
@@ -323,7 +317,6 @@ const DatabasesPage = () => {
                     <TableCell align="center">{t("databases.table.deepScan")}</TableCell>
                     <TableCell align="center">{t("databases.table.singleCell")}</TableCell>
                     <TableCell align="center">{t("databases.table.annotation")}</TableCell>
-                    <TableCell align="center">{t("databases.table.overview")}</TableCell>
                     <TableCell align="center">{t("databases.table.delete")}</TableCell>
                   </TableRow>
                 </TableHead>
@@ -395,16 +388,6 @@ const DatabasesPage = () => {
                           onClick={() => handleOpenAnnotation(db.name)}
                         >
                           {t("databases.table.annotation")}
-                        </Button>
-                      </TableCell>
-                      <TableCell align="center">
-                        <Button
-                          variant="contained"
-                          size="small"
-                          startIcon={<InfoOutlinedIcon fontSize="small" />}
-                          onClick={() => handleOpenOverview(db.name)}
-                        >
-                          {t("databases.table.overview")}
                         </Button>
                       </TableCell>
                       <TableCell align="center">
