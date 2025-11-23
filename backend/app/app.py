@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi_swagger import patch_fastapi
 
 from .databases.router import router as databases_router
@@ -13,6 +17,10 @@ from .roi_extract.router import router as roi_router
 from .tiff_manager.router import router as tiff_router
 
 API_PREFIX = "/api/v1"
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = BACKEND_DIR.parent
+FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 
 app = FastAPI(
     title="AbyssEye APIs",
@@ -39,7 +47,37 @@ app.include_router(realtime_router, prefix=API_PREFIX)
 app.include_router(deepscan_router, prefix=API_PREFIX)
 app.include_router(dev_router, prefix=API_PREFIX)
 
+# Serve built frontend assets if they exist.
+app.mount(
+    "/assets",
+    StaticFiles(directory=FRONTEND_DIST / "assets", check_dir=False),
+    name="frontend-assets",
+)
+
 
 @app.get(f"{API_PREFIX}/")
 async def healthcheck() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/", include_in_schema=False)
+async def serve_frontend_root() -> FileResponse:
+    if FRONTEND_INDEX.is_file():
+        return FileResponse(FRONTEND_INDEX)
+    raise HTTPException(status_code=404, detail="Frontend build not found")
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_frontend(full_path: str) -> FileResponse:
+    # Do not swallow API 404s; let FastAPI handle them.
+    if full_path.startswith(API_PREFIX.lstrip("/")):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    requested_path = FRONTEND_DIST / full_path
+    if requested_path.is_file():
+        return FileResponse(requested_path)
+
+    if FRONTEND_INDEX.is_file():
+        return FileResponse(FRONTEND_INDEX)
+
+    raise HTTPException(status_code=404, detail="Frontend build not found")
