@@ -20,7 +20,8 @@ import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 import ArrowForwardIosIcon from "@mui/icons-material/ArrowForwardIos";
 import ReplayIcon from "@mui/icons-material/Replay";
 import { API_BASE_URL } from "../config";
-import { INFERENCE_CLASS_DESCRIPTION_TEXT, getInferenceClassDescription } from "../constants/inference";
+import { getInferenceClassDescription, getInferenceClassDescriptionText } from "../constants/inference";
+import { useI18n } from "../i18n";
 
 type AnnotationRecord = {
   record_id: number;
@@ -111,7 +112,7 @@ const pixelsToDataUrl = (pixels: Uint8ClampedArray, width: number, height: numbe
   return canvas.toDataURL("image/png");
 };
 
-const useProcessedPreviews = (imageSrc: string | null) => {
+const useProcessedPreviews = (imageSrc: string | null, tt: (ja: string, en: string) => string) => {
   const [state, setState] = useState({
     normalized: null as string | null,
     jet: null as string | null,
@@ -138,14 +139,14 @@ const useProcessedPreviews = (imageSrc: string | null) => {
         const width = image.naturalWidth || image.width;
         const height = image.naturalHeight || image.height;
         if (!width || !height) {
-          throw new Error("画像サイズを取得できませんでした。");
+          throw new Error(tt("画像サイズを取得できませんでした。", "Failed to read image size."));
         }
         const baseCanvas = document.createElement("canvas");
         baseCanvas.width = width;
         baseCanvas.height = height;
         const context = baseCanvas.getContext("2d", { willReadFrequently: true });
         if (!context) {
-          throw new Error("キャンバスを作成できませんでした。");
+          throw new Error(tt("キャンバスを作成できませんでした。", "Failed to create canvas."));
         }
         context.drawImage(image, 0, 0, width, height);
         const imageData = context.getImageData(0, 0, width, height);
@@ -159,7 +160,7 @@ const useProcessedPreviews = (imageSrc: string | null) => {
             normalized,
             jet,
             isProcessing: false,
-            error: normalized || jet ? null : "プレビュー画像を生成できませんでした。",
+            error: normalized || jet ? null : tt("プレビュー画像を生成できませんでした。", "Failed to generate preview images."),
           });
         }
       } catch (err) {
@@ -168,7 +169,7 @@ const useProcessedPreviews = (imageSrc: string | null) => {
             normalized: null,
             jet: null,
             isProcessing: false,
-            error: err instanceof Error ? err.message : "描画処理でエラーが発生しました。",
+            error: err instanceof Error ? err.message : tt("描画処理でエラーが発生しました。", "An error occurred while processing the image."),
           });
         }
       }
@@ -179,7 +180,7 @@ const useProcessedPreviews = (imageSrc: string | null) => {
           normalized: null,
           jet: null,
           isProcessing: false,
-          error: "raw画像の読み込みに失敗しました。",
+          error: tt("raw画像の読み込みに失敗しました。", "Failed to load the raw image."),
         });
       }
     };
@@ -194,8 +195,11 @@ const useProcessedPreviews = (imageSrc: string | null) => {
 };
 
 const AnnotationPage = () => {
+  const { language } = useI18n();
+  const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
   const [searchParams] = useSearchParams();
   const dbName = searchParams.get("db_name");
+  const classDescriptionText = useMemo(() => getInferenceClassDescriptionText(language), [language]);
 
   const [records, setRecords] = useState<AnnotationRecord[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -213,11 +217,50 @@ const AnnotationPage = () => {
     () => (currentRecord ? `data:image/png;base64,${currentRecord.png_base64}` : null),
     [currentRecord],
   );
-  const processedPreviews = useProcessedPreviews(imageSrc);
+  const processedPreviews = useProcessedPreviews(imageSrc, tt);
   const [processedMode, setProcessedMode] = useState<ProcessedMode>("normalized");
   const processedImageSrc =
     processedMode === "normalized" ? processedPreviews.normalized : processedPreviews.jet;
   const activeLabel = selectedLabel ?? currentRecord?.manual_label ?? null;
+  const labels = useMemo(
+    () => ({
+      imageSizeError: tt("画像サイズを取得できませんでした。", "Failed to read image size."),
+      canvasError: tt("キャンバスを作成できませんでした。", "Failed to create canvas."),
+      previewError: tt("プレビュー画像を生成できませんでした。", "Failed to generate preview images."),
+      drawError: tt("描画処理でエラーが発生しました。", "An error occurred while processing the image."),
+      rawLoadError: tt("raw画像の読み込みに失敗しました。", "Failed to load the raw image."),
+      fetchRecordsError: tt("ROIレコードの取得に失敗しました。", "Failed to fetch ROI records."),
+      manualUpdateFailed: tt("manual_labelの更新に失敗しました。", "Failed to update manual label."),
+      manualUpdateSuccess: (label: string | null) =>
+        label === null ? tt("ラベルをクリアしました。", "Cleared label.") : tt(`ラベル ${label} を保存しました。`, `Saved label ${label}.`),
+      dbMissingTitle: tt("データベースが指定されていません", "Database is not specified"),
+      dbMissingDescription: tt(
+        "Databasesページから対象のDBを選択し、アノテーションページを開いてください。",
+        "Select a database on the Databases page and open the annotation page.",
+      ),
+      backToDb: tt("Databasesに戻る", "Back to Databases"),
+      title: tt("アノテーション", "Annotation"),
+      instruction: tt(
+        "Enterで次に進み、ラベルは下のボタンで保存できます。キーボードの 0 / 1 / 2 / 3 を押すとボタン選択のみを切り替えます（保存は行いません）。",
+        "Press Enter to go to the next, and save labels with the buttons below. Keys 0 / 1 / 2 / 3 switch selection without saving.",
+      ),
+      rawPreview: tt("Rawプレビュー", "Raw preview"),
+      processedPreview: tt("加工プレビュー", "Processed preview"),
+      previewFailed: tt("プレビューを生成できませんでした。", "Failed to generate preview."),
+      recordInfo: tt("レコード情報", "Record info"),
+      notSelected: tt("未選択", "Not selected"),
+      labelUnset: tt("未設定", "Unset"),
+      selectLabel: tt("ラベルを選択", "Select label"),
+      clearLabel: tt("ラベルをクリア", "Clear label"),
+      prev: tt("前へ", "Prev"),
+      next: tt("次へ", "Next"),
+      reloadRecords: tt("レコードを再取得", "Reload records"),
+      extraRecords: tt(" （追加レコードあり）", " (more records available)"),
+      noRecords: tt("レコードなし", "No records"),
+      loadingRecords: tt("ROIレコードを読み込み中です…", "Loading ROI records..."),
+    }),
+    [tt],
+  );
 
   const fetchRecords = useCallback(
     async (skip: number) => {
@@ -239,7 +282,7 @@ const AnnotationPage = () => {
         );
         const payload: AnnotationRecord[] | null = await response.json().catch(() => null);
         if (!response.ok || !payload || !Array.isArray(payload)) {
-          throw new Error("ROIレコードの取得に失敗しました。");
+          throw new Error(labels.fetchRecordsError);
         }
         setRecords((prev) => (skip === 0 ? payload : [...prev, ...payload]));
         if (payload.length < RECORD_BATCH_SIZE) {
@@ -252,13 +295,13 @@ const AnnotationPage = () => {
           setCurrentIndex(0);
         }
         setHasMoreRecords(false);
-        setRecordsError(err instanceof Error ? err.message : "ROIレコードの取得に失敗しました。");
+        setRecordsError(err instanceof Error ? err.message : labels.fetchRecordsError);
         return 0;
       } finally {
         setIsRecordsLoading(false);
       }
     },
-    [dbName],
+    [dbName, labels.fetchRecordsError],
   );
 
   useEffect(() => {
@@ -317,8 +360,7 @@ const AnnotationPage = () => {
         );
         const payload: ManualLabelResponse | null = await response.json().catch(() => null);
         if (!response.ok || !payload) {
-          const message =
-            (payload as { detail?: string } | null)?.detail ?? "manual_labelの更新に失敗しました。";
+          const message = (payload as { detail?: string } | null)?.detail ?? labels.manualUpdateFailed;
           throw new Error(message);
         }
         setRecords((prev) =>
@@ -328,9 +370,7 @@ const AnnotationPage = () => {
               : record,
           ),
         );
-        setLabelInfo(
-          label === null ? "ラベルをクリアしました。" : `ラベル ${label} を保存しました。`,
-        );
+        setLabelInfo(labels.manualUpdateSuccess(label));
         if (autoAdvance) {
           setTimeout(() => {
             handleNext();
@@ -338,12 +378,12 @@ const AnnotationPage = () => {
         }
         setSelectedLabel(payload.manual_label);
       } catch (err) {
-        setLabelError(err instanceof Error ? err.message : "manual_labelの更新に失敗しました。");
+        setLabelError(err instanceof Error ? err.message : labels.manualUpdateFailed);
       } finally {
         setIsLabelUpdating(false);
       }
     },
-    [currentRecord, dbName, handleNext, isLabelUpdating],
+    [currentRecord, dbName, handleNext, isLabelUpdating, labels.manualUpdateFailed, labels.manualUpdateSuccess],
   );
 
   const handleReload = useCallback(() => {
@@ -384,13 +424,13 @@ const AnnotationPage = () => {
         <Paper variant="outlined" sx={{ p: 3 }}>
           <Stack spacing={2} alignItems="flex-start">
             <Typography variant="h6" fontWeight={600}>
-              データベースが指定されていません
+              {labels.dbMissingTitle}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Databasesページから対象のDBを選択し、アノテーションページを開いてください。
+              {labels.dbMissingDescription}
             </Typography>
             <Button variant="contained" component={RouterLink} to="/databases">
-              Databasesに戻る
+              {labels.backToDb}
             </Button>
           </Stack>
         </Paper>
@@ -415,19 +455,19 @@ const AnnotationPage = () => {
             Databases
           </Link>
           <Typography color="text.primary" fontSize={14}>
-            Annotation
+            {labels.title}
           </Typography>
         </Breadcrumbs>
 
         <Stack spacing={0.5}>
           <Typography variant="h5" fontWeight={600}>
-            アノテーション
+            {labels.title}
           </Typography>
           <Typography variant="body2" color="text.secondary">
             DB: {dbName}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Enterで次に進み、ラベルは下のボタンで保存できます。キーボードの 0 / 1 / 2 / 3 を押すとボタン選択のみを切り替えます（保存は行いません）。
+            {labels.instruction}
           </Typography>
         </Stack>
 
@@ -468,7 +508,7 @@ const AnnotationPage = () => {
                   sx={{ minHeight: 40 }}
                 >
                   <Typography variant="subtitle2" color="text.secondary">
-                    Rawプレビュー
+                    {labels.rawPreview}
                   </Typography>
                   <Box sx={{ width: 120, height: 28 }} />
                 </Stack>
@@ -486,7 +526,7 @@ const AnnotationPage = () => {
                 >
                   {!currentRecord && !isRecordsLoading && (
                     <Typography variant="body2" color="text.secondary">
-                      ROIレコードを読み込み中です…
+                      {labels.loadingRecords}
                     </Typography>
                   )}
                   {isRecordsLoading && (
@@ -521,7 +561,7 @@ const AnnotationPage = () => {
                   sx={{ minHeight: 40 }}
                 >
                   <Typography variant="subtitle2" color="text.secondary">
-                    加工プレビュー
+                    {labels.processedPreview}
                   </Typography>
                   <ToggleButtonGroup
                     size="small"
@@ -552,7 +592,7 @@ const AnnotationPage = () => {
                 >
                   {!currentRecord && (
                     <Typography variant="body2" color="text.secondary">
-                      ROIレコードを読み込み中です…
+                      {labels.loadingRecords}
                     </Typography>
                   )}
                   {currentRecord && processedPreviews.isProcessing && (
@@ -574,7 +614,7 @@ const AnnotationPage = () => {
                     !processedImageSrc &&
                     !isRecordsLoading && (
                       <Typography variant="body2" color="text.secondary">
-                        プレビューを生成できませんでした。
+                        {labels.previewFailed}
                       </Typography>
                     )}
                 </Box>
@@ -596,10 +636,10 @@ const AnnotationPage = () => {
             >
               <Stack spacing={0.5}>
                 <Typography variant="subtitle1" fontWeight={600}>
-                  レコード情報
+                  {labels.recordInfo}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {currentRecord ? `Record #${currentRecord.record_id}` : "未選択"}
+                  {currentRecord ? `Record #${currentRecord.record_id}` : labels.notSelected}
                 </Typography>
                 {currentRecord && (
                   <Stack direction="row" spacing={1} alignItems="center">
@@ -607,7 +647,7 @@ const AnnotationPage = () => {
                       manual_label:
                     </Typography>
                     <Chip
-                      label={currentRecord.manual_label ?? "未設定"}
+                      label={currentRecord.manual_label ?? labels.labelUnset}
                       color={currentRecord.manual_label ? "primary" : "default"}
                       size="small"
                     />
@@ -617,11 +657,11 @@ const AnnotationPage = () => {
 
               <Stack spacing={1}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  ラベルを選択
+                  {labels.selectLabel}
                 </Typography>
                 <ButtonGroup orientation="vertical" fullWidth>
                   {LABEL_OPTIONS.map((label) => {
-                    const description = getInferenceClassDescription(Number(label));
+                    const description = getInferenceClassDescription(Number(label), language);
                     const isActive = activeLabel === label;
                     return (
                       <Button
@@ -642,13 +682,13 @@ const AnnotationPage = () => {
                   onClick={() => handleAssignLabel(null, false)}
                   disabled={!currentRecord || isLabelUpdating}
                 >
-                  ラベルをクリア
+                  {labels.clearLabel}
                 </Button>
               </Stack>
 
               <Box>
                 <Typography variant="body2" color="text.secondary" gutterBottom>
-                  {INFERENCE_CLASS_DESCRIPTION_TEXT}
+                  {classDescriptionText}
                 </Typography>
               </Box>
 
@@ -660,7 +700,7 @@ const AnnotationPage = () => {
                   onClick={handlePrev}
                   disabled={!currentRecord || currentIndex === 0}
                 >
-                  前へ
+                  {labels.prev}
                 </Button>
                 <Button
                   variant="contained"
@@ -669,18 +709,16 @@ const AnnotationPage = () => {
                   onClick={handleNext}
                   disabled={!currentRecord}
                 >
-                  次へ
+                  {labels.next}
                 </Button>
               </Stack>
               <Button variant="text" startIcon={<ReplayIcon />} onClick={handleReload} disabled={isRecordsLoading}>
-                レコードを再取得
+                {labels.reloadRecords}
               </Button>
               <Typography variant="caption" color="text.secondary">
                 {currentRecord
-                  ? `${currentIndex + 1} / ${totalCount}${
-                      hasMoreRecords ? " （追加レコードあり）" : ""
-                    }`
-                  : "レコードなし"}
+                  ? `${currentIndex + 1} / ${totalCount}${hasMoreRecords ? labels.extraRecords : ""}`
+                  : labels.noRecords}
               </Typography>
             </Box>
           </Stack>

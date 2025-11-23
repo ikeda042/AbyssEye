@@ -24,6 +24,7 @@ import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 
 import { API_BASE_URL } from "../config";
 import { getInferenceClassDescription } from "../constants/inference";
+import { useI18n } from "../i18n";
 
 type Inference = {
   predicted_class: number;
@@ -74,10 +75,6 @@ const storageKeys = {
   labelMode: "deepscan:labelMode",
 };
 
-const classLabels = Array.from({ length: 4 }, (_, index) => {
-  const description = getInferenceClassDescription(index);
-  return description ? `Class ${index}（${description}）` : `Class ${index}`;
-});
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
 const overlayStaggerSeconds = 0.008;
 const overlayScanDelayOffset = overlayStaggerSeconds * 10;
@@ -158,7 +155,7 @@ const loadImage = (src: string): Promise<HTMLImageElement> =>
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("画像の読み込みに失敗しました"));
+    img.onerror = () => reject(new Error("Failed to load image"));
     img.src = src;
   });
 
@@ -178,7 +175,7 @@ const applyDisplayMode = async (src: string, mode: DisplayMode): Promise<string>
   canvas.width = img.naturalWidth || img.width;
   canvas.height = img.naturalHeight || img.height;
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("画像の描画に失敗しました");
+  if (!ctx) throw new Error("Failed to draw image");
   ctx.drawImage(img, 0, 0);
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const data = imageData.data;
@@ -228,6 +225,8 @@ const applyDisplayMode = async (src: string, mode: DisplayMode): Promise<string>
 };
 
 const DeepScanPage = () => {
+  const { language } = useI18n();
+  const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
   const [searchParams] = useSearchParams();
   const dbName = searchParams.get("db_name")?.trim() ?? "";
   const [status, setStatus] = useState<DeepScanStatus | null>(null);
@@ -255,6 +254,53 @@ const DeepScanPage = () => {
   const [manualLabelSaving, setManualLabelSaving] = useState(false);
   const [manualLabelMessage, setManualLabelMessage] = useState<string | null>(null);
   const [manualLabelError, setManualLabelError] = useState<string | null>(null);
+  const labels = useMemo(
+    () => ({
+      dbNameRequired: tt("db_name を指定してください。", "Please specify db_name."),
+      fetchFailed: tt("DeepScanデータの取得に失敗しました。", "Failed to fetch DeepScan data."),
+      unexpected: tt("予期しないエラーが発生しました。", "An unexpected error occurred."),
+      manualUpdateFailed: tt("manual_label の更新に失敗しました。", "Failed to update manual label."),
+      manualUpdateSuccess: tt("manual label を更新しました。", "Manual label updated."),
+      tiffDisplayMode: tt("TIFF表示モード", "TIFF display mode"),
+      frameBasis: tt("フレーム基準", "Frame label"),
+      manualFallbackNote: tt(
+        "Manualモードでもラベルが無いROIはAIラベルで描画します。",
+        "Manual mode falls back to AI labels when manual labels are missing.",
+      ),
+      targetDb: tt("対象DB", "Target DB"),
+      updatedAt: tt("更新時刻", "Updated at"),
+      tiffSize: tt("TIFFサイズ", "TIFF size"),
+      deepScanSummary: tt("Deep Scan 概要", "Deep Scan summary"),
+      others: tt("その他", "Others"),
+      frameLabelTitle: tt("フレーム描画ラベル", "Frame label"),
+      frameLabelManual: tt("Manual優先（無ければAI）", "Manual first (fallback to AI)"),
+      frameLabelAi: tt("AI推論", "AI prediction"),
+      reload: tt("再読み込み", "Reload"),
+      reloading: tt("更新中…", "Refreshing..."),
+      backToList: tt("DB一覧へ戻る", "Back to DB list"),
+      manualLabelTitle: tt("Manual Label", "Manual Label"),
+      updating: tt("更新中…", "Updating..."),
+      noLabel: tt("ラベルなし", "No label"),
+      manualHint: tt("ROIを選択するとmanual labelを設定できます。", "Select an ROI to set a manual label."),
+      selectedRoi: tt("選択 ROI", "Selected ROI"),
+      confidence: tt("信頼度", "Confidence"),
+      manualFallbackWarning: tt("manual label が無いため AI ラベルを使用しています。", "Using AI label because manual label is missing."),
+      noRoiSelected: tt("ROIが選択されていません。", "No ROI selected."),
+      inferencePreview: tt("推論プレビュー表示モード", "Inference preview display mode"),
+      noImages: tt("まだ割り当てられた画像がありません。", "No images assigned yet."),
+      infoSelectDb: tt("DeepScanを表示するDBを選択してください。", "Select a DB to view DeepScan."),
+    }),
+    [tt],
+  );
+  const classLabels = useMemo(
+    () =>
+      Array.from({ length: 4 }, (_, index) => {
+        const description = getInferenceClassDescription(index, language);
+        if (!description) return `Class ${index}`;
+        return language === "ja" ? `Class ${index}（${description}）` : `Class ${index} (${description})`;
+      }),
+    [language],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -295,7 +341,7 @@ const DeepScanPage = () => {
     async (targetDb: string, options?: { silent?: boolean }) => {
       const silent = Boolean(options?.silent);
       if (!targetDb) {
-        setError("db_name を指定してください。");
+        setError(labels.dbNameRequired);
         setStatus(null);
         return;
       }
@@ -312,11 +358,11 @@ const DeepScanPage = () => {
         const payload: DeepScanStatus | null = await response.json().catch(() => null);
         if (!response.ok || !payload) {
           const detail = (payload as { detail?: string } | null)?.detail;
-          throw new Error(detail || "DeepScanデータの取得に失敗しました。");
+          throw new Error(detail || labels.fetchFailed);
         }
         setStatus(payload);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "予期しないエラーが発生しました。");
+        setError(err instanceof Error ? err.message : labels.unexpected);
         setStatus(null);
       } finally {
         if (!silent) {
@@ -324,7 +370,7 @@ const DeepScanPage = () => {
         }
       }
     },
-    [],
+    [labels.dbNameRequired, labels.fetchFailed, labels.unexpected],
   );
 
   useEffect(() => {
@@ -468,13 +514,13 @@ const DeepScanPage = () => {
 
   useEffect(() => {
     if (!dbName) {
-      setError("db_name を指定してください。");
+      setError(labels.dbNameRequired);
       setStatus(null);
       return;
     }
     setError(null);
     void fetchStatus(dbName);
-  }, [dbName, fetchStatus]);
+  }, [dbName, fetchStatus, labels.dbNameRequired]);
 
   const classBuckets = useMemo(() => {
     const buckets: Record<number, RealtimeROI[]> = { 0: [], 1: [], 2: [], 3: [] };
@@ -558,9 +604,9 @@ const DeepScanPage = () => {
       });
       if (!response.ok) {
         const detail = (await response.json().catch(() => null))?.detail;
-        throw new Error(detail || "manual_label の更新に失敗しました。");
+        throw new Error(detail || labels.manualUpdateFailed);
       }
-      setManualLabelMessage("manual label を更新しました。");
+      setManualLabelMessage(labels.manualUpdateSuccess);
       setStatus((prev) => {
         if (!prev || !prev.rois) return prev;
         return {
@@ -572,7 +618,7 @@ const DeepScanPage = () => {
       });
       setSelectedOverlayRoiMeta((prev) => (prev ? { ...prev, manual_label: label ?? null } : prev));
     } catch (err) {
-      setManualLabelError(err instanceof Error ? err.message : "manual_label の更新に失敗しました。");
+      setManualLabelError(err instanceof Error ? err.message : labels.manualUpdateFailed);
     } finally {
       setManualLabelSaving(false);
     }
@@ -612,7 +658,7 @@ const DeepScanPage = () => {
               size="small"
               startIcon={<ArrowBackIosNewIcon fontSize="small" />}
             >
-              DB一覧へ戻る
+              {labels.backToList}
             </Button>
             <Button
               variant="contained"
@@ -621,7 +667,7 @@ const DeepScanPage = () => {
               onClick={handleReload}
               disabled={!dbName || loading}
             >
-              {loading ? "更新中…" : "再読み込み"}
+              {loading ? labels.reloading : labels.reload}
             </Button>
           </Stack>
         </Stack>
@@ -664,7 +710,7 @@ const DeepScanPage = () => {
                       }}
                     >
                       <Typography variant="subtitle2" fontWeight={600}>
-                        TIFF表示モード
+                        {labels.tiffDisplayMode}
                       </Typography>
                       <Stack spacing={0.5} alignItems={{ xs: "flex-start", sm: "flex-end" }} sx={{ minWidth: 0 }}>
                         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
@@ -681,7 +727,7 @@ const DeepScanPage = () => {
                           </ToggleButtonGroup>
                           <Stack direction="row" spacing={0.75} alignItems="center">
                             <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
-                              フレーム基準
+                              {labels.frameBasis}
                             </Typography>
                             <ToggleButtonGroup
                               size="small"
@@ -716,7 +762,7 @@ const DeepScanPage = () => {
                           />
                         </Stack>
                         <Typography variant="caption" color="text.secondary">
-                          Manualモードでもラベルが無いROIはAIラベルで描画します。
+                          {labels.manualFallbackNote}
                         </Typography>
                       </Stack>
                     </Stack>
@@ -851,7 +897,7 @@ const DeepScanPage = () => {
                   </Box>
                   <Stack spacing={1.25} sx={{ minWidth: { md: 360 }, width: { md: 420 }, maxWidth: 520, alignSelf: "stretch" }}>
                     <Typography variant="subtitle1" fontWeight={600}>
-                      対象DB
+                      {labels.targetDb}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
                       {status.db_name || dbName}
@@ -860,10 +906,10 @@ const DeepScanPage = () => {
                       TIFF: {status.tif_name}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                      更新時刻: {new Date(status.saved_at).toLocaleString()}
+                      {labels.updatedAt}: {new Date(status.saved_at).toLocaleString()}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                      TIFFサイズ: {formatBytes(status.size_bytes)}
+                      {labels.tiffSize}: {formatBytes(status.size_bytes)}
                     </Typography>
                     <Box
                       sx={{
@@ -879,7 +925,7 @@ const DeepScanPage = () => {
                     >
                       <Box>
                         <Typography variant="subtitle2" fontWeight={600} gutterBottom>
-                          Deep Scan 概要
+                          {labels.deepScanSummary}
                         </Typography>
                         <Stack spacing={0.5}>
                           {classLabels.map((label, idx) => (
@@ -892,11 +938,11 @@ const DeepScanPage = () => {
                           ))}
                           {classBuckets.counts.others > 0 && (
                             <Typography variant="body2" color="text.secondary">
-                              その他: {classBuckets.counts.others}
+                              {labels.others}: {classBuckets.counts.others}
                             </Typography>
                           )}
                           <Typography variant="caption" color="text.secondary">
-                            フレーム描画ラベル: {frameLabelMode === "manual" ? "Manual優先（無ければAI）" : "AI推論"}
+                            {labels.frameLabelTitle}: {frameLabelMode === "manual" ? labels.frameLabelManual : labels.frameLabelAi}
                           </Typography>
                         </Stack>
                       </Box>
@@ -908,11 +954,11 @@ const DeepScanPage = () => {
                       >
                         <Stack direction="row" alignItems="center" justifyContent="space-between" mb={0.5}>
                           <Typography variant="subtitle2" fontWeight={600}>
-                            Manual Label
+                            {labels.manualLabelTitle}
                           </Typography>
                           {manualLabelSaving && (
                             <Typography variant="caption" color="text.secondary">
-                              更新中…
+                              {labels.updating}
                             </Typography>
                           )}
                         </Stack>
@@ -928,7 +974,7 @@ const DeepScanPage = () => {
                             }}
                             disabled={!selectedOverlayRoiMeta || manualLabelSaving || !dbName}
                           >
-                            <ToggleButton value="none">ラベルなし</ToggleButton>
+                            <ToggleButton value="none">{labels.noLabel}</ToggleButton>
                             <ToggleButton value="0">0</ToggleButton>
                             <ToggleButton value="1">1</ToggleButton>
                             <ToggleButton value="2">2</ToggleButton>
@@ -946,7 +992,7 @@ const DeepScanPage = () => {
                           )}
                           {!selectedOverlayRoiMeta && (
                             <Typography variant="caption" color="text.secondary">
-                              ROIを選択するとmanual labelを設定できます。
+                              {labels.manualHint}
                             </Typography>
                           )}
                         </Stack>
@@ -954,7 +1000,7 @@ const DeepScanPage = () => {
                       <Box sx={{ mt: "auto", pt: 1, borderTop: "1px solid rgba(15,23,42,0.08)" }}>
                         <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" mb={0.5}>
                           <Typography variant="subtitle2" fontWeight={600}>
-                            選択 ROI
+                            {labels.selectedRoi}
                           </Typography>
                           {selectedOverlayRoiMeta ? (
                             <Stack direction="row" spacing={1} alignItems="center">
@@ -969,19 +1015,19 @@ const DeepScanPage = () => {
                               <Box>
                                 <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
                                   Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
-                                  {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}基準) / 信頼度(AI):{" "}
+                                  {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}) / {labels.confidence}(AI):{" "}
                                   {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
                                 </Typography>
                                 {frameLabelMode === "manual" && selectedOverlayLabelInfo?.source === "ai" && (
                                   <Typography variant="caption" color="text.secondary">
-                                    manual label が無いため AI ラベルを使用しています。
+                                    {labels.manualFallbackWarning}
                                   </Typography>
                                 )}
                               </Box>
                             </Stack>
                           ) : (
                             <Typography variant="body2" color="text.secondary">
-                              ROIが選択されていません。
+                              {labels.noRoiSelected}
                             </Typography>
                           )}
                         </Stack>
@@ -1004,7 +1050,7 @@ const DeepScanPage = () => {
                           />
                         ) : (
                           <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ py: 1.25 }}>
-                            ROIが選択されていません。
+                            {labels.noRoiSelected}
                           </Typography>
                         )}
                       </Box>
@@ -1024,7 +1070,7 @@ const DeepScanPage = () => {
               <Card variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, gridColumn: { xs: "1", lg: "1 / span 2" } }}>
                 <Stack direction={{ xs: "column", sm: "row" }} alignItems="center" spacing={1} justifyContent="space-between">
                   <Typography variant="subtitle1" fontWeight={600}>
-                    推論プレビュー表示モード
+                    {labels.inferencePreview}
                   </Typography>
                   <ToggleButtonGroup
                     size="small"
@@ -1059,7 +1105,7 @@ const DeepScanPage = () => {
                         }}
                       >
                         <Typography variant="body2" color="text.secondary">
-                          まだ割り当てられた画像がありません。
+                          {labels.noImages}
                         </Typography>
                       </Box>
                     ) : (
@@ -1104,7 +1150,7 @@ const DeepScanPage = () => {
             </Box>
           </Stack>
         ) : (
-          <Alert severity="info">DeepScanを表示するDBを選択してください。</Alert>
+          <Alert severity="info">{labels.infoSelectDb}</Alert>
         )}
       </Stack>
     </Container>

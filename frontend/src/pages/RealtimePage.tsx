@@ -20,6 +20,7 @@ import {
 } from "@mui/material";
 import { API_BASE_URL } from "../config";
 import { getInferenceClassDescription } from "../constants/inference";
+import { useI18n } from "../i18n";
 
 type Inference = {
   predicted_class: number;
@@ -62,10 +63,6 @@ const storageKeys = {
   deepVision: "realtime:deepVisionEnabled",
 };
 
-const classLabels = Array.from({ length: 4 }, (_, index) => {
-  const description = getInferenceClassDescription(index);
-  return description ? `Class ${index}（${description}）` : `Class ${index}`;
-});
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
 const overlayStaggerSeconds = 0.008;
 const overlayScanDelayOffset = overlayStaggerSeconds * 10;
@@ -122,7 +119,7 @@ const loadImage = (src: string): Promise<HTMLImageElement> =>
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("画像の読み込みに失敗しました"));
+    img.onerror = () => reject(new Error("Failed to load image"));
     img.src = src;
   });
 
@@ -142,7 +139,7 @@ const applyDisplayMode = async (src: string, mode: DisplayMode): Promise<string>
   canvas.width = img.naturalWidth || img.width;
   canvas.height = img.naturalHeight || img.height;
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("画像の描画に失敗しました");
+  if (!ctx) throw new Error("Failed to draw image");
   ctx.drawImage(img, 0, 0);
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const data = imageData.data;
@@ -192,6 +189,42 @@ const applyDisplayMode = async (src: string, mode: DisplayMode): Promise<string>
 };
 
 const RealtimePage = () => {
+  const { language } = useI18n();
+  const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
+  const labels = useMemo(
+    () => ({
+      fetchFailed: tt("最新のTIFFを取得できませんでした。", "Failed to fetch the latest TIFF."),
+      unexpected: tt("予期しないエラーが発生しました。", "An unexpected error occurred."),
+      copyFailed: tt("コピーに失敗しました。", "Failed to copy."),
+      copyDone: (tif: string, db: string) =>
+        tt(`コピー完了: TIFF ${tif} / DB ${db}`, `Copied: TIFF ${tif} / DB ${db}`),
+      tiffDisplayMode: tt("TIFF表示モード", "TIFF display mode"),
+      deepScan: "Deep Scan",
+      latestTiff: tt("最新 TIFF", "Latest TIFF"),
+      savedAt: tt("保存時刻", "Saved at"),
+      size: tt("サイズ", "Size"),
+      useData: tt("このデータを使用する", "Use this data"),
+      copying: tt("コピー中...", "Copying..."),
+      deepScanSummary: tt("Deep Scan 概要", "Deep Scan summary"),
+      others: tt("その他", "Others"),
+      selectedRoi: tt("選択 ROI", "Selected ROI"),
+      confidence: tt("信頼度", "Confidence"),
+      noRoiSelected: tt("ROIが選択されていません。", "No ROI selected."),
+      inferencePreview: tt("推論プレビュー表示モード", "Inference preview display mode"),
+      noImages: tt("まだ割り当てられた画像がありません。", "No images assigned yet."),
+      noRealtime: tt("まだRealtime TIFFがありません。アップロードをお待ちください。", "No realtime TIFF yet. Please upload."),
+    }),
+    [tt],
+  );
+  const classLabels = useMemo(
+    () =>
+      Array.from({ length: 4 }, (_, index) => {
+        const description = getInferenceClassDescription(index, language);
+        if (!description) return `Class ${index}`;
+        return language === "ja" ? `Class ${index}（${description}）` : `Class ${index} (${description})`;
+      }),
+    [language],
+  );
   const theme = useTheme();
   const [status, setStatus] = useState<RealtimeStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -249,39 +282,42 @@ const RealtimePage = () => {
     setImageNaturalSize({ width, height });
   }, []);
 
-  const fetchStatus = useCallback(async (options?: { silent?: boolean }) => {
-    const silent = Boolean(options?.silent);
-    if (!silent) {
-      setLoading(true);
-      setError(null);
-      setRenderingTif(false);
-      setUseCurrentMessage(null);
-      setUseCurrentError(null);
-    }
-    try {
-      const response = await fetch(statusEndpoint, { headers: { Accept: "application/json" }, cache: "no-store" });
-      if (!response.ok) {
-        const detail = (await response.json().catch(() => null))?.detail;
-        throw new Error(detail || "最新のTIFFを取得できませんでした。");
-      }
-      const json = (await response.json()) as RealtimeStatus;
-
-      const prev = latestStatusRef.current;
-      const isNewTif = !prev || prev.tif_name !== json.tif_name || prev.saved_at !== json.saved_at;
-      const roisChanged = (prev?.rois?.length ?? 0) !== (json.rois?.length ?? 0);
-
-      if (isNewTif || roisChanged) {
-        setStatus(json);
-        setError(null);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "予期しないエラーが発生しました。");
-    } finally {
+  const fetchStatus = useCallback(
+    async (options?: { silent?: boolean }) => {
+      const silent = Boolean(options?.silent);
       if (!silent) {
-        setLoading(false);
+        setLoading(true);
+        setError(null);
+        setRenderingTif(false);
+        setUseCurrentMessage(null);
+        setUseCurrentError(null);
       }
-    }
-  }, []);
+      try {
+        const response = await fetch(statusEndpoint, { headers: { Accept: "application/json" }, cache: "no-store" });
+        if (!response.ok) {
+          const detail = (await response.json().catch(() => null))?.detail;
+          throw new Error(detail || labels.fetchFailed);
+        }
+        const json = (await response.json()) as RealtimeStatus;
+
+        const prev = latestStatusRef.current;
+        const isNewTif = !prev || prev.tif_name !== json.tif_name || prev.saved_at !== json.saved_at;
+        const roisChanged = (prev?.rois?.length ?? 0) !== (json.rois?.length ?? 0);
+
+        if (isNewTif || roisChanged) {
+          setStatus(json);
+          setError(null);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : labels.unexpected);
+      } finally {
+        if (!silent) {
+          setLoading(false);
+        }
+      }
+    },
+    [labels.fetchFailed, labels.unexpected],
+  );
 
   useEffect(() => {
     latestStatusRef.current = status;
@@ -461,16 +497,16 @@ const RealtimePage = () => {
       const response = await fetch(useCurrentEndpoint, { method: "POST" });
       if (!response.ok) {
         const detail = (await response.json().catch(() => null))?.detail;
-        throw new Error(detail || "コピーに失敗しました。");
+        throw new Error(detail || labels.copyFailed);
       }
       const json = (await response.json()) as { tif_name: string; db_name: string };
-      setUseCurrentMessage(`コピー完了: TIFF ${json.tif_name} / DB ${json.db_name}`);
+      setUseCurrentMessage(labels.copyDone(json.tif_name, json.db_name));
     } catch (err) {
-      setUseCurrentError(err instanceof Error ? err.message : "コピーに失敗しました。");
+      setUseCurrentError(err instanceof Error ? err.message : labels.copyFailed);
     } finally {
       setUsingCurrent(false);
     }
-  }, [status]);
+  }, [labels.copyDone, labels.copyFailed, status]);
 
   const classBuckets = useMemo(() => {
     const buckets: Record<number, RealtimeROI[]> = {
@@ -569,7 +605,7 @@ const RealtimePage = () => {
                       }}
                     >
                       <Typography variant="subtitle2" fontWeight={600}>
-                        TIFF表示モード
+                        {labels.tiffDisplayMode}
                       </Typography>
                       <Stack direction="row" spacing={1} alignItems="center">
                         <ToggleButtonGroup
@@ -592,7 +628,7 @@ const RealtimePage = () => {
                               color="primary"
                             />
                           }
-                          label="Deep Scan"
+                          label={labels.deepScan}
                           sx={{
                             ml: 1,
                             mr: 0,
@@ -769,16 +805,16 @@ const RealtimePage = () => {
                   </Box>
                   <Stack spacing={1.25} sx={{ minWidth: { md: 360 }, width: { md: 420 }, maxWidth: 520, alignSelf: "stretch" }}>
                     <Typography variant="subtitle1" fontWeight={600}>
-                      最新 TIFF
+                      {labels.latestTiff}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
                       {status.tif_name}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                      保存時刻: {new Date(status.saved_at).toLocaleString()}
+                      {labels.savedAt}: {new Date(status.saved_at).toLocaleString()}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                      サイズ: {formatBytes(status.size_bytes)}
+                      {labels.size}: {formatBytes(status.size_bytes)}
                     </Typography>
                     <Button
                       variant="contained"
@@ -786,7 +822,7 @@ const RealtimePage = () => {
                       disabled={!status || usingCurrent}
                       sx={{ mt: 1, width: "100%" }}
                     >
-                      {usingCurrent ? "コピー中..." : "このデータを使用する"}
+                      {usingCurrent ? labels.copying : labels.useData}
                     </Button>
                     <Box
                       sx={{
@@ -802,7 +838,7 @@ const RealtimePage = () => {
                     >
                       <Box>
                         <Typography variant="subtitle2" fontWeight={600} gutterBottom>
-                          Deep Scan 概要
+                          {labels.deepScanSummary}
                         </Typography>
                         <Stack spacing={0.5}>
                           {classLabels.map((label, idx) => (
@@ -815,7 +851,7 @@ const RealtimePage = () => {
                           ))}
                           {classBuckets.counts.others > 0 && (
                             <Typography variant="body2" color="text.secondary">
-                              その他: {classBuckets.counts.others}
+                              {labels.others}: {classBuckets.counts.others}
                             </Typography>
                           )}
                         </Stack>
@@ -823,7 +859,7 @@ const RealtimePage = () => {
                       <Box sx={{ mt: "auto", pt: 1, borderTop: "1px solid rgba(15,23,42,0.08)" }}>
                         <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" mb={0.5}>
                           <Typography variant="subtitle2" fontWeight={600}>
-                            選択 ROI
+                            {labels.selectedRoi}
                           </Typography>
                           {selectedOverlayRoiMeta ? (
                             <Stack direction="row" spacing={1} alignItems="center">
@@ -836,13 +872,13 @@ const RealtimePage = () => {
                                 }}
                               />
                               <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
-                                Class {selectedOverlayRoiMeta.predicted_class} / 信頼度:{" "}
+                                Class {selectedOverlayRoiMeta.predicted_class} / {labels.confidence}:{" "}
                                 {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
                               </Typography>
                             </Stack>
                           ) : (
                             <Typography variant="body2" color="text.secondary">
-                              ROIが選択されていません。
+                              {labels.noRoiSelected}
                             </Typography>
                           )}
                         </Stack>
@@ -867,7 +903,7 @@ const RealtimePage = () => {
                           />
                         ) : (
                           <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ py: 1.25 }}>
-                            ROIが選択されていません。
+                            {labels.noRoiSelected}
                           </Typography>
                         )}
                       </Box>
@@ -887,7 +923,7 @@ const RealtimePage = () => {
               <Card variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, gridColumn: { xs: "1", lg: "1 / span 2" } }}>
                 <Stack direction={{ xs: "column", sm: "row" }} alignItems="center" spacing={1} justifyContent="space-between">
                   <Typography variant="subtitle1" fontWeight={600}>
-                    推論プレビュー表示モード
+                    {labels.inferencePreview}
                   </Typography>
                   <ToggleButtonGroup
                     size="small"
@@ -922,7 +958,7 @@ const RealtimePage = () => {
                         }}
                       >
                         <Typography variant="body2" color="text.secondary">
-                          まだ割り当てられた画像がありません。
+                          {labels.noImages}
                         </Typography>
                       </Box>
                     ) : (
@@ -967,7 +1003,7 @@ const RealtimePage = () => {
             </Box>
           </Stack>
         ) : (
-          <Alert severity="info">まだRealtime TIFFがありません。アップロードをお待ちください。</Alert>
+          <Alert severity="info">{labels.noRealtime}</Alert>
         )}
       </Stack>
     </Container>

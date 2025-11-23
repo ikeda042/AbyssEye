@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -19,6 +19,7 @@ import NotesIcon from "@mui/icons-material/Notes";
 import ApiIcon from "@mui/icons-material/Api";
 import ReplayIcon from "@mui/icons-material/Replay";
 import { API_BASE_URL } from "../config";
+import { useI18n } from "../i18n";
 
 const TEMP_TEXT_ENDPOINT = new URL("dev/temptext", API_BASE_URL).toString();
 const GIT_PULL_ENDPOINT = new URL("dev/git/pull", API_BASE_URL).toString();
@@ -27,6 +28,8 @@ const DEFAULT_WATCH_PATH = "C:\\Users\\YOUR_WINDOWS_USER_NAME\\Desktop\\morono";
 const DEFAULT_API_URL = "http://192.168.10.1:8000/api/v1/realtime/tiff";
 
 const DevPage = () => {
+  const { language } = useI18n();
+  const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
   const [tempText, setTempText] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -42,6 +45,36 @@ const DevPage = () => {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
   const [ps1Message, setPs1Message] = useState<string | null>(null);
   const [ps1Error, setPs1Error] = useState<string | null>(null);
+  const labels = useMemo(
+    () => ({
+      tempFetchError: tt("temptextの取得に失敗しました。", "Failed to fetch temp text."),
+      unexpected: tt("予期しないエラーが発生しました。", "An unexpected error occurred."),
+      tempSaveError: tt("temptextの保存に失敗しました。", "Failed to save temp text."),
+      tempSaveInfo: tt("Temp text を保存しました（メモリ保持）。", "Saved temp text (in-memory)."),
+      tempSaveUnexpected: tt("temptext保存中にエラーが発生しました。", "An error occurred while saving temp text."),
+      gitPullFailed: tt("git pull に失敗しました。", "git pull failed."),
+      gitPullError: tt("git pull でエラーが発生しました。", "Error occurred during git pull."),
+      gitPullRunning: tt("実行中...", "Running..."),
+      ps1DownloadSuccess: tt("watch_and_upload_tiff.ps1 をダウンロードしました（UTF-8 BOM）。", "Downloaded watch_and_upload_tiff.ps1 (UTF-8 BOM)."),
+      ps1DownloadError: tt("ps1の生成に失敗しました。", "Failed to generate ps1."),
+      hero: tt("temptext のメモリ保存、git pull、PowerShell スクリプト生成をまとめました。", "Temp text storage, git pull, and PowerShell script generation utilities."),
+      watchDesc: tt(
+        "WatchPath と ApiUrl を設定して、UTF-8 BOM 付きの PowerShell スクリプトを生成・ダウンロードします。",
+        "Set WatchPath and ApiUrl to generate and download a PowerShell script (UTF-8 BOM).",
+      ),
+      watchPathLabel: tt("WatchPath (例: C:\\\\Users\\\\YourUserName\\\\Desktop\\\\morono)", "WatchPath (e.g., C:\\\\Users\\\\YourUserName\\\\Desktop\\\\morono)"),
+      apiUrlLabel: tt("API URL (例: http://192.168.10.1:8000/api/v1/realtime/tiff)", "API URL (e.g., http://192.168.10.1:8000/api/v1/realtime/tiff)"),
+      downloadPs1: tt(".ps1 をダウンロード", "Download .ps1"),
+      reload: tt("再読み込み", "Reload"),
+      saving: tt("保存中...", "Saving..."),
+      save: tt("保存", "Save"),
+      saved: tt("保存済み", "Saved"),
+      saveShortcut: tt("Ctrl/⌘ + Enter で保存", "Ctrl/⌘ + Enter to save"),
+      lastSavedPrefix: tt("・ 最終保存: ", "・ Last saved: "),
+      gitPullLabel: "git pull --ff-only",
+    }),
+    [tt],
+  );
 
   const fetchText = useCallback(async () => {
     setLoading(true);
@@ -50,18 +83,18 @@ const DevPage = () => {
     try {
       const response = await fetch(TEMP_TEXT_ENDPOINT, { method: "GET", headers: { Accept: "text/plain" }, cache: "no-store" });
       if (!response.ok) {
-        throw new Error("temptextの取得に失敗しました。");
+        throw new Error(labels.tempFetchError);
       }
       const text = await response.text();
       setTempText(text);
       setDirty(false);
       setLastSaved(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "予期しないエラーが発生しました。");
+      setError(err instanceof Error ? err.message : labels.unexpected);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [labels.tempFetchError, labels.unexpected]);
 
   useEffect(() => {
     fetchText();
@@ -81,16 +114,16 @@ const DevPage = () => {
         body: JSON.stringify({ text: tempText }),
       });
       if (!response.ok) {
-        throw new Error("temptextの保存に失敗しました。");
+        throw new Error(labels.tempSaveError);
       }
       const savedText = await response.text();
       setTempText(savedText);
       setDirty(false);
       const savedAt = new Date();
       setLastSaved(savedAt.toLocaleString());
-      setInfo("Temp text を保存しました（メモリ保持）。");
+      setInfo(labels.tempSaveInfo);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "temptext保存中にエラーが発生しました。");
+      setError(err instanceof Error ? err.message : labels.tempSaveUnexpected);
     } finally {
       setSaving(false);
     }
@@ -107,11 +140,11 @@ const DevPage = () => {
       });
       const text = await response.text().catch(() => "");
       if (!response.ok) {
-        throw new Error(text || "git pull に失敗しました。");
+        throw new Error(text || labels.gitPullFailed);
       }
       setGitMessage(text || "git pull completed.");
     } catch (err) {
-      setGitError(err instanceof Error ? err.message : "git pull でエラーが発生しました。");
+      setGitError(err instanceof Error ? err.message : labels.gitPullError);
     } finally {
       setGitPulling(false);
     }
@@ -282,9 +315,9 @@ const DevPage = () => {
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setPs1Message("watch_and_upload_tiff.ps1 をダウンロードしました（UTF-8 BOM）。");
+      setPs1Message(labels.ps1DownloadSuccess);
     } catch (err) {
-      setPs1Error(err instanceof Error ? err.message : "ps1の生成に失敗しました。");
+      setPs1Error(err instanceof Error ? err.message : labels.ps1DownloadError);
       setPs1Message(null);
     }
   };
@@ -312,7 +345,7 @@ const DevPage = () => {
             Developer Utilities
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            temptext のメモリ保存、git pull、PowerShell スクリプト生成をまとめました。
+            {labels.hero}
           </Typography>
         </Box>
 
@@ -320,34 +353,34 @@ const DevPage = () => {
           <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 } }}>
             <Stack spacing={1.5}>
               <Stack direction="row" alignItems="center" spacing={1}>
-                <Typography variant="subtitle1" fontWeight={700}>
-                  make ps1 (TIFF watcher)
-                </Typography>
-              </Stack>
-              <Typography variant="body2" color="text.secondary">
-                WatchPath と ApiUrl を設定して、UTF-8 BOM 付きの PowerShell スクリプトを生成・ダウンロードします。
+              <Typography variant="subtitle1" fontWeight={700}>
+                make ps1 (TIFF watcher)
               </Typography>
-              {ps1Error && <Alert severity="error">{ps1Error}</Alert>}
-              {ps1Message && <Alert severity="success">{ps1Message}</Alert>}
-              <Stack spacing={1.5}>
-                <TextField
-                  label="WatchPath (例: C:\\Users\\YourUserName\\Desktop\\morono)"
-                  value={watchPath}
-                  onChange={(e) => setWatchPath(e.target.value)}
-                  fullWidth
-                />
-                <TextField
-                  label="API URL (例: http://192.168.10.1:8000/api/v1/realtime/tiff)"
-                  value={apiUrl}
-                  onChange={(e) => setApiUrl(e.target.value)}
-                  fullWidth
-                />
-              </Stack>
-              <Box>
-                <Button variant="contained" onClick={handleDownloadPs1}>
-                  .ps1 をダウンロード
-                </Button>
-              </Box>
+            </Stack>
+            <Typography variant="body2" color="text.secondary">
+              {labels.watchDesc}
+            </Typography>
+            {ps1Error && <Alert severity="error">{ps1Error}</Alert>}
+            {ps1Message && <Alert severity="success">{ps1Message}</Alert>}
+            <Stack spacing={1.5}>
+              <TextField
+                label={labels.watchPathLabel}
+                value={watchPath}
+                onChange={(e) => setWatchPath(e.target.value)}
+                fullWidth
+              />
+              <TextField
+                label={labels.apiUrlLabel}
+                value={apiUrl}
+                onChange={(e) => setApiUrl(e.target.value)}
+                fullWidth
+              />
+            </Stack>
+            <Box>
+              <Button variant="contained" onClick={handleDownloadPs1}>
+                {labels.downloadPs1}
+              </Button>
+            </Box>
             </Stack>
           </Paper>
 
@@ -368,7 +401,7 @@ const DevPage = () => {
                   onClick={handleGitPull}
                   disabled={gitPulling}
                 >
-                  {gitPulling ? "実行中..." : "git pull --ff-only"}
+                  {gitPulling ? labels.gitPullRunning : labels.gitPullLabel}
                 </Button>
                 <Button
                   variant="outlined"
@@ -424,11 +457,11 @@ const DevPage = () => {
                   />
                   <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} justifyContent="space-between" alignItems="center">
                     <Typography variant="caption" color="text.secondary">
-                      Ctrl/⌘ + Enter で保存 {lastSaved ? `・ 最終保存: ${lastSaved}` : ""}
+                      {labels.saveShortcut} {lastSaved ? `${labels.lastSavedPrefix}${lastSaved}` : ""}
                     </Typography>
                     <Box display="flex" gap={1.25}>
                       <Button variant="outlined" startIcon={<ReplayIcon />} onClick={fetchText} disabled={loading || saving}>
-                        再読み込み
+                        {labels.reload}
                       </Button>
                       <Button
                         variant="contained"
@@ -436,7 +469,7 @@ const DevPage = () => {
                         onClick={handleSave}
                         disabled={saving || !dirty}
                       >
-                        {saving ? "保存中..." : dirty ? "保存" : "保存済み"}
+                        {saving ? labels.saving : dirty ? labels.save : labels.saved}
                       </Button>
                     </Box>
                   </Stack>
