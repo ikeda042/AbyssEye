@@ -15,7 +15,7 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
   const navigate = useNavigate();
   const location = useLocation();
   const theme = useTheme();
-  const { language, setLanguage, toggleLanguage, t } = useI18n();
+  const { language, setLanguage, t } = useI18n();
   const isHome = location.pathname === "/";
   const headerBorder = theme.palette.divider;
   const handleHomeClick = () => {

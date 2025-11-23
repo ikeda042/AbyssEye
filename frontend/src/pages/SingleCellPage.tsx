@@ -287,6 +287,8 @@ type ProcessedPreviewsState = {
 };
 
 const useProcessedPreviews = (imageSrc: string | null) => {
+  const { language } = useI18n();
+  const tt = (ja: string, en: string) => (language === "ja" ? ja : en);
   const [state, setState] = useState<ProcessedPreviewsState>({
     normalized: null,
     jet: null,
@@ -363,7 +365,7 @@ const useProcessedPreviews = (imageSrc: string | null) => {
     return () => {
       cancelled = true;
     };
-  }, [imageSrc]);
+  }, [imageSrc, language]);
 
   return state;
 };

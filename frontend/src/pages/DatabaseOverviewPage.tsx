@@ -69,7 +69,6 @@ type RenderMode = "raw" | "normalized" | "jet";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 const PREVIEW_LIMIT = 200;
-const DEFAULT_OVERVIEW_ERROR = "Failed to fetch database details.";
 
 const DatabaseOverviewPage = () => {
   const { t, language } = useI18n();

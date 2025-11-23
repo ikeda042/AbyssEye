@@ -360,27 +360,6 @@ const InferencePage = () => {
     [activateModel, selectedModelPath],
   );
 
-  const handleFetchAndRun = useCallback(async () => {
-    if (!dbName) {
-      setRecordsError(messages.dbMissing);
-      return;
-    }
-    if (!selectedModelPath) {
-      setModelActivationError(messages.modelMissing);
-      return;
-    }
-    try {
-      const fetched = await fetchRecords(dbName, MAX_FETCH_LIMIT);
-      if (fetched.length === 0) {
-        setRecordsError(messages.recordsNotFound);
-        return;
-      }
-      await runInference(fetched);
-    } catch {
-      // fetchRecords already handled error messaging
-    }
-  }, [dbName, selectedModelPath, fetchRecords, runInference, messages.dbMissing, messages.modelMissing, messages.recordsNotFound]);
-
   const runInference = useCallback(
     async (targetRecords: ROIRecord[]) => {
       setInferenceResults([]);
@@ -418,6 +397,27 @@ const InferencePage = () => {
     },
     [messages.inferenceError, messages.inferenceFailed],
   );
+
+  const handleFetchAndRun = useCallback(async () => {
+    if (!dbName) {
+      setRecordsError(messages.dbMissing);
+      return;
+    }
+    if (!selectedModelPath) {
+      setModelActivationError(messages.modelMissing);
+      return;
+    }
+    try {
+      const fetched = await fetchRecords(dbName, MAX_FETCH_LIMIT);
+      if (fetched.length === 0) {
+        setRecordsError(messages.recordsNotFound);
+        return;
+      }
+      await runInference(fetched);
+    } catch {
+      // fetchRecords already handled error messaging
+    }
+  }, [dbName, selectedModelPath, fetchRecords, runInference, messages.dbMissing, messages.modelMissing, messages.recordsNotFound]);
 
   const classBuckets = useMemo(() => {
     const buckets: Record<number, InferredRecord[]> = {
