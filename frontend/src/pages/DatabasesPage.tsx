@@ -11,6 +11,11 @@ import {
   InputAdornment,
   Link,
   Paper,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
   Stack,
   Table,
   TableBody,
@@ -132,6 +137,7 @@ const DatabasesPage = () => {
   const [deletingDb, setDeletingDb] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
 
   useEffect(() => {
     setSearch(urlSearch);
@@ -212,6 +218,7 @@ const DatabasesPage = () => {
         setError(err instanceof Error ? err.message : t("databases.deleteUnexpected"));
       } finally {
         setDeletingDb(null);
+        setConfirmTarget(null);
       }
     },
     [fetchDatabases, t],
@@ -396,7 +403,7 @@ const DatabasesPage = () => {
                           color="error"
                           size="small"
                           startIcon={<DeleteOutlineIcon />}
-                          onClick={() => handleDelete(db.name)}
+                          onClick={() => setConfirmTarget(db.name)}
                           disabled={deletingDb === db.name || isLoading}
                         >
                           {deletingDb === db.name ? t("databases.table.deleting") : t("databases.table.delete")}
@@ -409,6 +416,32 @@ const DatabasesPage = () => {
             </TableContainer>
           )}
         </Paper>
+        <Dialog
+          open={Boolean(confirmTarget)}
+          onClose={() => setConfirmTarget(null)}
+          aria-labelledby="delete-db-dialog-title"
+        >
+          <DialogTitle id="delete-db-dialog-title">{t("databases.confirmDeleteTitle")}</DialogTitle>
+          <DialogContent>
+            <DialogContentText>
+              {t("databases.confirmDeleteBody", { name: confirmTarget ?? "" })}
+            </DialogContentText>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setConfirmTarget(null)}>{t("databases.confirmDeleteCancel")}</Button>
+            <Button
+              color="error"
+              onClick={() => {
+                if (confirmTarget) {
+                  void handleDelete(confirmTarget);
+                }
+              }}
+              disabled={Boolean(deletingDb)}
+            >
+              {t("databases.confirmDeleteConfirm")}
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Stack>
     </Container>
   );
