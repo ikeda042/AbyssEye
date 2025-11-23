@@ -20,13 +20,15 @@ const storageKey = "abyssEye:colorMode";
 
 const successPrimary = "#22c55e";
 const darkBg = "#0b1120";
+const darkPrimary = "#e5e7eb";
+const darkSecondary = "#cbd5e1";
 
 const createAppTheme = (mode: PaletteMode) =>
   createTheme({
     palette: {
       mode,
-      primary: { main: mode === "dark" ? successPrimary : "#0f172a" },
-      secondary: { main: mode === "dark" ? successPrimary : "#0f172a" },
+      primary: { main: mode === "dark" ? darkPrimary : "#0f172a" },
+      secondary: { main: mode === "dark" ? darkSecondary : "#0f172a" },
       background: {
         default: mode === "dark" ? darkBg : "#f8fafc",
         paper: mode === "dark" ? "#0f172a" : "#ffffff",

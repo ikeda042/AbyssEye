@@ -18,6 +18,9 @@ import {
   Typography,
   Switch,
   FormControlLabel,
+  ThemeProvider,
+  createTheme,
+  useTheme,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
@@ -225,6 +228,19 @@ const applyDisplayMode = async (src: string, mode: DisplayMode): Promise<string>
 };
 
 const DeepScanPage = () => {
+  const outerTheme = useTheme();
+  const successPrimary = "#22c55e";
+  const deepScanTheme = useMemo(
+    () =>
+      createTheme(outerTheme, {
+        palette: {
+          ...outerTheme.palette,
+          primary: { ...outerTheme.palette.primary, main: successPrimary },
+          secondary: { ...outerTheme.palette.secondary, main: successPrimary },
+        },
+      }),
+    [outerTheme],
+  );
   const { language } = useI18n();
   const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
   const [searchParams] = useSearchParams();
@@ -625,78 +641,79 @@ const DeepScanPage = () => {
   };
 
   return (
-    <Container maxWidth="xl" sx={{ py: 4.25, px: { xs: 0.65, sm: 1, md: 1.35, lg: 1.7, xl: 1.9 } }}>
-      <Stack spacing={2.5}>
-        <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
-          <Link underline="hover" color="inherit" href="/">
-            Home
-          </Link>
-          <Link underline="hover" color="inherit" component={RouterLink} to="/databases">
-            Databases
-          </Link>
-          <Typography color="text.primary" fontSize={14}>
-            DeepScan
-          </Typography>
-        </Breadcrumbs>
-
-        {error && <Alert severity="error">{error}</Alert>}
-
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }} justifyContent="space-between">
-          <Box>
-            <Typography variant="h5" fontWeight={700}>
+    <ThemeProvider theme={deepScanTheme}>
+      <Container maxWidth="xl" sx={{ py: 4.25, px: { xs: 0.65, sm: 1, md: 1.35, lg: 1.7, xl: 1.9 } }}>
+        <Stack spacing={2.5}>
+          <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
+            <Link underline="hover" color="inherit" href="/">
+              Home
+            </Link>
+            <Link underline="hover" color="inherit" component={RouterLink} to="/databases">
+              Databases
+            </Link>
+            <Typography color="text.primary" fontSize={14}>
               DeepScan
             </Typography>
-            {/* <Typography variant="body2" color="text.secondary">
-              既存のROIデータベースに対してRealtimeビューと同じ可視化を提供します。
-            </Typography> */}
-          </Box>
-          <Stack direction="row" spacing={1}>
-            <Button
-              component={RouterLink}
-              to="/databases"
-              variant="outlined"
-              size="small"
-              startIcon={<ArrowBackIosNewIcon fontSize="small" />}
-            >
-              {labels.backToList}
-            </Button>
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<RefreshIcon fontSize="small" />}
-              onClick={handleReload}
-              disabled={!dbName || loading}
-            >
-              {loading ? labels.reloading : labels.reload}
-            </Button>
-          </Stack>
-        </Stack>
+          </Breadcrumbs>
 
-        {loading ? (
-          <Box display="flex" justifyContent="center" py={6}>
-            <CircularProgress />
-          </Box>
-        ) : status ? (
-          <Stack spacing={3}>
-            <Card variant="outlined">
-              <CardContent>
-                <Stack
-                  direction={{ xs: "column", md: "row" }}
-                  spacing={2.5}
-                  alignItems="stretch"
-                >
-                  <Box
-                    sx={{
-                      flex: 1,
-                      minWidth: 0,
-                      borderRadius: 1,
-                      overflow: "hidden",
-                      border: "1px solid rgba(15,23,42,0.1)",
-                      backgroundColor: (theme) => theme.palette.background.paper,
-                      display: "flex",
-                      flexDirection: "column",
-                    }}
+          {error && <Alert severity="error">{error}</Alert>}
+
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }} justifyContent="space-between">
+            <Box>
+              <Typography variant="h5" fontWeight={700}>
+                DeepScan
+              </Typography>
+              {/* <Typography variant="body2" color="text.secondary">
+                既存のROIデータベースに対してRealtimeビューと同じ可視化を提供します。
+              </Typography> */}
+            </Box>
+            <Stack direction="row" spacing={1}>
+              <Button
+                component={RouterLink}
+                to="/databases"
+                variant="outlined"
+                size="small"
+                startIcon={<ArrowBackIosNewIcon fontSize="small" />}
+              >
+                {labels.backToList}
+              </Button>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<RefreshIcon fontSize="small" />}
+                onClick={handleReload}
+                disabled={!dbName || loading}
+              >
+                {loading ? labels.reloading : labels.reload}
+              </Button>
+            </Stack>
+          </Stack>
+
+          {loading ? (
+            <Box display="flex" justifyContent="center" py={6}>
+              <CircularProgress />
+            </Box>
+          ) : status ? (
+            <Stack spacing={3}>
+              <Card variant="outlined">
+                <CardContent>
+                  <Stack
+                    direction={{ xs: "column", md: "row" }}
+                    spacing={2.5}
+                    alignItems="stretch"
                   >
+                    <Box
+                      sx={{
+                        flex: 1,
+                        minWidth: 0,
+                        borderRadius: 1,
+                        overflow: "hidden",
+                        border: "1px solid rgba(15,23,42,0.1)",
+                        backgroundColor: (theme) => theme.palette.background.paper,
+                        display: "flex",
+                        flexDirection: "column",
+                      }}
+                    >
                     <Stack
                       direction={{ xs: "column", sm: "row" }}
                       spacing={{ xs: 1, sm: 1.5 }}
@@ -1154,6 +1171,7 @@ const DeepScanPage = () => {
         )}
       </Stack>
     </Container>
+    </ThemeProvider>
   );
 };
 
