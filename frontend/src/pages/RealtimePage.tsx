@@ -226,6 +226,7 @@ const RealtimePage = () => {
     [language],
   );
   const theme = useTheme();
+  const deepScanAccentColor = theme.palette.success?.main ?? "#22c55e";
   const [status, setStatus] = useState<RealtimeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -625,7 +626,7 @@ const RealtimePage = () => {
                               size="medium"
                               checked={deepVisionOverlayEnabled}
                               onChange={(_, checked) => setDeepVisionOverlayEnabled(checked)}
-                              color="primary"
+                              color="success"
                             />
                           }
                           label={labels.deepScan}
@@ -635,7 +636,7 @@ const RealtimePage = () => {
                             "& .MuiFormControlLabel-label": {
                               fontWeight: 700,
                               fontSize: 14,
-                              color: deepVisionOverlayEnabled ? "primary.main" : "text.secondary",
+                              color: deepVisionOverlayEnabled ? deepScanAccentColor : "text.secondary",
                               letterSpacing: "0.01em",
                             },
                           }}
