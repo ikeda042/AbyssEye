@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, File, UploadFile, Request, HTTPException
+from fastapi import APIRouter, File, UploadFile, Request, HTTPException, Body
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from . import crud
@@ -133,8 +133,8 @@ async def stream_realtime_status(request: Request) -> StreamingResponse:
 
 
 @router.post("/use-current")
-async def use_current_realtime_assets() -> dict:
-    tif_path, db_path = await crud.copy_latest_to_primary_locations()
+async def use_current_realtime_assets(field_name: str | None = Body(default=None, embed=True)) -> dict:
+    tif_path, db_path = await crud.copy_latest_to_primary_locations(field_prefix=field_name)
     return {
         "tif_name": tif_path.name,
         "db_name": db_path.name,

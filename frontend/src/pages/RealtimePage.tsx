@@ -17,6 +17,7 @@ import {
   Typography,
   Switch,
   FormControlLabel,
+  TextField,
 } from "@mui/material";
 import { API_BASE_URL } from "../config";
 import { getInferenceClassDescription } from "../constants/inference";
@@ -50,6 +51,7 @@ type RealtimeStatus = {
   size_bytes: number;
   tif_url: string;
   tif_png_url?: string;
+  db_name?: string;
   inference: Inference;
   rois?: RealtimeROI[];
 };
@@ -213,6 +215,7 @@ const RealtimePage = () => {
       inferencePreview: tt("推論プレビュー表示モード", "Inference preview display mode"),
       noImages: tt("まだ割り当てられた画像がありません。", "No images assigned yet."),
       noRealtime: tt("まだRealtime TIFFがありません。アップロードをお待ちください。", "No realtime TIFF yet. Please upload."),
+      fieldName: tt("フィールド名", "Field name"),
     }),
     [tt],
   );
@@ -252,6 +255,7 @@ const RealtimePage = () => {
   const [usingCurrent, setUsingCurrent] = useState(false);
   const [useCurrentMessage, setUseCurrentMessage] = useState<string | null>(null);
   const [useCurrentError, setUseCurrentError] = useState<string | null>(null);
+  const [fieldName, setFieldName] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -495,7 +499,14 @@ const RealtimePage = () => {
     setUseCurrentMessage(null);
     setUseCurrentError(null);
     try {
-      const response = await fetch(useCurrentEndpoint, { method: "POST" });
+      const payload = fieldName.trim() ? { field_name: fieldName.trim() } : {};
+      const response = await fetch(useCurrentEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
       if (!response.ok) {
         const detail = (await response.json().catch(() => null))?.detail;
         throw new Error(detail || labels.copyFailed);
@@ -507,7 +518,7 @@ const RealtimePage = () => {
     } finally {
       setUsingCurrent(false);
     }
-  }, [labels.copyDone, labels.copyFailed, status]);
+  }, [fieldName, labels.copyDone, labels.copyFailed, status]);
 
   const classBuckets = useMemo(() => {
     const buckets: Record<number, RealtimeROI[]> = {
@@ -817,6 +828,14 @@ const RealtimePage = () => {
                     <Typography variant="body2" color="text.secondary">
                       {labels.size}: {formatBytes(status.size_bytes)}
                     </Typography>
+                    <TextField
+                      label={labels.fieldName}
+                      placeholder="field_1"
+                      value={fieldName}
+                      onChange={(event) => setFieldName(event.target.value)}
+                      size="small"
+                      fullWidth
+                    />
                     <Button
                       variant="contained"
                       onClick={handleUseCurrent}
