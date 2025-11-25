@@ -181,6 +181,17 @@ def _sanitize_prefix(prefix: str | None) -> str | None:
     return cleaned or None
 
 
+def _build_prefix(sample_name: str | None, field_name: str | None) -> str | None:
+    parts: list[str] = []
+    for value in (sample_name, field_name):
+        safe = _sanitize_prefix(value)
+        if safe:
+            parts.append(safe)
+    if not parts:
+        return None
+    return "_".join(parts)
+
+
 def _prefixed_filename(src: Path, prefix: str | None) -> str:
     safe_prefix = _sanitize_prefix(prefix)
     if not safe_prefix:
@@ -598,13 +609,16 @@ def get_realtime_tif_path(tif_name: str) -> Path:
     raise HTTPException(status_code=404, detail=f"{safe_name} が見つかりませんでした。")
 
 
-async def copy_latest_to_primary_locations(field_prefix: str | None = None) -> tuple[Path, Path]:
+async def copy_latest_to_primary_locations(
+    *, sample_name: str | None = None, field_name: str | None = None
+) -> tuple[Path, Path]:
     """Copy latest realtime TIFF/DB into primary folders used by tiff_manager & databases."""
     _ensure_storage_dir()
     status = await get_latest_status()
 
-    tif_name = _prefixed_filename(status.tif_path, field_prefix)
-    db_name = _prefixed_filename(status.db_path, field_prefix)
+    prefix = _build_prefix(sample_name, field_name)
+    tif_name = _prefixed_filename(status.tif_path, prefix)
+    db_name = _prefixed_filename(status.db_path, prefix)
 
     tif_target = await asyncio.to_thread(
         _copy_with_dedup,

@@ -133,8 +133,14 @@ async def stream_realtime_status(request: Request) -> StreamingResponse:
 
 
 @router.post("/use-current")
-async def use_current_realtime_assets(field_name: str | None = Body(default=None, embed=True)) -> dict:
-    tif_path, db_path = await crud.copy_latest_to_primary_locations(field_prefix=field_name)
+async def use_current_realtime_assets(
+    field_name: str | None = Body(default=None, embed=True),
+    sample_name: str | None = Body(default=None, embed=True),
+) -> dict:
+    tif_path, db_path = await crud.copy_latest_to_primary_locations(
+        sample_name=sample_name,
+        field_name=field_name,
+    )
     return {
         "tif_name": tif_path.name,
         "db_name": db_path.name,

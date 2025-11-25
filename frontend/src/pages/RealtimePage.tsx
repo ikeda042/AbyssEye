@@ -215,6 +215,7 @@ const RealtimePage = () => {
       inferencePreview: tt("推論プレビュー表示モード", "Inference preview display mode"),
       noImages: tt("まだ割り当てられた画像がありません。", "No images assigned yet."),
       noRealtime: tt("まだRealtime TIFFがありません。アップロードをお待ちください。", "No realtime TIFF yet. Please upload."),
+      sampleName: tt("サンプル名", "Sample name"),
       fieldName: tt("フィールド名", "Field name"),
     }),
     [tt],
@@ -255,6 +256,7 @@ const RealtimePage = () => {
   const [usingCurrent, setUsingCurrent] = useState(false);
   const [useCurrentMessage, setUseCurrentMessage] = useState<string | null>(null);
   const [useCurrentError, setUseCurrentError] = useState<string | null>(null);
+  const [sampleName, setSampleName] = useState("");
   const [fieldName, setFieldName] = useState("");
 
   useEffect(() => {
@@ -499,7 +501,9 @@ const RealtimePage = () => {
     setUseCurrentMessage(null);
     setUseCurrentError(null);
     try {
-      const payload = fieldName.trim() ? { field_name: fieldName.trim() } : {};
+      const payload: Record<string, string> = {};
+      if (sampleName.trim()) payload.sample_name = sampleName.trim();
+      if (fieldName.trim()) payload.field_name = fieldName.trim();
       const response = await fetch(useCurrentEndpoint, {
         method: "POST",
         headers: {
@@ -518,7 +522,7 @@ const RealtimePage = () => {
     } finally {
       setUsingCurrent(false);
     }
-  }, [fieldName, labels.copyDone, labels.copyFailed, status]);
+  }, [fieldName, labels.copyDone, labels.copyFailed, sampleName, status]);
 
   const classBuckets = useMemo(() => {
     const buckets: Record<number, RealtimeROI[]> = {
@@ -828,14 +832,24 @@ const RealtimePage = () => {
                     <Typography variant="body2" color="text.secondary">
                       {labels.size}: {formatBytes(status.size_bytes)}
                     </Typography>
-                    <TextField
-                      label={labels.fieldName}
-                      placeholder="field_1"
-                      value={fieldName}
-                      onChange={(event) => setFieldName(event.target.value)}
-                      size="small"
-                      fullWidth
-                    />
+                    <Stack spacing={1}>
+                      <TextField
+                        label={labels.sampleName}
+                        placeholder="sample_1"
+                        value={sampleName}
+                        onChange={(event) => setSampleName(event.target.value)}
+                        size="small"
+                        fullWidth
+                      />
+                      <TextField
+                        label={labels.fieldName}
+                        placeholder="field_1"
+                        value={fieldName}
+                        onChange={(event) => setFieldName(event.target.value)}
+                        size="small"
+                        fullWidth
+                      />
+                    </Stack>
                     <Button
                       variant="contained"
                       onClick={handleUseCurrent}
