@@ -57,6 +57,8 @@ const DevPage = () => {
       gitPullRunning: tt("実行中...", "Running..."),
       ps1DownloadSuccess: tt("watch_and_upload_tiff.ps1 をダウンロードしました（UTF-8 BOM）。", "Downloaded watch_and_upload_tiff.ps1 (UTF-8 BOM)."),
       ps1DownloadError: tt("ps1の生成に失敗しました。", "Failed to generate ps1."),
+      ps1CopySuccess: tt("ps1 をクリップボードにコピーしました。", "Copied ps1 to clipboard."),
+      ps1CopyError: tt("ps1 のコピーに失敗しました。", "Failed to copy ps1."),
       hero: tt("temptext のメモリ保存、git pull、PowerShell スクリプト生成をまとめました。", "Temp text storage, git pull, and PowerShell script generation utilities."),
       watchDesc: tt(
         "WatchPath と ApiUrl を設定して、UTF-8 BOM 付きの PowerShell スクリプトを生成・ダウンロードします。",
@@ -65,6 +67,7 @@ const DevPage = () => {
       watchPathLabel: tt("WatchPath (例: C:\\\\Users\\\\YourUserName\\\\Desktop\\\\morono)", "WatchPath (e.g., C:\\\\Users\\\\YourUserName\\\\Desktop\\\\morono)"),
       apiUrlLabel: tt(`API URL (例: ${DEFAULT_TIFF_API_URL})`, `API URL (e.g., ${DEFAULT_TIFF_API_URL})`),
       downloadPs1: tt(".ps1 をダウンロード", "Download .ps1"),
+      copyPs1: tt(".ps1 をコピー", "Copy .ps1"),
       reload: tt("再読み込み", "Reload"),
       saving: tt("保存中...", "Saving..."),
       save: tt("保存", "Save"),
@@ -322,6 +325,34 @@ const DevPage = () => {
     }
   };
 
+  const handleCopyPs1 = async () => {
+    try {
+      setPs1Error(null);
+      const content = buildPs1Content();
+
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(content);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = content;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        if (!copied) {
+          throw new Error(labels.ps1CopyError);
+        }
+      }
+
+      setPs1Message(labels.ps1CopySuccess);
+    } catch (err) {
+      setPs1Error(err instanceof Error ? err.message : labels.ps1CopyError);
+      setPs1Message(null);
+    }
+  };
+
   return (
     <Container
       maxWidth="lg"
@@ -377,9 +408,14 @@ const DevPage = () => {
               />
             </Stack>
             <Box>
-              <Button variant="contained" onClick={handleDownloadPs1}>
-                {labels.downloadPs1}
-              </Button>
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                <Button variant="contained" onClick={handleDownloadPs1}>
+                  {labels.downloadPs1}
+                </Button>
+                <Button variant="outlined" onClick={handleCopyPs1}>
+                  {labels.copyPs1}
+                </Button>
+              </Stack>
             </Box>
             </Stack>
           </Paper>
