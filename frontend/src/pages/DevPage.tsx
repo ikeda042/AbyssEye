@@ -75,7 +75,7 @@ const DevPage = () => {
       saveShortcut: tt("Ctrl/⌘ + Enter で保存", "Ctrl/⌘ + Enter to save"),
       lastSavedPrefix: tt("・ 最終保存: ", "・ Last saved: "),
       gitPullLabel: "git pull --ff-only",
-      tempShareNote: tt("ここにテキストを入れると他の人と共有できます。", "Text here can be shared with others."),
+      tempShareNote: tt("ここにテキストを入れると他の人と共有できます", "Text here can be shared with others."),
     }),
     [tt],
   );
