@@ -151,3 +151,13 @@ async def delete_database(db_name: str) -> DatabaseDeleteResponse:
 async def delete_database_post(payload: DatabaseDeleteRequest) -> DatabaseDeleteResponse:
     deleted_name = crud.delete_database_file(payload.db_name)
     return DatabaseDeleteResponse(deleted_name=deleted_name)
+
+
+@router.post(
+    "/delete/by-name",
+    response_model=DatabaseDeleteResponse,
+    description="Fallback endpoint that avoids /{db_name} conflicts in some proxies.",
+)
+async def delete_database_post_by_name(payload: DatabaseDeleteRequest) -> DatabaseDeleteResponse:
+    deleted_name = crud.delete_database_file(payload.db_name)
+    return DatabaseDeleteResponse(deleted_name=deleted_name)

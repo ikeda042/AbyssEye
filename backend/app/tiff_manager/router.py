@@ -49,3 +49,13 @@ async def delete_tif_file(tif_name: str) -> DeleteTiffResponse:
 async def delete_tif_file_post(payload: DeleteTiffRequest) -> DeleteTiffResponse:
     deleted_name = await crud.delete_tif_file(payload.tif_name)
     return DeleteTiffResponse(deleted_name=deleted_name)
+
+
+@router.post(
+    "/delete/by-name",
+    response_model=DeleteTiffResponse,
+    description="Additional POST variant to avoid conflicts with /{tif_name} routes.",
+)
+async def delete_tif_file_post_by_name(payload: DeleteTiffRequest) -> DeleteTiffResponse:
+    deleted_name = await crud.delete_tif_file(payload.tif_name)
+    return DeleteTiffResponse(deleted_name=deleted_name)

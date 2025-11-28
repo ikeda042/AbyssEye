@@ -204,7 +204,8 @@ const DatabasesPage = () => {
       setDeletingDb(dbName);
       try {
         const deleteUrl = endpoint(`databases/${encodeURIComponent(dbName)}`);
-        const fallbackUrl = endpoint("databases/delete");
+        const fallbackUrl = endpoint("databases/delete/by-name");
+        const legacyFallbackUrl = endpoint("databases/delete");
 
         const sendDelete = () =>
           fetch(deleteUrl, {
@@ -219,9 +220,19 @@ const DatabasesPage = () => {
             body: JSON.stringify({ db_name: dbName }),
           });
 
+        const sendLegacyPostFallback = () =>
+          fetch(legacyFallbackUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ db_name: dbName }),
+          });
+
         let response = await sendDelete();
         if (response.status === 405) {
           response = await sendPostFallback();
+        }
+        if ((response.status === 405 || response.status === 404) && legacyFallbackUrl !== fallbackUrl) {
+          response = await sendLegacyPostFallback();
         }
 
         const payload: { deleted_name?: string; detail?: string } = await response.json().catch(() => ({}));

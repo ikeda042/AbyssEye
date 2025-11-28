@@ -105,7 +105,8 @@ const TiffManagerPage = () => {
       setDeletingFile(filename);
       try {
         const deleteUrl = endpoint(`tiff/${encodeURIComponent(filename)}`);
-        const fallbackUrl = endpoint("tiff/delete");
+        const fallbackUrl = endpoint("tiff/delete/by-name");
+        const legacyFallbackUrl = endpoint("tiff/delete");
 
         const sendDelete = () =>
           fetch(deleteUrl, {
@@ -120,9 +121,19 @@ const TiffManagerPage = () => {
             body: JSON.stringify({ tif_name: filename }),
           });
 
+        const sendLegacyPostFallback = () =>
+          fetch(legacyFallbackUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ tif_name: filename }),
+          });
+
         let response = await sendDelete();
         if (response.status === 405) {
           response = await sendPostFallback();
+        }
+        if ((response.status === 405 || response.status === 404) && legacyFallbackUrl !== fallbackUrl) {
+          response = await sendLegacyPostFallback();
         }
 
         const payload: { deleted_name?: string; detail?: string } = await response.json().catch(() => ({}));
