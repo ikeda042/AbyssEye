@@ -203,15 +203,32 @@ const DatabasesPage = () => {
       setInfo(null);
       setDeletingDb(dbName);
       try {
-        const response = await fetch(endpoint(`databases/${encodeURIComponent(dbName)}`), {
-          method: "DELETE",
-        });
+        const deleteUrl = endpoint(`databases/${encodeURIComponent(dbName)}`);
+        const fallbackUrl = endpoint("databases/delete");
+
+        const sendDelete = () =>
+          fetch(deleteUrl, {
+            method: "DELETE",
+            headers: { Accept: "application/json" },
+          });
+
+        const sendPostFallback = () =>
+          fetch(fallbackUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ db_name: dbName }),
+          });
+
+        let response = await sendDelete();
+        if (response.status === 405) {
+          response = await sendPostFallback();
+        }
+
+        const payload: { deleted_name?: string; detail?: string } = await response.json().catch(() => ({}));
         if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
           throw new Error(payload.detail || t("databases.deleteError"));
         }
-        const result: { deleted_name?: string } = await response.json().catch(() => ({}));
-        const deletedName = result.deleted_name ?? dbName;
+        const deletedName = payload.deleted_name ?? dbName;
         await fetchDatabases();
         setInfo(t("databases.deleteSuccess", { name: deletedName }));
       } catch (err) {

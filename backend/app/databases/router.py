@@ -32,6 +32,14 @@ class DatabaseOverviewResponse(BaseModel):
     image_height_px: int | None = Field(None, description="ROI抽出時の画像高さ（px）")
 
 
+class DatabaseDeleteRequest(BaseModel):
+    db_name: str = Field(..., description="Database filename to delete")
+
+
+class DatabaseDeleteResponse(BaseModel):
+    deleted_name: str
+
+
 def _serialize_database_overview(overview: crud.DatabaseOverview) -> DatabaseOverviewResponse:
     return DatabaseOverviewResponse(
         db_name=overview.name,
@@ -133,7 +141,13 @@ async def download_database(db_name: str) -> FileResponse:
     return FileResponse(db_path, media_type="application/octet-stream", filename=db_path.name)
 
 
-@router.delete("/{db_name}")
-async def delete_database(db_name: str) -> dict:
+@router.delete("/{db_name}", response_model=DatabaseDeleteResponse)
+async def delete_database(db_name: str) -> DatabaseDeleteResponse:
     deleted_name = crud.delete_database_file(db_name)
-    return {"deleted_name": deleted_name}
+    return DatabaseDeleteResponse(deleted_name=deleted_name)
+
+
+@router.post("/delete", response_model=DatabaseDeleteResponse, description="Fallback for environments blocking HTTP DELETE.")
+async def delete_database_post(payload: DatabaseDeleteRequest) -> DatabaseDeleteResponse:
+    deleted_name = crud.delete_database_file(payload.db_name)
+    return DatabaseDeleteResponse(deleted_name=deleted_name)

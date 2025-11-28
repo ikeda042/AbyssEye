@@ -104,15 +104,32 @@ const TiffManagerPage = () => {
       setInfo(null);
       setDeletingFile(filename);
       try {
-        const response = await fetch(endpoint(`tiff/${encodeURIComponent(filename)}`), {
-          method: "DELETE",
-        });
+        const deleteUrl = endpoint(`tiff/${encodeURIComponent(filename)}`);
+        const fallbackUrl = endpoint("tiff/delete");
+
+        const sendDelete = () =>
+          fetch(deleteUrl, {
+            method: "DELETE",
+            headers: { Accept: "application/json" },
+          });
+
+        const sendPostFallback = () =>
+          fetch(fallbackUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ tif_name: filename }),
+          });
+
+        let response = await sendDelete();
+        if (response.status === 405) {
+          response = await sendPostFallback();
+        }
+
+        const payload: { deleted_name?: string; detail?: string } = await response.json().catch(() => ({}));
         if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
           throw new Error(payload.detail || t("tiff.deleteError"));
         }
-        const result: { deleted_name?: string } = await response.json().catch(() => ({}));
-        setInfo(t("tiff.deleteSuccess", { name: result.deleted_name ?? filename }));
+        setInfo(t("tiff.deleteSuccess", { name: payload.deleted_name ?? filename }));
         await fetchTifFiles();
       } catch (err) {
         setError(err instanceof Error ? err.message : t("tiff.deleteUnexpected"));
