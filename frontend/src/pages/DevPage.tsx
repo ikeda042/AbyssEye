@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -31,7 +31,7 @@ const DevPage = () => {
   const { language } = useI18n();
   const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
   const [tempText, setTempText] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
@@ -99,10 +99,6 @@ const DevPage = () => {
       setLoading(false);
     }
   }, [labels.tempFetchError, labels.unexpected]);
-
-  useEffect(() => {
-    fetchText();
-  }, [fetchText]);
 
   const handleSave = async () => {
     setSaving(true);
