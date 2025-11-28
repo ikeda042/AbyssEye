@@ -99,11 +99,12 @@ async def stream_realtime_status(request: Request) -> StreamingResponse:
             try:
                 status = await crud.get_latest_status()
                 payload = _build_status_payload(status, request)
+                size_signature = str(payload.get("size_bytes", ""))
                 roi_signature = "|".join(
                     f"{roi['roi_id']}-{roi['predicted_class']}-{roi['confidence']:.3f}"
                     for roi in payload.get("rois", [])
                 )
-                signature = f"{payload['tif_name']}::{payload['saved_at']}::{roi_signature}"
+                signature = f"{payload['tif_name']}::{payload['saved_at']}::{size_signature}::{roi_signature}"
                 if signature != last_signature:
                     last_signature = signature
                     data = json.dumps(payload, ensure_ascii=False)

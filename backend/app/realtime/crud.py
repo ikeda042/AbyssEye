@@ -539,10 +539,14 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
     db_path = await asyncio.to_thread(_create_db_from_tif, target_path)
     rois = await asyncio.to_thread(_load_rois_with_inference, db_path, target_path)
     inference = _build_inference_summary(rois, target_path.name)
+    try:
+        saved_ts = max(target_path.stat().st_mtime, db_path.stat().st_mtime)
+    except OSError:
+        saved_ts = target_path.stat().st_mtime
 
     _latest_status = RealtimeStatus(
         tif_path=target_path,
-        saved_at=datetime.now(),
+        saved_at=datetime.fromtimestamp(saved_ts),
         size_bytes=target_path.stat().st_size,
         db_path=db_path,
         inference=inference,
@@ -570,9 +574,11 @@ async def get_latest_status() -> RealtimeStatus:
 
         latest = candidates[0]
         latest_mtime = latest.stat().st_mtime
+        latest_size = latest.stat().st_size
         if (
             _latest_status
             and _latest_status.tif_path == latest
+            and _latest_status.size_bytes == latest_size
             and _latest_status.saved_at.timestamp() >= latest_mtime
         ):
             return _latest_status
@@ -586,9 +592,13 @@ async def get_latest_status() -> RealtimeStatus:
             db_path = await asyncio.to_thread(_create_db_from_tif, latest_local)
 
         rois = await asyncio.to_thread(_load_rois_with_inference, db_path, latest_local)
+        try:
+            status_saved_ts = max(latest_mtime, db_path.stat().st_mtime)
+        except OSError:
+            status_saved_ts = latest_mtime
         _latest_status = RealtimeStatus(
             tif_path=latest_local,
-            saved_at=datetime.fromtimestamp(latest_mtime),
+            saved_at=datetime.fromtimestamp(status_saved_ts),
             size_bytes=latest_local.stat().st_size,
             db_path=db_path,
             inference=_build_inference_summary(rois, latest_local.name),
