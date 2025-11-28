@@ -25,7 +25,7 @@ const TEMP_TEXT_ENDPOINT = new URL("dev/temptext", API_BASE_URL).toString();
 const GIT_PULL_ENDPOINT = new URL("dev/git/pull", API_BASE_URL).toString();
 const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
 const DEFAULT_WATCH_PATH = "C:\\Users\\YOUR_WINDOWS_USER_NAME\\Desktop\\morono";
-const DEFAULT_API_URL = "http://192.168.10.1:8000/api/v1/realtime/tiff";
+const DEFAULT_TIFF_API_URL = new URL("realtime/tiff", API_BASE_URL).toString();
 
 const DevPage = () => {
   const { language } = useI18n();
@@ -42,7 +42,7 @@ const DevPage = () => {
   const [gitMessage, setGitMessage] = useState<string | null>(null);
   const [gitError, setGitError] = useState<string | null>(null);
   const [watchPath, setWatchPath] = useState(DEFAULT_WATCH_PATH);
-  const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
+  const [apiUrl, setApiUrl] = useState(DEFAULT_TIFF_API_URL);
   const [ps1Message, setPs1Message] = useState<string | null>(null);
   const [ps1Error, setPs1Error] = useState<string | null>(null);
   const labels = useMemo(
@@ -63,7 +63,7 @@ const DevPage = () => {
         "Set WatchPath and ApiUrl to generate and download a PowerShell script (UTF-8 BOM).",
       ),
       watchPathLabel: tt("WatchPath (例: C:\\\\Users\\\\YourUserName\\\\Desktop\\\\morono)", "WatchPath (e.g., C:\\\\Users\\\\YourUserName\\\\Desktop\\\\morono)"),
-      apiUrlLabel: tt("API URL (例: http://192.168.10.1:8000/api/v1/realtime/tiff)", "API URL (e.g., http://192.168.10.1:8000/api/v1/realtime/tiff)"),
+      apiUrlLabel: tt(`API URL (例: ${DEFAULT_TIFF_API_URL})`, `API URL (e.g., ${DEFAULT_TIFF_API_URL})`),
       downloadPs1: tt(".ps1 をダウンロード", "Download .ps1"),
       reload: tt("再読み込み", "Reload"),
       saving: tt("保存中...", "Saving..."),
@@ -155,7 +155,7 @@ const DevPage = () => {
 
   const buildPs1Content = () => {
     const safeWatchPath = escapeForPs(watchPath.trim() || DEFAULT_WATCH_PATH);
-    const safeApiUrl = escapeForPs(apiUrl.trim() || DEFAULT_API_URL);
+    const safeApiUrl = escapeForPs(apiUrl.trim() || DEFAULT_TIFF_API_URL);
     const lines = [
       "# ============================================",
       "# 設定値（必要に応じて書き換えてください）",
