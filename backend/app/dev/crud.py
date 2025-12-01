@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import random
 import subprocess
 from pathlib import Path
+from typing import AsyncIterator
+from urllib import request
 
 POWERSHELL_WATCH_SCRIPT = r"""# ============================================
 # 設定値（必要に応じて書き換えてください）
@@ -147,6 +151,8 @@ finally {
 
 _memory_text = POWERSHELL_WATCH_SCRIPT
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+logger = logging.getLogger(__name__)
+_call_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 async def get_temp_text() -> str:
@@ -175,3 +181,45 @@ async def git_pull() -> str:
         return output.strip() or "git pull completed (no output)"
 
     return await asyncio.to_thread(_task)
+
+
+async def _random_delay_stream(
+    min_seconds: float = 1.0,
+    max_seconds: float = 5.0,
+) -> AsyncIterator[float]:
+    """Yield random wait times indefinitely."""
+    while True:
+        yield random.uniform(min_seconds, max_seconds)
+
+
+async def _hit_url(url: str, timeout: float = 10.0) -> int:
+    """Perform a blocking HTTP GET in a thread and return the status code."""
+    def _task() -> int:
+        with request.urlopen(url, timeout=timeout) as resp:
+            resp.read()
+            return int(resp.getcode() or 0)
+
+    return await asyncio.to_thread(_task)
+
+
+async def _call_forever(url: str) -> None:
+    """Continuously call the given URL with random 1-5 second intervals."""
+    async for wait_seconds in _random_delay_stream():
+        try:
+            status_code = await _hit_url(url)
+            logger.info("call_api hit %s -> %s", url, status_code)
+        except Exception:
+            logger.exception("call_api request failed for %s", url)
+        await asyncio.sleep(wait_seconds)
+
+
+async def call_api(url: str) -> str:
+    """Start a background loop that repeatedly calls the URL every 1-5 seconds."""
+    existing = _call_tasks.get(url)
+    if existing and not existing.done():
+        return f"Already calling {url}"
+
+    task = asyncio.create_task(_call_forever(url))
+    _call_tasks[url] = task
+    task.add_done_callback(lambda _: _call_tasks.pop(url, None))
+    return f"Started calling {url}"

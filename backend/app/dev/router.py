@@ -13,6 +13,10 @@ class TempTextPayload(BaseModel):
     text: str
 
 
+class CallApiPayload(BaseModel):
+    url: str
+
+
 @router.get("/temptext", response_class=PlainTextResponse)
 async def temp_text() -> str:
     return await crud.get_temp_text()
@@ -29,3 +33,8 @@ async def run_git_pull() -> str:
         return await crud.git_pull()
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/call-api", response_class=PlainTextResponse)
+async def call_api(payload: CallApiPayload) -> str:
+    return await crud.call_api(payload.url)
