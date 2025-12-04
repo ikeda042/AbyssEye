@@ -15,6 +15,7 @@ from .inference.router import router as inference_router
 from .realtime.router import router as realtime_router
 from .roi_extract.router import router as roi_router
 from .tiff_manager.router import router as tiff_router
+from .tiff_manager_buld.router import router as tiff_bulk_router
 
 API_PREFIX = "/api/v1"
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -45,6 +46,7 @@ app.add_middleware(
 )
 
 app.include_router(tiff_router, prefix=API_PREFIX)
+app.include_router(tiff_bulk_router, prefix=API_PREFIX)
 app.include_router(roi_router, prefix=API_PREFIX)
 app.include_router(databases_router, prefix=API_PREFIX)
 app.include_router(inference_router, prefix=API_PREFIX)

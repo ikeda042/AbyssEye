@@ -8,6 +8,7 @@ import StorageIcon from "@mui/icons-material/Storage";
 import DisplaySettingsIcon from "@mui/icons-material/DisplaySettings";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import AutoGraphIcon from "@mui/icons-material/AutoGraph";
+import Inventory2Icon from "@mui/icons-material/Inventory2";
 import { API_BASE_URL } from "./config";
 import { useI18n } from "./i18n";
 
@@ -39,6 +40,13 @@ const TopPage = () => {
         path: "/tiff-manager",
         accent,
         icon: <DisplaySettingsIcon />,
+      },
+      {
+        title: t("top.cards.roiBulk.title"),
+        description: t("top.cards.roiBulk.desc"),
+        path: "/tiff-manager-bulk",
+        accent,
+        icon: <Inventory2Icon />,
       },
       {
         title: t("top.cards.databases.title"),
