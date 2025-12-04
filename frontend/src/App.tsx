@@ -40,6 +40,10 @@ const createAppTheme = (mode: PaletteMode) =>
       divider: mode === "dark" ? "rgba(226, 232, 240, 0.12)" : "rgba(15, 23, 42, 0.1)",
     },
     shape: { borderRadius: 0 },
+    typography: {
+      fontFamily:
+        '"Manrope", "Inter", "Bricolage Grotesque", "Noto Sans JP", system-ui, -apple-system, "Segoe UI", sans-serif',
+    },
     components: {
       MuiCssBaseline: {
         styleOverrides: {
