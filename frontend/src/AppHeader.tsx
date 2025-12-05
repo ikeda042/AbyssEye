@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { AppBar, Box, Divider, Stack, Toolbar, Typography, IconButton, useTheme, ToggleButton, ToggleButtonGroup } from "@mui/material";
 import { useLocation, useNavigate } from "react-router-dom";
 import LightModeIcon from "@mui/icons-material/LightMode";
@@ -23,6 +24,7 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
       navigate("/");
     }
   };
+  const logoSrc = useMemo(() => `${import.meta.env.BASE_URL || "/"}logo.png`, []);
 
   return (
     <AppBar
@@ -38,7 +40,7 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexGrow: 1 }}>
           <Box
             component="img"
-            src="/logo.png"
+            src={logoSrc}
             alt={t("header.logoAlt")}
             title={t("header.logoTitle")}
             onClick={handleHomeClick}
