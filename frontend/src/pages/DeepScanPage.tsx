@@ -76,6 +76,7 @@ const storageKeys = {
   tifDisplayMode: "deepscan:tifDisplayMode",
   deepVision: "deepscan:deepVisionEnabled",
   labelMode: "deepscan:labelMode",
+  previewLabelMode: "deepscan:previewLabelMode",
 };
 
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
@@ -130,9 +131,9 @@ const loadStoredDeepVision = (): boolean => {
   return true;
 };
 
-const loadStoredLabelMode = (): LabelMode => {
+const loadStoredLabelMode = (key: string = storageKeys.labelMode): LabelMode => {
   if (typeof window === "undefined") return "ai";
-  const stored = window.localStorage.getItem(storageKeys.labelMode);
+  const stored = window.localStorage.getItem(key);
   return stored === "manual" ? "manual" : "ai";
 };
 
@@ -250,6 +251,13 @@ const DeepScanPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [tifDisplayMode, setTifDisplayMode] = useState<DisplayMode>(() => loadStoredTifMode());
   const [frameLabelMode, setFrameLabelMode] = useState<LabelMode>(() => loadStoredLabelMode());
+  const [previewLabelMode, setPreviewLabelMode] = useState<LabelMode>(() => {
+    if (typeof window === "undefined") return "ai";
+    const storedPreview = window.localStorage.getItem(storageKeys.previewLabelMode);
+    if (storedPreview === "manual") return "manual";
+    if (storedPreview === "ai") return "ai";
+    return loadStoredLabelMode();
+  });
   const [roiDisplayMode, setRoiDisplayMode] = useState<DisplayMode>("raw");
   const [deepVisionOverlayEnabled, setDeepVisionOverlayEnabled] = useState<boolean>(() => loadStoredDeepVision());
   const [renderedTifSrc, setRenderedTifSrc] = useState<string | null>(null);
@@ -270,6 +278,8 @@ const DeepScanPage = () => {
   const [manualLabelSaving, setManualLabelSaving] = useState(false);
   const [manualLabelMessage, setManualLabelMessage] = useState<string | null>(null);
   const [manualLabelError, setManualLabelError] = useState<string | null>(null);
+  const [draggingRoiId, setDraggingRoiId] = useState<number | null>(null);
+  const [dragOverClass, setDragOverClass] = useState<number | null>(null);
   const labels = useMemo(
     () => ({
       dbNameRequired: tt("db_name を指定してください。", "Please specify db_name."),
@@ -282,6 +292,11 @@ const DeepScanPage = () => {
       manualFallbackNote: tt(
         "Manualモードでもラベルが無いROIはAIラベルで描画します。",
         "Manual mode falls back to AI labels when manual labels are missing.",
+      ),
+      previewLabelMode: tt("プレビューのラベル基準", "Preview label mode"),
+      dragToReassign: tt(
+        "推論画像を別のクラス枠へドラッグ＆ドロップすると manual_label を更新します。",
+        "Drag an inference preview image to another class bucket to update its manual_label.",
       ),
       targetDb: tt("対象DB", "Target DB"),
       updatedAt: tt("更新時刻", "Updated at"),
@@ -327,6 +342,11 @@ const DeepScanPage = () => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(storageKeys.labelMode, frameLabelMode);
   }, [frameLabelMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(storageKeys.previewLabelMode, previewLabelMode);
+  }, [previewLabelMode]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -538,11 +558,11 @@ const DeepScanPage = () => {
     void fetchStatus(dbName);
   }, [dbName, fetchStatus, labels.dbNameRequired]);
 
-  const classBuckets = useMemo(() => {
+  const previewBuckets = useMemo(() => {
     const buckets: Record<number, RealtimeROI[]> = { 0: [], 1: [], 2: [], 3: [] };
     const others: RealtimeROI[] = [];
     (status?.rois ?? []).forEach((roi) => {
-      const { label } = resolveLabel(roi, frameLabelMode);
+      const { label } = resolveLabel(roi, previewLabelMode);
       if (label >= 0 && label < 4) {
         const bucketKey = label as 0 | 1 | 2 | 3;
         buckets[bucketKey]?.push(roi);
@@ -558,7 +578,7 @@ const DeepScanPage = () => {
       others: others.length,
     };
     return { buckets, others, counts };
-  }, [status, frameLabelMode]);
+  }, [status, previewLabelMode]);
 
   const overlayKeyPrefix = useMemo(() => {
     if (!status) return "overlay";
@@ -580,6 +600,11 @@ const DeepScanPage = () => {
   const selectedRoiColor =
     (selectedOverlayLabelInfo && classColors[selectedOverlayLabelInfo.label]) ||
     (selectedOverlayRoiMeta ? classColors[selectedOverlayRoiMeta.predicted_class] : undefined);
+
+  const selectedManualLabelValue = (() => {
+    const parsed = parseManualLabel(selectedOverlayRoiMeta?.manual_label);
+    return parsed !== null ? String(parsed) : "none";
+  })();
 
   const roiCaptureOrder = useMemo(() => {
     const rois = status?.rois ?? [];
@@ -604,40 +629,100 @@ const DeepScanPage = () => {
     void fetchStatus(dbName);
   };
 
-  const handleManualLabelUpdate = async (label: string | null) => {
-    if (!dbName || !selectedOverlayRoiId) return;
-    setManualLabelSaving(true);
-    setManualLabelError(null);
-    setManualLabelMessage(null);
-    try {
-      const response = await fetch(buildManualLabelEndpoint(dbName, selectedOverlayRoiId), {
-        method: "PUT",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ manual_label: label }),
-      });
-      if (!response.ok) {
-        const detail = (await response.json().catch(() => null))?.detail;
-        throw new Error(detail || labels.manualUpdateFailed);
+  const updateManualLabel = useCallback(
+    async (roiId: number, label: string | null) => {
+      if (!dbName) return;
+      const isSelected = selectedOverlayRoiId === roiId;
+      if (isSelected) {
+        setManualLabelSaving(true);
+        setManualLabelError(null);
+        setManualLabelMessage(null);
       }
-      setManualLabelMessage(labels.manualUpdateSuccess);
-      setStatus((prev) => {
-        if (!prev || !prev.rois) return prev;
-        return {
-          ...prev,
-          rois: prev.rois.map((roi) =>
-            roi.roi_id === selectedOverlayRoiId ? { ...roi, manual_label: label } : roi,
-          ),
-        };
-      });
-      setSelectedOverlayRoiMeta((prev) => (prev ? { ...prev, manual_label: label ?? null } : prev));
-    } catch (err) {
-      setManualLabelError(err instanceof Error ? err.message : labels.manualUpdateFailed);
-    } finally {
-      setManualLabelSaving(false);
-    }
+      try {
+        const response = await fetch(buildManualLabelEndpoint(dbName, roiId), {
+          method: "PUT",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ manual_label: label }),
+        });
+        if (!response.ok) {
+          const detail = (await response.json().catch(() => null))?.detail;
+          throw new Error(detail || labels.manualUpdateFailed);
+        }
+        setStatus((prev) => {
+          if (!prev || !prev.rois) return prev;
+          return {
+            ...prev,
+            rois: prev.rois.map((roi) => (roi.roi_id === roiId ? { ...roi, manual_label: label } : roi)),
+          };
+        });
+        if (isSelected) {
+          setManualLabelMessage(labels.manualUpdateSuccess);
+          setSelectedOverlayRoiMeta((prev) => (prev ? { ...prev, manual_label: label ?? null } : prev));
+        }
+      } catch (err) {
+        if (isSelected) {
+          setManualLabelError(err instanceof Error ? err.message : labels.manualUpdateFailed);
+        }
+      } finally {
+        if (isSelected) {
+          setManualLabelSaving(false);
+        }
+      }
+    },
+    [dbName, labels.manualUpdateFailed, labels.manualUpdateSuccess, selectedOverlayRoiId],
+  );
+
+  const handleManualLabelUpdate = useCallback(
+    async (label: string | null) => {
+      if (!selectedOverlayRoiId) return;
+      await updateManualLabel(selectedOverlayRoiId, label);
+    },
+    [selectedOverlayRoiId, updateManualLabel],
+  );
+
+  const handleBucketDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!draggingRoiId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  };
+
+  const handleBucketDragEnter = (event: React.DragEvent<HTMLDivElement>, classIndex: number) => {
+    if (!draggingRoiId) return;
+    event.preventDefault();
+    setDragOverClass(classIndex);
+  };
+
+  const handleBucketDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (nextTarget && event.currentTarget.contains(nextTarget)) return;
+    setDragOverClass(null);
+  };
+
+  const handleBucketDrop = (event: React.DragEvent<HTMLDivElement>, classIndex: number) => {
+    event.preventDefault();
+    setDragOverClass(null);
+    setDraggingRoiId(null);
+    const roiIdRaw = event.dataTransfer.getData("text/deepscan-roi-id");
+    const roiId = Number(roiIdRaw);
+    if (!Number.isInteger(roiId)) return;
+    const roi = status?.rois?.find((item) => item.roi_id === roiId);
+    if (!roi) return;
+    const currentManual = parseManualLabel(roi.manual_label);
+    if (currentManual === classIndex) return;
+    void updateManualLabel(roiId, String(classIndex));
+  };
+
+  const handleRoiDragStart = (event: React.DragEvent<HTMLDivElement>, roiId: number) => {
+    event.dataTransfer.setData("text/deepscan-roi-id", String(roiId));
+    event.dataTransfer.effectAllowed = "move";
+    setDraggingRoiId(roiId);
+  };
+
+  const handleRoiDragEnd = () => {
+    setDraggingRoiId(null);
   };
 
   return (
@@ -949,17 +1034,17 @@ const DeepScanPage = () => {
                             <Stack key={label} direction="row" alignItems="center" spacing={1}>
                               <Box sx={{ width: 12, height: 12, borderRadius: 0.75, bgcolor: classColors[idx] }} />
                               <Typography variant="body2" color="text.secondary">
-                                {label}: {classBuckets.counts[idx]}
+                                {label}: {previewBuckets.counts[idx]}
                               </Typography>
                             </Stack>
                           ))}
-                          {classBuckets.counts.others > 0 && (
+                          {previewBuckets.counts.others > 0 && (
                             <Typography variant="body2" color="text.secondary">
-                              {labels.others}: {classBuckets.counts.others}
+                              {labels.others}: {previewBuckets.counts.others}
                             </Typography>
                           )}
                           <Typography variant="caption" color="text.secondary">
-                            {labels.frameLabelTitle}: {frameLabelMode === "manual" ? labels.frameLabelManual : labels.frameLabelAi}
+                            {labels.previewLabelMode}: {previewLabelMode === "manual" ? labels.frameLabelManual : labels.frameLabelAi}
                           </Typography>
                         </Stack>
                       </Box>
@@ -983,7 +1068,7 @@ const DeepScanPage = () => {
                           <ToggleButtonGroup
                             size="small"
                             exclusive
-                            value={selectedOverlayRoiMeta?.manual_label ?? "none"}
+                            value={selectedManualLabelValue}
                             onChange={(_, value) => {
                               if (value === null || manualLabelSaving) return;
                               const next = value === "none" ? null : String(value);
@@ -1085,28 +1170,76 @@ const DeepScanPage = () => {
               }}
             >
               <Card variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, gridColumn: { xs: "1", lg: "1 / span 2" } }}>
-                <Stack direction={{ xs: "column", sm: "row" }} alignItems="center" spacing={1} justifyContent="space-between">
-                  <Typography variant="subtitle1" fontWeight={600}>
-                    {labels.inferencePreview}
-                  </Typography>
-                  <ToggleButtonGroup
-                    size="small"
-                    exclusive
-                    value={roiDisplayMode}
-                    onChange={(_, value) => value && setRoiDisplayMode(value)}
-                  >
-                    <ToggleButton value="raw">Raw</ToggleButton>
-                    <ToggleButton value="normalized">Normalized</ToggleButton>
-                    <ToggleButton value="jet">Jet</ToggleButton>
-                    <ToggleButton value="opticalBoost">Optical Boost</ToggleButton>
-                  </ToggleButtonGroup>
+                <Stack spacing={0.5}>
+                  <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "flex-start", sm: "center" }} spacing={1} justifyContent="space-between">
+                    <Typography variant="subtitle1" fontWeight={600}>
+                      {labels.inferencePreview}
+                    </Typography>
+                    <Stack
+                      direction={{ xs: "column", md: "row" }}
+                      alignItems={{ xs: "flex-start", md: "center" }}
+                      spacing={1}
+                      justifyContent="flex-end"
+                      flexWrap="wrap"
+                    >
+                      <Stack direction="row" spacing={0.75} alignItems="center">
+                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                          {labels.previewLabelMode}
+                        </Typography>
+                        <ToggleButtonGroup
+                          size="small"
+                          exclusive
+                          value={previewLabelMode}
+                          onChange={(_, value) => value && setPreviewLabelMode(value)}
+                        >
+                          <ToggleButton value="ai">AI</ToggleButton>
+                          <ToggleButton value="manual">Manual</ToggleButton>
+                        </ToggleButtonGroup>
+                      </Stack>
+                      <ToggleButtonGroup
+                        size="small"
+                        exclusive
+                        value={roiDisplayMode}
+                        onChange={(_, value) => value && setRoiDisplayMode(value)}
+                      >
+                        <ToggleButton value="raw">Raw</ToggleButton>
+                        <ToggleButton value="normalized">Normalized</ToggleButton>
+                        <ToggleButton value="jet">Jet</ToggleButton>
+                        <ToggleButton value="opticalBoost">Optical Boost</ToggleButton>
+                      </ToggleButtonGroup>
+                    </Stack>
+                  </Stack>
+                  <Stack spacing={0.25}>
+                    <Typography variant="caption" color="text.secondary">
+                      {labels.manualFallbackNote}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {labels.dragToReassign}
+                    </Typography>
+                  </Stack>
                 </Stack>
               </Card>
 
               {classLabels.map((label, classIndex) => {
-                const bucket = classBuckets.buckets[classIndex] ?? [];
+                const bucket = previewBuckets.buckets[classIndex] ?? [];
                 return (
-                  <Card key={label} variant="outlined" sx={{ p: { xs: 1.5, md: 2 } }}>
+                  <Card
+                    key={label}
+                    variant="outlined"
+                    sx={{
+                      p: { xs: 1.5, md: 2 },
+                      borderColor: dragOverClass === classIndex ? "primary.main" : undefined,
+                      boxShadow:
+                        dragOverClass === classIndex
+                          ? "0 0 0 1px rgba(14,165,233,0.32), 0 10px 30px rgba(0,0,0,0.05)"
+                          : undefined,
+                      transition: "border-color 120ms ease, box-shadow 120ms ease",
+                    }}
+                    onDragOver={handleBucketDragOver}
+                    onDragEnter={(event) => handleBucketDragEnter(event, classIndex)}
+                    onDragLeave={handleBucketDragLeave}
+                    onDrop={(event) => handleBucketDrop(event, classIndex)}
+                  >
                     <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
                       <Typography variant="subtitle1" fontWeight={600}>
                         {label} ({bucket.length})
@@ -1143,7 +1276,19 @@ const DeepScanPage = () => {
                                 borderRadius: 1,
                                 overflow: "hidden",
                                 backgroundColor: (theme) => theme.palette.background.paper,
+                                cursor: "grab",
+                                opacity: draggingRoiId === roi.roi_id ? 0.55 : 1,
+                                transition: "opacity 120ms ease, box-shadow 160ms ease, transform 120ms ease",
+                                boxShadow:
+                                  draggingRoiId === roi.roi_id ? "0 8px 24px rgba(15,23,42,0.12)" : undefined,
+                                "&:active": {
+                                  cursor: "grabbing",
+                                  transform: "scale(0.99)",
+                                },
                               }}
+                              draggable
+                              onDragStart={(event) => handleRoiDragStart(event, roi.roi_id)}
+                              onDragEnd={handleRoiDragEnd}
                             >
                               <Box
                                 component="img"
