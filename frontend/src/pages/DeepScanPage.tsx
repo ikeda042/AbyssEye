@@ -1268,6 +1268,7 @@ const DeepScanPage = () => {
                       >
                         {bucket.map((roi) => {
                           const imageSrc = roiDisplaySources[roi.roi_id] || `data:image/png;base64,${roi.png_base64}`;
+                          const isSelected = selectedOverlayRoiId === roi.roi_id;
                           return (
                             <Box
                               key={`${classIndex}-${roi.roi_id}`}
@@ -1280,7 +1281,12 @@ const DeepScanPage = () => {
                                 opacity: draggingRoiId === roi.roi_id ? 0.55 : 1,
                                 transition: "opacity 120ms ease, box-shadow 160ms ease, transform 120ms ease",
                                 boxShadow:
-                                  draggingRoiId === roi.roi_id ? "0 8px 24px rgba(15,23,42,0.12)" : undefined,
+                                  draggingRoiId === roi.roi_id
+                                    ? "0 8px 24px rgba(15,23,42,0.12)"
+                                    : isSelected
+                                    ? "0 0 0 2px rgba(14,165,233,0.35)"
+                                    : undefined,
+                                borderColor: isSelected ? "primary.main" : undefined,
                                 "&:active": {
                                   cursor: "grabbing",
                                   transform: "scale(0.99)",
@@ -1289,6 +1295,7 @@ const DeepScanPage = () => {
                               draggable
                               onDragStart={(event) => handleRoiDragStart(event, roi.roi_id)}
                               onDragEnd={handleRoiDragEnd}
+                              onClick={() => setSelectedOverlayRoiId(roi.roi_id)}
                             >
                               <Box
                                 component="img"
