@@ -22,6 +22,9 @@ from app.roi_extract.roi_module import ROIExtractor
 ROI_SCALE = 0.5
 CLASS_COLORS_HEX = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"]
 DEFAULT_COLOR_HEX = "#6366f1"
+HARDCODED_MODEL_PATH = Path(
+    "/Users/yunosukeikeda/Desktop/JAMSTEC_PROJECT/data_set/Four-class/MyResNet18_model_best_four_class"
+)
 
 
 @dataclass(frozen=True)
@@ -81,8 +84,6 @@ def _roi_patch_to_data_url(patch_rgb: np.ndarray) -> str | None:
 def _infer_rois(
     img_rgb: np.ndarray,
     rois: list[dict[str, Iterable[int]]],
-    *,
-    model_path: str | None,
 ) -> list[RoiInference]:
     results: list[RoiInference] = []
     first_error: Exception | None = None
@@ -94,7 +95,7 @@ def _infer_rois(
             data_url = _roi_patch_to_data_url(patch_rgb)
             if not data_url:
                 continue
-            inference = inference_crud.predict_label(data_url, model_path=model_path)
+            inference = inference_crud.predict_label(data_url, model_path=str(HARDCODED_MODEL_PATH))
             results.append(
                 RoiInference(
                     roi_id=int(roi["ID"]),
@@ -189,12 +190,11 @@ def run_tiff_inference(
     tif_path: str | Path,
     *,
     output_path: str | Path | None = None,
-    model_path: str | None = None,
 ) -> tuple[dict[str, int], Path]:
     path = Path(tif_path).expanduser().resolve()
     img_bgr = _load_tiff(path)
     img_rgb, rois = _prepare_rois(img_bgr, scale=ROI_SCALE)
-    roi_results = _infer_rois(img_rgb, rois, model_path=model_path)
+    roi_results = _infer_rois(img_rgb, rois)
     class_counts = _count_classes(roi_results)
     overlay = _draw_frames(img_bgr, roi_results, scale_factor=1 / ROI_SCALE)
 
@@ -209,7 +209,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run ROI inference on a TIFF and draw frames.")
     parser.add_argument("tiff_path", help="Path to .tif/.tiff")
     parser.add_argument("--output", help="Output image path (PNG)", default=None)
-    parser.add_argument("--model", help="Override model path", default=None)
     return parser
 
 
@@ -219,7 +218,6 @@ def main() -> None:
     counts, output_path = run_tiff_inference(
         args.tiff_path,
         output_path=args.output,
-        model_path=args.model,
     )
     payload = {"class_counts": counts, "framed_image": str(output_path)}
     print(json.dumps(payload, ensure_ascii=True))
