@@ -1,23 +1,22 @@
 from __future__ import annotations
 
-import argparse
 import base64
+import binascii
 import json
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
+from io import BytesIO
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Protocol
 
 import cv2
 import numpy as np
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BACKEND_DIR = PROJECT_ROOT / "backend"
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.append(str(BACKEND_DIR))
-
-from app.inference import crud as inference_crud
-from app.roi_extract.roi_module import ROIExtractor
+from PIL import Image, UnidentifiedImageError
+from scipy.stats import percentileofscore
+from skimage.feature import peak_local_max
+import tensorflow as tf
+from tensorflow import keras
 
 ROI_SCALE = 0.5
 CLASS_COLORS_HEX = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"]
@@ -36,6 +35,216 @@ class RoiInference:
     end_y: int
     predicted_class: int
     confidence: float
+
+
+@dataclass(frozen=True)
+class InferenceResult:
+    predicted_class: int
+    confidence: float
+    probabilities: list[float]
+    model_path: str
+
+
+class ROIExtractor:
+    """Utility helpers for ROI detection."""
+
+    HEIGHT = 48
+    WIDTH = 48
+    GREEN_RATE = 0.07
+    MIN_DISTANCE = 0
+
+    @classmethod
+    def _percentile_threshold(cls, green: np.ndarray, green_rate: float | None = None) -> int:
+        rate = cls.GREEN_RATE if green_rate is None else green_rate
+        height, width = green.shape[:2]
+        num_pixels = height * width
+        hist = np.histogram(green, bins=256, range=(0, 256))
+        cumulative = np.cumsum(hist[0])
+        percentile = percentileofscore(cumulative, (1 - rate) * num_pixels, kind="strict")
+        return int(percentile * 255 * 0.01)
+
+    @classmethod
+    def detect_rois(cls, img_rgb: np.ndarray) -> list[dict[str, Iterable[int]]]:
+        height, width = img_rgb.shape[:2]
+        red = img_rgb[:, :, 0].astype(np.float32)
+        green = img_rgb[:, :, 1].astype(np.float32)
+
+        thresh = cls._percentile_threshold(green)
+
+        mask1 = (green > thresh) & (green > 30) & ((green / (red + 1e-6)) > 1.0)
+        mask2 = (green < thresh) & (green > 30) & ((green / (red + 1e-6)) >= 1.5)
+        mask = (mask1 | mask2).astype(np.uint8) * 255
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        dilated = cv2.morphologyEx(mask, cv2.MORPH_DILATE, kernel, iterations=2)
+        peaks = peak_local_max(dilated, min_distance=cls.MIN_DISTANCE)
+
+        tmp = np.zeros_like(mask, dtype=np.uint8)
+        for y, x in peaks:
+            tmp[y, x] = 1
+
+        nlabels, _, _, centers = cv2.connectedComponentsWithStats(tmp)
+
+        rois: list[dict[str, Iterable[int]]] = []
+        for i in range(1, nlabels):
+            xc, yc = int(centers[i][0]), int(centers[i][1])
+            ys, xs = yc - cls.HEIGHT // 2, xc - cls.WIDTH // 2
+            ye, xe = yc + cls.HEIGHT // 2, xc + cls.WIDTH // 2
+
+            if ys < 0:
+                ys, ye = 0, cls.HEIGHT
+            if xs < 0:
+                xs, xe = 0, cls.WIDTH
+            if ye > height:
+                ys, ye = height - cls.HEIGHT, height
+            if xe > width:
+                xs, xe = width - cls.WIDTH, width
+
+            rois.append(
+                {
+                    "ID": i,
+                    "ST": [int(xs), int(ys)],
+                    "EN": [int(xe), int(ye)],
+                    "CE": [int((xs + xe) / 2), int((ys + ye) / 2)],
+                }
+            )
+        return rois
+
+
+class _Predictor(Protocol):
+    def predict(self, batch: np.ndarray, **kwargs: object) -> np.ndarray: ...
+
+
+IMG_SIZE = (48, 48)
+
+
+def _is_saved_model_dir(path: Path) -> bool:
+    return path.is_dir() and (path / "saved_model.pb").is_file()
+
+
+class _SavedModelSession:
+    """Minimal wrapper around a TF1-style SavedModel graph for inference."""
+
+    def __init__(self, model_path: Path):
+        from tensorflow.python.saved_model import signature_constants, tag_constants  # type: ignore
+
+        self._graph = tf.Graph()
+        try:
+            with self._graph.as_default():
+                self._session = tf.compat.v1.Session(graph=self._graph)
+                meta_graph = tf.compat.v1.saved_model.loader.load(  # type: ignore[attr-defined]
+                    self._session,
+                    [tag_constants.SERVING],
+                    str(model_path),
+                )
+        except Exception as exc:
+            raise RuntimeError(f"SavedModelの読み込みに失敗しました: {exc}") from exc
+
+        signature = meta_graph.signature_def.get(signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY)
+        if not signature:
+            raise RuntimeError("SavedModelにserving_defaultシグネチャが見つかりません。")
+
+        try:
+            input_tensor_info = next(iter(signature.inputs.values()))
+            output_tensor_info = next(iter(signature.outputs.values()))
+        except StopIteration as exc:
+            raise RuntimeError("SavedModelの入出力情報が不正です。") from exc
+
+        try:
+            self._input_tensor = self._graph.get_tensor_by_name(input_tensor_info.name)
+            self._output_tensor = self._graph.get_tensor_by_name(output_tensor_info.name)
+        except KeyError as exc:
+            raise RuntimeError(f"SavedModelのテンソルを取得できません: {exc}") from exc
+
+    def predict(self, batch: np.ndarray, **_: object) -> np.ndarray:
+        try:
+            result = self._session.run(self._output_tensor, feed_dict={self._input_tensor: batch})
+        except Exception as exc:
+            raise RuntimeError(f"SavedModel推論中にエラー: {exc}") from exc
+        return np.asarray(result)
+
+    def __del__(self) -> None:
+        try:
+            self._session.close()
+        except Exception:
+            pass
+
+
+@lru_cache(maxsize=1)
+def _load_model(model_path: str) -> _Predictor:
+    path = Path(model_path)
+    try:
+        if _is_saved_model_dir(path):
+            return _SavedModelSession(path)
+        return keras.models.load_model(model_path, compile=False)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"モデルの読み込みに失敗しました: {exc}") from exc
+
+
+def _resolve_model_path() -> Path:
+    if not HARDCODED_MODEL_PATH.exists():
+        raise FileNotFoundError(f"Model not found: {HARDCODED_MODEL_PATH}")
+    return HARDCODED_MODEL_PATH
+
+
+def _strip_data_url_prefix(value: str) -> str:
+    if value.startswith("data:"):
+        comma_index = value.find(",")
+        if comma_index == -1:
+            raise ValueError("image_base64 の data URL 形式が不正です。")
+        return value[comma_index + 1 :]
+    return value
+
+
+def _decode_image_bytes(image_base64: str) -> bytes:
+    if not image_base64:
+        raise ValueError("image_base64 を指定してください。")
+    payload = _strip_data_url_prefix(image_base64.strip())
+    try:
+        return base64.b64decode(payload, validate=True)
+    except binascii.Error as exc:
+        raise ValueError("image_base64 が不正です。") from exc
+
+
+def _prepare_batch(image_bytes: bytes) -> np.ndarray:
+    if not image_bytes:
+        raise ValueError("画像データが空です。")
+    try:
+        with Image.open(BytesIO(image_bytes)) as img:
+            img = img.convert("RGB")
+            if img.size != IMG_SIZE:
+                img = img.resize(IMG_SIZE)
+            array = np.asarray(img, dtype=np.float32)
+    except UnidentifiedImageError as exc:
+        raise ValueError("画像データの読み込みに失敗しました。") from exc
+
+    return np.expand_dims(array / 255.0, axis=0)
+
+
+def _predict_from_bytes(image_bytes: bytes) -> InferenceResult:
+    batch = _prepare_batch(image_bytes)
+    resolved_path = _resolve_model_path()
+    model = _load_model(str(resolved_path))
+
+    predictions = model.predict(batch, verbose=0)
+    if predictions.ndim != 2 or predictions.shape[0] != 1:
+        raise RuntimeError("推論結果の形状が不正です。")
+
+    probs = predictions[0].astype(float)
+    top_index = int(np.argmax(probs))
+    confidence = float(probs[top_index])
+
+    return InferenceResult(
+        predicted_class=top_index,
+        confidence=confidence,
+        probabilities=[float(p) for p in probs.tolist()],
+        model_path=str(resolved_path),
+    )
+
+
+def predict_label(image_base64: str) -> InferenceResult:
+    image_bytes = _decode_image_bytes(image_base64)
+    return _predict_from_bytes(image_bytes)
 
 
 def _hex_to_bgr(value: str) -> tuple[int, int, int]:
@@ -95,7 +304,7 @@ def _infer_rois(
             data_url = _roi_patch_to_data_url(patch_rgb)
             if not data_url:
                 continue
-            inference = inference_crud.predict_label(data_url, model_path=str(HARDCODED_MODEL_PATH))
+            inference = predict_label(data_url)
             results.append(
                 RoiInference(
                     roi_id=int(roi["ID"]),
@@ -205,19 +414,15 @@ def run_tiff_inference(
     return class_counts, output
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run ROI inference on a TIFF and draw frames.")
-    parser.add_argument("tiff_path", help="Path to .tif/.tiff")
-    parser.add_argument("--output", help="Output image path (PNG)", default=None)
-    return parser
-
-
 def main() -> None:
-    parser = _build_arg_parser()
-    args = parser.parse_args()
+    if len(sys.argv) < 2:
+        print("Usage: python experimental/main.py /path/to/image.tif [output.png]", file=sys.stderr)
+        sys.exit(2)
+    tiff_path = sys.argv[1]
+    output_override = sys.argv[2] if len(sys.argv) > 2 else None
     counts, output_path = run_tiff_inference(
-        args.tiff_path,
-        output_path=args.output,
+        tiff_path,
+        output_path=output_override,
     )
     payload = {"class_counts": counts, "framed_image": str(output_path)}
     print(json.dumps(payload, ensure_ascii=True))
