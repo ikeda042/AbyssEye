@@ -1,0 +1,58 @@
+Gitの基本設定と作業手順メモ（初心者向け）
+更新日: 2026-02-09
+
+[1] git config --global user.name とは？
+- Gitでコミットするときの「作成者名」を設定するコマンド
+- 例:
+  git config --global user.name "Taro Yamada"
+
+[2] --global の意味
+- このPC上の全リポジトリ共通の設定
+- 1回設定すれば毎回設定不要
+
+[3] 最初にやる推奨設定
+1. 名前を設定
+   git config --global user.name "あなたの名前"
+2. メールを設定
+   git config --global user.email "your-email@example.com"
+3. 確認
+   git config --global --list
+
+[4] ブランチを切って試作する標準手順（今回のやり方）
+1. プロジェクトへ移動
+   cd /Users/gashu/Desktop/AbyssEye
+2. 最新を取得
+   git fetch origin
+3. ベースブランチを最新化
+   git pull --rebase origin feat/gashu_1
+4. 作業ブランチ作成（推奨: codex/ プレフィックス）
+   git switch -c codex/<作業名>
+5. 編集後にコミット
+   git add .
+   git commit -m "試作: <内容>"
+6. 初回push（upstream設定）
+   git push -u origin codex/<作業名>
+
+[5] VSCodeでの確認ポイント
+- 左下ブランチ名が意図した作業ブランチか確認
+- push先が origin/<作業ブランチ> か確認
+
+[6] 今回起きたエラーと対処（重要）
+- 症状:
+  - push時に GitHub が pre-receive hook で拒否
+- 原因:
+  - 100MB超ファイル（.venv311 や Modeldata の重いデータ）が履歴に含まれていた
+- 対処:
+  1. クリーンなベースから新ブランチを作り直す
+     git switch -c codex/prototype-gashu-clean origin/feat/gashu_1
+  2. 新ブランチをpush
+     git push -u origin codex/prototype-gashu-clean
+
+[7] 再発防止
+- 仮想環境（.venv311）や学習データ（Modeldata）をGit管理しない
+- 大きなファイルを扱う必要がある場合は Git LFS を検討
+
+[8] 日常コマンド
+- 状態確認: git status
+- 履歴確認: git log --oneline -n 10
+- 現在ブランチ: git branch --show-current

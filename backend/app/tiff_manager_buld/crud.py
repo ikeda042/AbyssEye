@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from sqlalchemy import Column, Float, Integer, LargeBinary, String, create_engin
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.types import JSON as SAJSON
 
+from ..inference import crud as inference_crud
 from ..roi_extract.roi_module import ROIExtractor
 
 APP_DIR = Path(__file__).resolve().parents[1]
@@ -53,6 +55,7 @@ class BulkRoiRecord(Base):
 class FolderInfo:
     name: str
     file_count: int
+    has_extraction_db: bool
 
 
 @dataclass
@@ -81,6 +84,27 @@ class BulkExtractionResult:
     roi_density_per_mp: float
     saved_at: datetime
     files: list[FileExtractionSummary]
+
+
+@dataclass
+class InferenceFileSummary:
+    tif_name: str
+    relative_path: str
+    roi_count: int
+    cell_count: int
+    original_shape: tuple[int, int] | None
+    processed_shape: tuple[int, int] | None
+
+
+@dataclass
+class BulkInferenceResult:
+    folder_name: str
+    db_name: str
+    db_path: Path
+    total_roi_count: int
+    total_cell_count: int
+    inferred_at: datetime
+    files: list[InferenceFileSummary]
 
 
 def _ensure_dirs() -> None:
@@ -181,7 +205,8 @@ async def list_uploaded_folders() -> list[FolderInfo]:
         tiffs = list(_iter_tiff_files(path))
         if not tiffs:
             continue
-        folders.append(FolderInfo(name=path.name, file_count=len(tiffs)))
+        has_db = (DATABASE_DIR / f"{path.name}_bulk.db").exists()
+        folders.append(FolderInfo(name=path.name, file_count=len(tiffs), has_extraction_db=has_db))
     return folders
 
 
@@ -265,6 +290,8 @@ async def extract_folder(folder_name: str) -> BulkExtractionResult:
                         "filename": f"{tif_path.stem}_roi_{roi['ID']:04d}.png",
                         "folder": folder_path.name,
                         "tif_path": relative_path,
+                        "original_shape": {"height": int(h), "width": int(w)},
+                        "processed_shape": {"height": int(processed_h), "width": int(processed_w)},
                         **roi,
                     }
                     record = BulkRoiRecord(
@@ -317,6 +344,121 @@ async def extract_folder(folder_name: str) -> BulkExtractionResult:
             roi_density_per_mp=roi_density,
             saved_at=datetime.now(),
             files=file_results,
+        )
+
+    return await asyncio.to_thread(_run)
+
+
+
+def _read_shape_from_roi_meta(raw_meta: object, key: str) -> tuple[int, int] | None:
+    if not isinstance(raw_meta, dict):
+        return None
+    shape = raw_meta.get(key)
+    if not isinstance(shape, dict):
+        return None
+    height = shape.get("height")
+    width = shape.get("width")
+    if not isinstance(height, int) or not isinstance(width, int):
+        return None
+    return (height, width)
+
+
+async def infer_folder(folder_name: str) -> BulkInferenceResult:
+    """Run inference for all ROIs in the folder DB and summarize counts per image."""
+    _ensure_dirs()
+    folder_path = _resolve_folder(folder_name)
+    db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
+    if not db_path.exists():
+        raise HTTPException(status_code=400, detail="先に一括ROI抽出を実行してください。")
+
+    def _run() -> BulkInferenceResult:
+        db_name = db_path.name
+        try:
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT
+                      id,
+                      image_filename,
+                      image_width_px,
+                      image_height_px,
+                      roi_meta
+                    FROM roi_records
+                    ORDER BY image_filename ASC, id ASC
+                    """
+                ).fetchall()
+        except sqlite3.DatabaseError as exc:
+            raise HTTPException(status_code=500, detail=f"データベース読込中にエラー: {exc}") from exc
+
+        if not rows:
+            return BulkInferenceResult(
+                folder_name=folder_path.name,
+                db_name=db_name,
+                db_path=db_path,
+                total_roi_count=0,
+                total_cell_count=0,
+                inferred_at=datetime.now(),
+                files=[],
+            )
+
+        summaries: dict[str, InferenceFileSummary] = {}
+        total_roi = 0
+        total_cell = 0
+
+        for row in rows:
+            record_id = int(row["id"])
+            image_filename = str(row["image_filename"] or "")
+            if not image_filename:
+                continue
+            if image_filename not in summaries:
+                roi_meta = row["roi_meta"]
+                meta_obj: object = {}
+                if isinstance(roi_meta, str):
+                    try:
+                        import json
+
+                        meta_obj = json.loads(roi_meta)
+                    except Exception:
+                        meta_obj = {}
+                elif isinstance(roi_meta, dict):
+                    meta_obj = roi_meta
+
+                original_shape = _read_shape_from_roi_meta(meta_obj, "original_shape")
+                processed_shape = _read_shape_from_roi_meta(meta_obj, "processed_shape")
+                if processed_shape is None:
+                    height = row["image_height_px"]
+                    width = row["image_width_px"]
+                    if isinstance(height, int) and isinstance(width, int):
+                        processed_shape = (height, width)
+
+                summaries[image_filename] = InferenceFileSummary(
+                    tif_name=Path(image_filename).name,
+                    relative_path=image_filename,
+                    roi_count=0,
+                    cell_count=0,
+                    original_shape=original_shape,
+                    processed_shape=processed_shape,
+                )
+
+            result = inference_crud.predict_label_for_record(db_name=db_name, record_id=record_id)
+            predicted = int(result.predicted_class)
+            summaries[image_filename].roi_count += 1
+            total_roi += 1
+
+            if predicted in (0, 1):
+                summaries[image_filename].cell_count += 1
+                total_cell += 1
+
+        ordered = [summaries[key] for key in sorted(summaries.keys())]
+        return BulkInferenceResult(
+            folder_name=folder_path.name,
+            db_name=db_name,
+            db_path=db_path,
+            total_roi_count=total_roi,
+            total_cell_count=total_cell,
+            inferred_at=datetime.now(),
+            files=ordered,
         )
 
     return await asyncio.to_thread(_run)

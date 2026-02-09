@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import type React from "react";
-import { useSearchParams, Link as RouterLink } from "react-router-dom";
+import { useSearchParams, Link as RouterLink, useNavigate } from "react-router-dom";
 import { keyframes } from "@emotion/react";
 import {
   Alert,
@@ -24,6 +24,7 @@ import {
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
+import ArrowForwardIosIcon from "@mui/icons-material/ArrowForwardIos";
 
 import { API_BASE_URL } from "../config";
 import { getInferenceClassDescription } from "../constants/inference";
@@ -52,6 +53,19 @@ type RealtimeROI = {
   manual_label?: string | number | null;
 };
 
+type Dimensions = {
+  width: number;
+  height: number;
+};
+
+type DeepScanImageInfo = {
+  relative_path: string;
+  tif_name: string;
+  roi_count: number;
+  original_shape?: Dimensions | null;
+  processed_shape?: Dimensions | null;
+};
+
 type DeepScanStatus = {
   db_name?: string;
   tif_name: string;
@@ -61,10 +75,20 @@ type DeepScanStatus = {
   tif_png_url?: string;
   inference: Inference;
   rois?: RealtimeROI[];
+  available_images?: DeepScanImageInfo[];
+  current_index?: number;
+  current_image_relative_path?: string | null;
+  original_shape?: Dimensions | null;
+  processed_shape?: Dimensions | null;
 };
 
-const buildStatusEndpoint = (dbName: string) =>
-  new URL(`deepscan/status?db_name=${encodeURIComponent(dbName)}`, API_BASE_URL).toString();
+const buildStatusEndpoint = (dbName: string, tifName?: string) => {
+  const url = new URL(`deepscan/status?db_name=${encodeURIComponent(dbName)}`, API_BASE_URL);
+  if (tifName) {
+    url.searchParams.set("tif_name", tifName);
+  }
+  return url.toString();
+};
 const buildManualLabelEndpoint = (dbName: string, recordId: number) =>
   new URL(
     `databases/${encodeURIComponent(dbName)}/records/${recordId}/manual-label`,
@@ -108,6 +132,12 @@ const capturePulse = keyframes`
   70% { opacity: 0; transform: scale(1.25); }
   100% { opacity: 0; transform: scale(1.35); }
 `;
+
+const formatDimensions = (dims?: Dimensions | null) => {
+  if (!dims) return "-";
+  if (typeof dims.width !== "number" || typeof dims.height !== "number") return "-";
+  return `${dims.width.toLocaleString()} × ${dims.height.toLocaleString()} px`;
+};
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return "0 B";
@@ -245,7 +275,10 @@ const DeepScanPage = () => {
   const { language } = useI18n();
   const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const dbName = searchParams.get("db_name")?.trim() ?? "";
+  const currentTifParam = searchParams.get("tif_name")?.trim() ?? "";
+  const returnTo = searchParams.get("return_to")?.trim() ?? "";
   const [status, setStatus] = useState<DeepScanStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -309,6 +342,11 @@ const DeepScanPage = () => {
       reload: tt("再読み込み", "Reload"),
       reloading: tt("更新中…", "Refreshing..."),
       backToList: tt("DB一覧へ戻る", "Back to DB list"),
+      backToSelection: tt("一覧に戻る", "Back to selection"),
+      prevImage: tt("前の画像", "Previous image"),
+      nextImage: tt("次の画像", "Next image"),
+      originalResolution: tt("元解像度", "Original resolution"),
+      processedResolution: tt("処理解像度", "Processed resolution"),
       manualLabelTitle: tt("Manual Label", "Manual Label"),
       updating: tt("更新中…", "Updating..."),
       noLabel: tt("ラベルなし", "No label"),
@@ -374,7 +412,7 @@ const DeepScanPage = () => {
   }, []);
 
   const fetchStatus = useCallback(
-    async (targetDb: string, options?: { silent?: boolean }) => {
+    async (targetDb: string, options?: { silent?: boolean; tifName?: string }) => {
       const silent = Boolean(options?.silent);
       if (!targetDb) {
         setError(labels.dbNameRequired);
@@ -387,7 +425,7 @@ const DeepScanPage = () => {
         setRenderingTif(false);
       }
       try {
-        const response = await fetch(buildStatusEndpoint(targetDb), {
+        const response = await fetch(buildStatusEndpoint(targetDb, options?.tifName), {
           headers: { Accept: "application/json" },
           cache: "no-store",
         });
@@ -555,8 +593,8 @@ const DeepScanPage = () => {
       return;
     }
     setError(null);
-    void fetchStatus(dbName);
-  }, [dbName, fetchStatus, labels.dbNameRequired]);
+    void fetchStatus(dbName, { tifName: currentTifParam || undefined });
+  }, [dbName, currentTifParam, fetchStatus, labels.dbNameRequired]);
 
   const previewBuckets = useMemo(() => {
     const buckets: Record<number, RealtimeROI[]> = { 0: [], 1: [], 2: [], 3: [] };
@@ -606,6 +644,30 @@ const DeepScanPage = () => {
     return parsed !== null ? String(parsed) : "none";
   })();
 
+  const availableImages = status?.available_images ?? [];
+  const hasImagePager = availableImages.length > 1;
+  const currentImageIndex = Math.max(0, status?.current_index ?? 0);
+
+  const handleMoveImage = (direction: -1 | 1) => {
+    if (!status || !hasImagePager) return;
+    const nextIndex = currentImageIndex + direction;
+    if (nextIndex < 0 || nextIndex >= availableImages.length) return;
+    const target = availableImages[nextIndex];
+    const params = new URLSearchParams({ db_name: dbName, tif_name: target.relative_path });
+    if (returnTo) {
+      params.set("return_to", returnTo);
+    }
+    navigate(`/deepscan?${params.toString()}`);
+  };
+
+  const handleBackToSelection = () => {
+    if (returnTo) {
+      navigate(returnTo);
+      return;
+    }
+    navigate("/databases");
+  };
+
   const roiCaptureOrder = useMemo(() => {
     const rois = status?.rois ?? [];
     const sortedByPosition = [...rois].sort((a, b) => {
@@ -626,7 +688,7 @@ const DeepScanPage = () => {
 
   const handleReload = () => {
     if (!dbName) return;
-    void fetchStatus(dbName);
+    void fetchStatus(dbName, { tifName: currentTifParam || undefined });
   };
 
   const updateManualLabel = useCallback(
@@ -754,11 +816,10 @@ const DeepScanPage = () => {
             </Box>
             <Stack direction="row" spacing={1}>
               <Button
-                component={RouterLink}
-                to="/databases"
                 variant="outlined"
                 size="small"
                 startIcon={<ArrowBackIosNewIcon fontSize="small" />}
+                onClick={handleBackToSelection}
               >
                 {labels.backToList}
               </Button>
@@ -998,6 +1059,32 @@ const DeepScanPage = () => {
                     </Box>
                   </Box>
                   <Stack spacing={1.25} sx={{ minWidth: { md: 360 }, width: { md: 420 }, maxWidth: 520, alignSelf: "stretch" }}>
+                    <Box sx={{ minHeight: { md: 76 }, display: "flex", flexDirection: "column", justifyContent: "flex-start", gap: 1 }}>
+                      <Stack direction="row" spacing={1}>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={() => handleMoveImage(-1)}
+                          disabled={!hasImagePager || currentImageIndex <= 0}
+                          sx={{ minWidth: 36, px: 1 }}
+                        >
+                          <ArrowBackIosNewIcon fontSize="small" />
+                        </Button>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={() => handleMoveImage(1)}
+                          disabled={!hasImagePager || currentImageIndex >= availableImages.length - 1}
+                          sx={{ minWidth: 36, px: 1 }}
+                        >
+                          <ArrowForwardIosIcon fontSize="small" />
+                        </Button>
+                      </Stack>
+                      <Button variant="outlined" size="small" onClick={handleBackToSelection} sx={{ width: "fit-content" }}>
+                        {labels.backToSelection}
+                      </Button>
+                    </Box>
+
                     <Typography variant="subtitle1" fontWeight={600}>
                       {labels.targetDb}
                     </Typography>
@@ -1012,6 +1099,12 @@ const DeepScanPage = () => {
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
                       {labels.tiffSize}: {formatBytes(status.size_bytes)}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {labels.originalResolution}: {formatDimensions(status.original_shape)}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {labels.processedResolution}: {formatDimensions(status.processed_shape)}
                     </Typography>
                     <Box
                       sx={{

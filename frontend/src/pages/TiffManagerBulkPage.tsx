@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -26,6 +27,7 @@ import DriveFolderUploadIcon from "@mui/icons-material/DriveFolderUpload";
 import ScienceIcon from "@mui/icons-material/Science";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import SearchIcon from "@mui/icons-material/Search";
+import SmartToyIcon from "@mui/icons-material/SmartToy";
 
 import { API_BASE_URL } from "../config";
 import { type Language, useI18n } from "../i18n";
@@ -35,6 +37,7 @@ const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 type FolderEntry = {
   name: string;
   file_count: number;
+  has_extraction_db?: boolean;
 };
 
 type Dimensions = {
@@ -64,13 +67,6 @@ type ExtractionResult = {
 
 type FileWithRelativePath = File & { webkitRelativePath?: string };
 
-const formatDimensions = (dims?: Dimensions) => {
-  if (!dims) return "-";
-  const { width, height } = dims;
-  if (typeof width !== "number" || typeof height !== "number") return "-";
-  return `${width.toLocaleString()} × ${height.toLocaleString()} px`;
-};
-
 const formatFileSize = (bytes?: number) => {
   if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes <= 0) return "-";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -94,12 +90,14 @@ const formatDateTime = (iso?: string, language: Language = "ja") => {
 
 const TiffManagerBulkPage = () => {
   const { t, language } = useI18n();
+  const navigate = useNavigate();
   const [folders, setFolders] = useState<FolderEntry[]>([]);
   const [search, setSearch] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [extractingFolder, setExtractingFolder] = useState<string | null>(null);
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
+  const [inferHintFolder, setInferHintFolder] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [result, setResult] = useState<ExtractionResult | null>(null);
@@ -257,6 +255,20 @@ const TiffManagerBulkPage = () => {
     return folders.filter((folder) => folder.name.toLowerCase().includes(query));
   }, [folders, search]);
 
+  const handleOpenInference = useCallback(
+    (folder: FolderEntry) => {
+      if (!folder.has_extraction_db) {
+        setInferHintFolder(folder.name);
+        return;
+      }
+      setInferHintFolder(null);
+      const dbName = `${folder.name}_bulk.db`;
+      const params = new URLSearchParams({ folder: folder.name, db_name: dbName });
+      navigate(`/tiff-manager-bulk/inference?${params.toString()}`);
+    },
+    [navigate],
+  );
+
   return (
     <Container
       maxWidth={false}
@@ -343,6 +355,7 @@ const TiffManagerBulkPage = () => {
                     <TableCell>{t("bulk.table.folder")}</TableCell>
                     <TableCell align="right">{t("bulk.table.count")}</TableCell>
                     <TableCell align="center">{t("bulk.table.extract")}</TableCell>
+                    <TableCell align="center">{t("bulk.table.infer")}</TableCell>
                     <TableCell align="center">{t("bulk.table.delete")}</TableCell>
                   </TableRow>
                 </TableHead>
@@ -364,11 +377,32 @@ const TiffManagerBulkPage = () => {
                           variant="contained"
                           size="small"
                           startIcon={<ScienceIcon fontSize="small" />}
-                          onClick={() => handleExtract(folder.name)}
+                          onClick={() => {
+                            setInferHintFolder(null);
+                            void handleExtract(folder.name);
+                          }}
                           disabled={extractingFolder === folder.name}
                         >
                           {extractingFolder === folder.name ? t("bulk.extracting") : t("bulk.extract")}
                         </Button>
+                      </TableCell>
+                      <TableCell align="center">
+                        <Stack spacing={0.5} alignItems="center">
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            startIcon={<SmartToyIcon fontSize="small" />}
+                            onClick={() => handleOpenInference(folder)}
+                            disabled={extractingFolder === folder.name}
+                          >
+                            {t("bulk.infer")}
+                          </Button>
+                          {inferHintFolder === folder.name && !folder.has_extraction_db && (
+                            <Typography variant="caption" color="error.main">
+                              {t("bulk.inferNeedsExtract")}
+                            </Typography>
+                          )}
+                        </Stack>
                       </TableCell>
                       <TableCell align="center">
                         <Button
@@ -440,8 +474,6 @@ const TiffManagerBulkPage = () => {
                         <TableRow>
                           <TableCell>{t("bulk.table.filename")}</TableCell>
                           <TableCell align="right">{t("bulk.table.roiCount")}</TableCell>
-                          <TableCell>{t("bulk.table.originalShape")}</TableCell>
-                          <TableCell>{t("bulk.table.processedShape")}</TableCell>
                         </TableRow>
                       </TableHead>
                       <TableBody>
@@ -453,8 +485,6 @@ const TiffManagerBulkPage = () => {
                               </Tooltip>
                             </TableCell>
                             <TableCell align="right">{file.roi_count.toLocaleString()}</TableCell>
-                            <TableCell>{formatDimensions(file.original_shape)}</TableCell>
-                            <TableCell>{formatDimensions(file.processed_shape)}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>

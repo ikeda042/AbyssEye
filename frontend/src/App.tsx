@@ -5,6 +5,7 @@ import type { PaletteMode } from "@mui/material";
 import TopPage from "./TopPage";
 import TiffManagerPage from "./pages/TiffManagerPage";
 import TiffManagerBulkPage from "./pages/TiffManagerBulkPage";
+import TiffManagerBulkInferencePage from "./pages/TiffManagerBulkInferencePage";
 import RoiExtractPage from "./pages/RoiExtractPage";
 import DatabasesPage from "./pages/DatabasesPage";
 import DatabaseOverviewPage from "./pages/DatabaseOverviewPage";
@@ -89,6 +90,7 @@ const App = () => {
             <Route path="/" element={<TopPage />} />
             <Route path="/tiff-manager" element={<TiffManagerPage />} />
             <Route path="/tiff-manager-bulk" element={<TiffManagerBulkPage />} />
+            <Route path="/tiff-manager-bulk/inference" element={<TiffManagerBulkInferencePage />} />
             <Route path="/roi-extract" element={<RoiExtractPage />} />
             <Route path="/databases" element={<DatabasesPage />} />
             <Route path="/databases/overview" element={<DatabaseOverviewPage />} />

@@ -17,10 +17,11 @@ class BulkUploadResponse(BaseModel):
 class FolderInfoResponse(BaseModel):
     name: str
     file_count: int
+    has_extraction_db: bool
 
     @classmethod
     def from_dataclass(cls, item: crud.FolderInfo) -> "FolderInfoResponse":
-        return cls(name=item.name, file_count=item.file_count)
+        return cls(name=item.name, file_count=item.file_count, has_extraction_db=item.has_extraction_db)
 
 
 class FolderListResponse(BaseModel):
@@ -38,6 +39,10 @@ class DeleteFolderResponse(BaseModel):
 
 class ExtractionRequest(BaseModel):
     folder_name: str = Field(..., description="抽出対象のフォルダ名")
+
+
+class InferenceRequest(BaseModel):
+    folder_name: str = Field(..., description="推論対象のフォルダ名")
 
 
 class ExtractionFileResponse(BaseModel):
@@ -84,6 +89,54 @@ class BulkExtractionResponse(BaseModel):
         )
 
 
+class InferenceFileResponse(BaseModel):
+    tif_name: str
+    relative_path: str
+    roi_count: int
+    cell_count: int
+    original_shape: dict | None
+    processed_shape: dict | None
+
+    @classmethod
+    def from_dataclass(cls, item: crud.InferenceFileSummary) -> "InferenceFileResponse":
+        original_shape = None
+        if item.original_shape is not None:
+            original_shape = {"height": item.original_shape[0], "width": item.original_shape[1]}
+        processed_shape = None
+        if item.processed_shape is not None:
+            processed_shape = {"height": item.processed_shape[0], "width": item.processed_shape[1]}
+        return cls(
+            tif_name=item.tif_name,
+            relative_path=item.relative_path,
+            roi_count=item.roi_count,
+            cell_count=item.cell_count,
+            original_shape=original_shape,
+            processed_shape=processed_shape,
+        )
+
+
+class BulkInferenceResponse(BaseModel):
+    folder_name: str
+    db_name: str
+    db_path: str
+    total_roi_count: int
+    total_cell_count: int
+    inferred_at: str
+    files: list[InferenceFileResponse]
+
+    @classmethod
+    def from_dataclass(cls, result: crud.BulkInferenceResult) -> "BulkInferenceResponse":
+        return cls(
+            folder_name=result.folder_name,
+            db_name=result.db_name,
+            db_path=str(result.db_path),
+            total_roi_count=result.total_roi_count,
+            total_cell_count=result.total_cell_count,
+            inferred_at=result.inferred_at.isoformat(),
+            files=[InferenceFileResponse.from_dataclass(file) for file in result.files],
+        )
+
+
 @router.post("/upload", response_model=BulkUploadResponse)
 async def upload_tiff_folder(files: list[UploadFile] = File(...)) -> BulkUploadResponse:  # type: ignore[valid-type]
     """Upload multiple TIFFs while keeping their folder hierarchy."""
@@ -113,3 +166,9 @@ async def delete_folder(folder_name: str) -> DeleteFolderResponse:
 async def extract_folder(payload: ExtractionRequest) -> BulkExtractionResponse:
     result = await crud.extract_folder(payload.folder_name)
     return BulkExtractionResponse.from_dataclass(result)
+
+
+@router.post("/infer", response_model=BulkInferenceResponse)
+async def infer_folder(payload: InferenceRequest) -> BulkInferenceResponse:
+    result = await crud.infer_folder(payload.folder_name)
+    return BulkInferenceResponse.from_dataclass(result)
