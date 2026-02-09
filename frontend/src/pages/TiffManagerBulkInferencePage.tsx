@@ -7,6 +7,7 @@ import {
   Button,
   CircularProgress,
   Container,
+  LinearProgress,
   Link,
   Paper,
   Stack,
@@ -27,18 +28,11 @@ import { useI18n } from "../i18n";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 
-type Dimensions = {
-  width: number;
-  height: number;
-};
-
 type InferenceFile = {
   tif_name: string;
   relative_path: string;
   roi_count: number;
   cell_count: number;
-  original_shape?: Dimensions | null;
-  processed_shape?: Dimensions | null;
 };
 
 type InferenceResult = {
@@ -59,9 +53,13 @@ const TiffManagerBulkInferencePage = () => {
 
   const folderName = searchParams.get("folder")?.trim() ?? "";
   const dbName = searchParams.get("db_name")?.trim() ?? "";
+
   const [result, setResult] = useState<InferenceResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [completedFiles, setCompletedFiles] = useState(0);
+  const [doneRoiCount, setDoneRoiCount] = useState(0);
+  const [isRunning, setIsRunning] = useState(false);
 
   const labels = useMemo(
     () => ({
@@ -78,11 +76,14 @@ const TiffManagerBulkInferencePage = () => {
       roiCount: tt("ROI数", "ROI count"),
       cellCount: tt("細胞数", "Cell count"),
       noFiles: tt("推論結果がありません。", "No inference result."),
+      progressTitle: tt("推論進捗", "Inference Progress"),
+      progressText: tt("{done}/{all} 画像完了・ROI {roiDone}/{roiAll}", "{done}/{all} files done - ROI {roiDone}/{roiAll}"),
+      pending: tt("処理中...", "Processing..."),
     }),
     [tt],
   );
 
-  const fetchInference = useCallback(async () => {
+  const fetchManifestAndRun = useCallback(async () => {
     if (!folderName || !dbName) {
       setError(labels.missingParams);
       setLoading(false);
@@ -92,7 +93,7 @@ const TiffManagerBulkInferencePage = () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(endpoint("tiff-bulk/infer"), {
+      const response = await fetch(endpoint("tiff-bulk/infer/manifest"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ folder_name: folderName }),
@@ -101,18 +102,56 @@ const TiffManagerBulkInferencePage = () => {
       if (!response.ok || !payload || !payload.folder_name) {
         throw new Error(payload.detail || labels.runError);
       }
-      setResult(payload);
+
+      const initialFiles = payload.files;
+      const initiallyCompletedFiles = initialFiles.filter((f) => f.cell_count >= 0);
+      const pendingFiles = initialFiles.filter((f) => f.cell_count < 0);
+      let totalCells = initialFiles.reduce((sum, f) => (f.cell_count >= 0 ? sum + f.cell_count : sum), 0);
+      let processedRoi = initiallyCompletedFiles.reduce((sum, f) => sum + f.roi_count, 0);
+
+      setResult({ ...payload, total_cell_count: totalCells, files: initialFiles });
+      setCompletedFiles(initiallyCompletedFiles.length);
+      setDoneRoiCount(processedRoi);
+      setLoading(false);
+      setIsRunning(pendingFiles.length > 0);
+
+      for (let i = 0; i < pendingFiles.length; i += 1) {
+        const file = pendingFiles[i];
+        const singleResp = await fetch(endpoint("tiff-bulk/infer/image"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ folder_name: folderName, relative_path: file.relative_path }),
+        });
+        const single = await singleResp.json().catch(() => ({} as InferenceFile & { detail?: string }));
+        if (!singleResp.ok || typeof single.cell_count !== "number") {
+          throw new Error((single as { detail?: string }).detail || labels.runError);
+        }
+
+        totalCells += single.cell_count;
+        processedRoi += single.roi_count;
+
+        setCompletedFiles(initiallyCompletedFiles.length + i + 1);
+        setDoneRoiCount(processedRoi);
+        setResult((prev) => {
+          if (!prev) return prev;
+          const files = prev.files.map((row) =>
+            row.relative_path === single.relative_path ? { ...row, cell_count: single.cell_count, roi_count: single.roi_count } : row,
+          );
+          return { ...prev, total_cell_count: totalCells, files };
+        });
+      }
+
+      setIsRunning(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : labels.runError);
-      setResult(null);
-    } finally {
       setLoading(false);
+      setIsRunning(false);
     }
   }, [dbName, folderName, labels.missingParams, labels.runError]);
 
   useEffect(() => {
-    void fetchInference();
-  }, [fetchInference]);
+    void fetchManifestAndRun();
+  }, [fetchManifestAndRun]);
 
   const openDeepScan = (file: InferenceFile) => {
     if (!result) return;
@@ -124,6 +163,11 @@ const TiffManagerBulkInferencePage = () => {
     });
     navigate(`/deepscan?${params.toString()}`);
   };
+
+  const progressPercent = useMemo(() => {
+    if (!result || result.files.length === 0) return 0;
+    return Math.round((completedFiles / result.files.length) * 100);
+  }, [completedFiles, result]);
 
   return (
     <Container maxWidth={false} sx={{ py: 3, px: { xs: 2, sm: 3, md: 4 } }}>
@@ -172,6 +216,18 @@ const TiffManagerBulkInferencePage = () => {
                 <Typography variant="body2" color="text.secondary">{labels.dbName}: {result.db_name}</Typography>
               </Stack>
 
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>{labels.progressTitle}</Typography>
+                <LinearProgress variant="determinate" value={progressPercent} />
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block" }}>
+                  {labels.progressText
+                    .replace("{done}", String(completedFiles))
+                    .replace("{all}", String(result.files.length))
+                    .replace("{roiDone}", doneRoiCount.toLocaleString())
+                    .replace("{roiAll}", result.total_roi_count.toLocaleString())}
+                </Typography>
+              </Box>
+
               {result.files.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">{labels.noFiles}</Typography>
               ) : (
@@ -201,12 +257,18 @@ const TiffManagerBulkInferencePage = () => {
                             </Tooltip>
                           </TableCell>
                           <TableCell align="right">{file.roi_count.toLocaleString()}</TableCell>
-                          <TableCell align="right">{file.cell_count.toLocaleString()}</TableCell>
+                          <TableCell align="right">{file.cell_count >= 0 ? file.cell_count.toLocaleString() : labels.pending}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
                 </TableContainer>
+              )}
+
+              {!isRunning && completedFiles === result.files.length && result.files.length > 0 && (
+                <Alert severity="success" variant="outlined">
+                  {tt("推論が完了しました。", "Inference completed.")}
+                </Alert>
               )}
             </Stack>
           </Paper>

@@ -401,6 +401,11 @@ def _resolve_model_path(override: str | None = None) -> Path:
     )
 
 
+def get_resolved_model_path(model_path: str | None = None) -> str:
+    """Return the effective model path used for inference."""
+    return str(_resolve_model_path(model_path))
+
+
 class _Predictor(Protocol):
     def predict(self, batch: np.ndarray, **kwargs: object) -> np.ndarray: ...
 

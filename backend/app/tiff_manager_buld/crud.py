@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 import cv2
 from fastapi import HTTPException, UploadFile
@@ -363,6 +364,86 @@ def _read_shape_from_roi_meta(raw_meta: object, key: str) -> tuple[int, int] | N
     return (height, width)
 
 
+def _parse_cached_label(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _shape_to_json(shape: tuple[int, int] | None) -> list[int] | None:
+    if shape is None:
+        return None
+    return [int(shape[0]), int(shape[1])]
+
+
+def _inference_cache_path(db_path: Path) -> Path:
+    return DATABASE_DIR / f"{db_path.stem}_inference_cache.json"
+
+
+def _db_signature(db_path: Path) -> dict[str, int]:
+    stat = db_path.stat()
+    return {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)}
+
+
+def _load_inference_cache(db_path: Path, model_path: str) -> dict[str, dict[str, Any]]:
+    cache_path = _inference_cache_path(db_path)
+    if not cache_path.exists():
+        return {}
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("model_path") != model_path:
+        return {}
+    signature = payload.get("db_signature")
+    if not isinstance(signature, dict):
+        return {}
+    current_signature = _db_signature(db_path)
+    if signature.get("size") != current_signature["size"] or signature.get("mtime_ns") != current_signature["mtime_ns"]:
+        return {}
+    files = payload.get("files")
+    if not isinstance(files, dict):
+        return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for key, value in files.items():
+        if isinstance(key, str) and isinstance(value, dict):
+            normalized[key] = value
+    return normalized
+
+
+def _save_inference_cache(db_path: Path, model_path: str, files: dict[str, dict[str, Any]]) -> None:
+    cache_path = _inference_cache_path(db_path)
+    payload = {
+        "db_name": db_path.name,
+        "model_path": model_path,
+        "db_signature": _db_signature(db_path),
+        "updated_at": datetime.now().isoformat(),
+        "files": files,
+    }
+    tmp_path = cache_path.with_suffix(f"{cache_path.suffix}.tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp_path.replace(cache_path)
+    except Exception:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+
+
 async def infer_folder(folder_name: str) -> BulkInferenceResult:
     """Run inference for all ROIs in the folder DB and summarize counts per image."""
     _ensure_dirs()
@@ -460,5 +541,231 @@ async def infer_folder(folder_name: str) -> BulkInferenceResult:
             inferred_at=datetime.now(),
             files=ordered,
         )
+
+    return await asyncio.to_thread(_run)
+
+
+
+async def infer_manifest(folder_name: str) -> BulkInferenceResult:
+    """Return per-image ROI counts and cached inference progress."""
+    _ensure_dirs()
+    folder_path = _resolve_folder(folder_name)
+    db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
+    if not db_path.exists():
+        raise HTTPException(status_code=400, detail="先に一括ROI抽出を実行してください。")
+
+    def _run() -> BulkInferenceResult:
+        db_name = db_path.name
+        resolved_model_path = ""
+        cached_files: dict[str, dict[str, Any]] = {}
+        try:
+            resolved_model_path = inference_crud.get_resolved_model_path()
+            cached_files = _load_inference_cache(db_path, resolved_model_path)
+        except HTTPException:
+            # No model selected yet: just return ROI manifest without cached cell counts.
+            pass
+
+        try:
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT
+                      image_filename,
+                      COUNT(*) AS roi_count,
+                      MIN(image_width_px) AS image_width_px,
+                      MIN(image_height_px) AS image_height_px,
+                      MIN(roi_meta) AS roi_meta
+                    FROM roi_records
+                    GROUP BY image_filename
+                    ORDER BY image_filename ASC
+                    """
+                ).fetchall()
+        except sqlite3.DatabaseError as exc:
+            raise HTTPException(status_code=500, detail=f"データベース読込中にエラー: {exc}") from exc
+
+        files: list[InferenceFileSummary] = []
+        total_roi = 0
+        total_cell = 0
+        merged_cache: dict[str, dict[str, Any]] = {}
+
+        for row in rows:
+            image_filename = str(row["image_filename"] or "")
+            if not image_filename:
+                continue
+
+            meta_obj: object = {}
+            roi_meta = row["roi_meta"]
+            if isinstance(roi_meta, str):
+                try:
+                    meta_obj = json.loads(roi_meta)
+                except Exception:
+                    meta_obj = {}
+            elif isinstance(roi_meta, dict):
+                meta_obj = roi_meta
+
+            original_shape = _read_shape_from_roi_meta(meta_obj, "original_shape")
+            processed_shape = _read_shape_from_roi_meta(meta_obj, "processed_shape")
+            if processed_shape is None:
+                height = row["image_height_px"]
+                width = row["image_width_px"]
+                if isinstance(height, int) and isinstance(width, int):
+                    processed_shape = (height, width)
+
+            roi_count = int(row["roi_count"] or 0)
+            total_roi += roi_count
+
+            cell_count = -1
+            cached = cached_files.get(image_filename)
+            if cached:
+                cached_cell = _parse_cached_label(cached.get("cell_count"))
+                cached_roi = _parse_cached_label(cached.get("roi_count"))
+                if cached_cell is not None and cached_roi == roi_count:
+                    cell_count = cached_cell
+
+            if cell_count >= 0:
+                total_cell += cell_count
+                merged_cache[image_filename] = {
+                    "tif_name": Path(image_filename).name,
+                    "roi_count": roi_count,
+                    "cell_count": cell_count,
+                    "original_shape": _shape_to_json(original_shape),
+                    "processed_shape": _shape_to_json(processed_shape),
+                }
+
+            files.append(
+                InferenceFileSummary(
+                    tif_name=Path(image_filename).name,
+                    relative_path=image_filename,
+                    roi_count=roi_count,
+                    cell_count=cell_count,
+                    original_shape=original_shape,
+                    processed_shape=processed_shape,
+                )
+            )
+
+        if merged_cache and resolved_model_path:
+            _save_inference_cache(db_path, resolved_model_path, merged_cache)
+
+        return BulkInferenceResult(
+            folder_name=folder_path.name,
+            db_name=db_name,
+            db_path=db_path,
+            total_roi_count=total_roi,
+            total_cell_count=total_cell,
+            inferred_at=datetime.now(),
+            files=files,
+        )
+
+    return await asyncio.to_thread(_run)
+
+
+async def infer_single_image(folder_name: str, relative_path: str) -> InferenceFileSummary:
+    """Run inference only for one image in the bulk DB."""
+    _ensure_dirs()
+    folder_path = _resolve_folder(folder_name)
+    db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
+    if not db_path.exists():
+        raise HTTPException(status_code=400, detail="先に一括ROI抽出を実行してください。")
+
+    target = (relative_path or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="relative_path を指定してください。")
+
+    def _run() -> InferenceFileSummary:
+        db_name = db_path.name
+        resolved_model_path = inference_crud.get_resolved_model_path()
+        try:
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                try:
+                    rows = conn.execute(
+                        """
+                        SELECT id, image_filename, image_width_px, image_height_px, roi_meta, ai_label, ai_model_name
+                        FROM roi_records
+                        WHERE image_filename = ?
+                        ORDER BY id ASC
+                        """,
+                        (target,),
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    # Backward compatibility for legacy DBs without ai_label / ai_model_name.
+                    rows = conn.execute(
+                        """
+                        SELECT id, image_filename, image_width_px, image_height_px, roi_meta, NULL AS ai_label, NULL AS ai_model_name
+                        FROM roi_records
+                        WHERE image_filename = ?
+                        ORDER BY id ASC
+                        """,
+                        (target,),
+                    ).fetchall()
+        except sqlite3.DatabaseError as exc:
+            raise HTTPException(status_code=500, detail=f"データベース読込中にエラー: {exc}") from exc
+
+        if not rows:
+            raise HTTPException(status_code=404, detail="指定画像のROIが見つかりません。")
+
+        first = rows[0]
+        meta_obj: object = {}
+        roi_meta = first["roi_meta"]
+        if isinstance(roi_meta, str):
+            try:
+                meta_obj = json.loads(roi_meta)
+            except Exception:
+                meta_obj = {}
+        elif isinstance(roi_meta, dict):
+            meta_obj = roi_meta
+
+        original_shape = _read_shape_from_roi_meta(meta_obj, "original_shape")
+        processed_shape = _read_shape_from_roi_meta(meta_obj, "processed_shape")
+        if processed_shape is None:
+            h = first["image_height_px"]
+            w = first["image_width_px"]
+            if isinstance(h, int) and isinstance(w, int):
+                processed_shape = (h, w)
+
+        cell_count = 0
+        roi_count = 0
+        for row in rows:
+            record_id = int(row["id"])
+            cached_label = _parse_cached_label(row["ai_label"])
+            cached_model_path = row["ai_model_name"]
+            if (
+                cached_label is not None
+                and isinstance(cached_model_path, str)
+                and cached_model_path == resolved_model_path
+            ):
+                predicted_class = cached_label
+            else:
+                result = inference_crud.predict_label_for_record(
+                    db_name=db_name,
+                    record_id=record_id,
+                    model_path=resolved_model_path,
+                )
+                predicted_class = int(result.predicted_class)
+            roi_count += 1
+            if predicted_class in (0, 1):
+                cell_count += 1
+
+        result_summary = InferenceFileSummary(
+            tif_name=Path(target).name,
+            relative_path=target,
+            roi_count=roi_count,
+            cell_count=cell_count,
+            original_shape=original_shape,
+            processed_shape=processed_shape,
+        )
+
+        cache_files = _load_inference_cache(db_path, resolved_model_path)
+        cache_files[target] = {
+            "tif_name": result_summary.tif_name,
+            "roi_count": result_summary.roi_count,
+            "cell_count": result_summary.cell_count,
+            "original_shape": _shape_to_json(result_summary.original_shape),
+            "processed_shape": _shape_to_json(result_summary.processed_shape),
+        }
+        _save_inference_cache(db_path, resolved_model_path, cache_files)
+
+        return result_summary
 
     return await asyncio.to_thread(_run)

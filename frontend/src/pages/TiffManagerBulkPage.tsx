@@ -27,7 +27,6 @@ import DriveFolderUploadIcon from "@mui/icons-material/DriveFolderUpload";
 import ScienceIcon from "@mui/icons-material/Science";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import SearchIcon from "@mui/icons-material/Search";
-import SmartToyIcon from "@mui/icons-material/SmartToy";
 
 import { API_BASE_URL } from "../config";
 import { type Language, useI18n } from "../i18n";
@@ -391,7 +390,7 @@ const TiffManagerBulkPage = () => {
                           <Button
                             variant="outlined"
                             size="small"
-                            startIcon={<SmartToyIcon fontSize="small" />}
+                            startIcon={<ScienceIcon fontSize="small" />}
                             onClick={() => handleOpenInference(folder)}
                             disabled={extractingFolder === folder.name}
                           >

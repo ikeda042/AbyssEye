@@ -15,7 +15,7 @@ def _build_status_payload(view: crud.DeepScanView, request: Request) -> dict:
     status = view.status
     query_suffix = ""
     if view.current_image and view.current_image.relative_path:
-        query_suffix = f"?tif_name={quote(view.current_image.relative_path, safe="")}"
+        query_suffix = f"?tif_name={quote(view.current_image.relative_path, safe='')}"
 
     tif_url = request.url_for("get_deepscan_tif_file", db_name=status.db_path.name)
     tif_png_url = request.url_for("get_deepscan_tif_png", db_name=status.db_path.name)

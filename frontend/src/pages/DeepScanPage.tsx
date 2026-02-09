@@ -8,7 +8,6 @@ import {
   Breadcrumbs,
   Card,
   CardContent,
-  CircularProgress,
   Container,
   Link,
   Button,
@@ -106,6 +105,7 @@ const storageKeys = {
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
 const overlayStaggerSeconds = 0.008;
 const overlayScanDelayOffset = overlayStaggerSeconds * 10;
+const ROI_DISPLAY_CACHE_LIMIT = 4000;
 
 const drawFrame = keyframes`
   0% { clip-path: inset(65% 65% 65% 65%); opacity: 0; transform: scale(0.96); }
@@ -295,6 +295,8 @@ const DeepScanPage = () => {
   const [deepVisionOverlayEnabled, setDeepVisionOverlayEnabled] = useState<boolean>(() => loadStoredDeepVision());
   const [renderedTifSrc, setRenderedTifSrc] = useState<string | null>(null);
   const [renderingTif, setRenderingTif] = useState(false);
+  const [imageSwitching, setImageSwitching] = useState(false);
+  const [baseImageLoading, setBaseImageLoading] = useState(false);
   const [roiDisplaySources, setRoiDisplaySources] = useState<Record<number, string>>({});
   const [overlayRevision, setOverlayRevision] = useState(0);
   const imageContainerRef = useRef<HTMLDivElement | null>(null);
@@ -313,6 +315,11 @@ const DeepScanPage = () => {
   const [manualLabelError, setManualLabelError] = useState<string | null>(null);
   const [draggingRoiId, setDraggingRoiId] = useState<number | null>(null);
   const [dragOverClass, setDragOverClass] = useState<number | null>(null);
+  const statusCacheRef = useRef<Map<string, DeepScanStatus>>(new Map());
+  const roiDisplayCacheRef = useRef<Map<string, string>>(new Map());
+  const selectedRoiDisplayCacheRef = useRef<Map<string, string>>(new Map());
+  const renderedSourceKeyRef = useRef<string>("");
+  const prevTifParamRef = useRef<string>("");
   const labels = useMemo(
     () => ({
       dbNameRequired: tt("db_name を指定してください。", "Please specify db_name."),
@@ -409,39 +416,65 @@ const DeepScanPage = () => {
     const width = target.naturalWidth || target.width;
     const height = target.naturalHeight || target.height;
     setImageNaturalSize({ width, height });
+    setBaseImageLoading(false);
+  }, []);
+
+  const setRoiDisplayCache = useCallback((key: string, value: string) => {
+    const cache = roiDisplayCacheRef.current;
+    cache.set(key, value);
+    if (cache.size > ROI_DISPLAY_CACHE_LIMIT) {
+      const firstKey = cache.keys().next().value;
+      if (firstKey) {
+        cache.delete(firstKey);
+      }
+    }
   }, []);
 
   const fetchStatus = useCallback(
-    async (targetDb: string, options?: { silent?: boolean; tifName?: string }) => {
+    async (targetDb: string, options?: { silent?: boolean; tifName?: string; preferCache?: boolean; blackout?: boolean }) => {
       const silent = Boolean(options?.silent);
+      const tifName = options?.tifName;
+      const cacheKey = `${targetDb}::${tifName || "__default__"}`;
       if (!targetDb) {
         setError(labels.dbNameRequired);
         setStatus(null);
         return;
       }
+      if (options?.preferCache) {
+        const cached = statusCacheRef.current.get(cacheKey);
+        if (cached) {
+          setStatus(cached);
+        }
+      }
       if (!silent) {
         setLoading(true);
         setError(null);
         setRenderingTif(false);
+      } else if (options?.blackout) {
+        setImageSwitching(true);
+        setBaseImageLoading(true);
       }
       try {
-        const response = await fetch(buildStatusEndpoint(targetDb, options?.tifName), {
+        const response = await fetch(buildStatusEndpoint(targetDb, tifName), {
           headers: { Accept: "application/json" },
-          cache: "no-store",
         });
         const payload: DeepScanStatus | null = await response.json().catch(() => null);
         if (!response.ok || !payload) {
           const detail = (payload as { detail?: string } | null)?.detail;
           throw new Error(detail || labels.fetchFailed);
         }
+        statusCacheRef.current.set(cacheKey, payload);
         setStatus(payload);
       } catch (err) {
         setError(err instanceof Error ? err.message : labels.unexpected);
-        setStatus(null);
+        if (!statusCacheRef.current.get(cacheKey)) {
+          setStatus(null);
+        }
       } finally {
         if (!silent) {
           setLoading(false);
         }
+        setImageSwitching(false);
       }
     },
     [labels.dbNameRequired, labels.fetchFailed, labels.unexpected],
@@ -466,6 +499,7 @@ const DeepScanPage = () => {
     setManualLabelError(null);
     setManualLabelMessage(null);
     setOverlayRevision((prev) => prev + 1);
+    setBaseImageLoading(true);
   }, [status?.tif_name]);
 
   useEffect(() => {
@@ -487,10 +521,16 @@ const DeepScanPage = () => {
   useEffect(() => {
     if (!status) {
       setRenderedTifSrc(null);
+      renderedSourceKeyRef.current = "";
       return;
     }
     const rawSrc = status.tif_png_url || status.tif_url;
+    const renderKey = `${rawSrc}::${tifDisplayMode}`;
+    if (renderedSourceKeyRef.current === renderKey && renderedTifSrc) {
+      return;
+    }
     if (tifDisplayMode === "raw") {
+      renderedSourceKeyRef.current = renderKey;
       setRenderedTifSrc(rawSrc);
       return;
     }
@@ -499,11 +539,13 @@ const DeepScanPage = () => {
     void applyDisplayMode(rawSrc, tifDisplayMode)
       .then((result) => {
         if (!cancelled) {
+          renderedSourceKeyRef.current = renderKey;
           setRenderedTifSrc(result);
         }
       })
       .catch(() => {
         if (!cancelled) {
+          renderedSourceKeyRef.current = renderKey;
           setRenderedTifSrc(rawSrc);
         }
       })
@@ -516,7 +558,7 @@ const DeepScanPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [status, tifDisplayMode]);
+  }, [status, tifDisplayMode, renderedTifSrc]);
 
   useEffect(() => {
     const rois = status?.rois ?? [];
@@ -538,8 +580,14 @@ const DeepScanPage = () => {
       const entries = await Promise.all(
         rois.map(async (roi) => {
           const rawSrc = `data:image/png;base64,${roi.png_base64}`;
+          const cacheKey = `${status?.tif_name || "tif"}::${roi.roi_id}::${roiDisplayMode}`;
+          const cached = roiDisplayCacheRef.current.get(cacheKey);
+          if (cached) {
+            return [roi.roi_id, cached] as const;
+          }
           try {
             const processed = await applyDisplayMode(rawSrc, roiDisplayMode);
+            setRoiDisplayCache(cacheKey, processed);
             return [roi.roi_id, processed] as const;
           } catch {
             return [roi.roi_id, rawSrc] as const;
@@ -555,7 +603,7 @@ const DeepScanPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [status, roiDisplayMode]);
+  }, [status, roiDisplayMode, setRoiDisplayCache]);
 
   useEffect(() => {
     if (!selectedOverlayRoiId || !status) {
@@ -572,10 +620,26 @@ const DeepScanPage = () => {
     setManualLabelError(null);
     setManualLabelMessage(null);
     const rawSrc = `data:image/png;base64,${roi.png_base64}`;
+    const selectedCacheKey = `${status.tif_name || "tif"}::${roi.roi_id}::${tifDisplayMode}`;
+    const selectedCached = selectedRoiDisplayCacheRef.current.get(selectedCacheKey);
+    if (selectedCached) {
+      setSelectedOverlayRoiSrc(selectedCached);
+      setSelectedOverlayRoiMeta(roi);
+      return;
+    }
     let cancelled = false;
     void applyDisplayMode(rawSrc, tifDisplayMode)
       .then((processed) => {
-        if (!cancelled) setSelectedOverlayRoiSrc(processed);
+        if (!cancelled) {
+          selectedRoiDisplayCacheRef.current.set(selectedCacheKey, processed);
+          if (selectedRoiDisplayCacheRef.current.size > ROI_DISPLAY_CACHE_LIMIT) {
+            const firstKey = selectedRoiDisplayCacheRef.current.keys().next().value;
+            if (firstKey) {
+              selectedRoiDisplayCacheRef.current.delete(firstKey);
+            }
+          }
+          setSelectedOverlayRoiSrc(processed);
+        }
       })
       .catch(() => {
         if (!cancelled) setSelectedOverlayRoiSrc(rawSrc);
@@ -590,10 +654,22 @@ const DeepScanPage = () => {
     if (!dbName) {
       setError(labels.dbNameRequired);
       setStatus(null);
+      prevTifParamRef.current = "";
       return;
     }
     setError(null);
-    void fetchStatus(dbName, { tifName: currentTifParam || undefined });
+
+    const prevTif = prevTifParamRef.current;
+    const hasCurrent = Boolean(currentTifParam);
+    const tifChanged = hasCurrent && prevTif !== currentTifParam;
+    prevTifParamRef.current = currentTifParam;
+
+    void fetchStatus(dbName, {
+      tifName: currentTifParam || undefined,
+      silent: hasCurrent,
+      preferCache: hasCurrent,
+      blackout: tifChanged,
+    });
   }, [dbName, currentTifParam, fetchStatus, labels.dbNameRequired]);
 
   const previewBuckets = useMemo(() => {
@@ -638,6 +714,14 @@ const DeepScanPage = () => {
   const selectedRoiColor =
     (selectedOverlayLabelInfo && classColors[selectedOverlayLabelInfo.label]) ||
     (selectedOverlayRoiMeta ? classColors[selectedOverlayRoiMeta.predicted_class] : undefined);
+
+  const frameAspectRatio = useMemo(() => {
+    const dims = status?.processed_shape || status?.original_shape;
+    if (dims && typeof dims.width === "number" && typeof dims.height === "number" && dims.width > 0 && dims.height > 0) {
+      return `${dims.width} / ${dims.height}`;
+    }
+    return "16 / 10";
+  }, [status?.processed_shape, status?.original_shape]);
 
   const selectedManualLabelValue = (() => {
     const parsed = parseManualLabel(selectedOverlayRoiMeta?.manual_label);
@@ -724,6 +808,14 @@ const DeepScanPage = () => {
           setManualLabelMessage(labels.manualUpdateSuccess);
           setSelectedOverlayRoiMeta((prev) => (prev ? { ...prev, manual_label: label ?? null } : prev));
         }
+        const cacheKey = `${dbName}::${currentTifParam || "__default__"}`;
+        const cached = statusCacheRef.current.get(cacheKey);
+        if (cached && cached.rois) {
+          statusCacheRef.current.set(cacheKey, {
+            ...cached,
+            rois: cached.rois.map((roi) => (roi.roi_id === roiId ? { ...roi, manual_label: label } : roi)),
+          });
+        }
       } catch (err) {
         if (isSelected) {
           setManualLabelError(err instanceof Error ? err.message : labels.manualUpdateFailed);
@@ -734,7 +826,7 @@ const DeepScanPage = () => {
         }
       }
     },
-    [dbName, labels.manualUpdateFailed, labels.manualUpdateSuccess, selectedOverlayRoiId],
+    [dbName, currentTifParam, labels.manualUpdateFailed, labels.manualUpdateSuccess, selectedOverlayRoiId],
   );
 
   const handleManualLabelUpdate = useCallback(
@@ -835,17 +927,13 @@ const DeepScanPage = () => {
             </Stack>
           </Stack>
 
-          {loading ? (
-            <Box display="flex" justifyContent="center" py={6}>
-              <CircularProgress />
-            </Box>
-          ) : status ? (
+          {status ? (
             <Stack spacing={3}>
               <Card variant="outlined">
                 <CardContent>
                   <Stack
                     direction={{ xs: "column", md: "row" }}
-                    spacing={2.5}
+                    spacing={1.5}
                     alignItems="stretch"
                   >
                     <Box
@@ -932,10 +1020,11 @@ const DeepScanPage = () => {
                     <Box
                       ref={imageContainerRef}
                       sx={{
-                        flex: 1,
+                        flex: "0 0 auto",
                         position: "relative",
                         width: "100%",
-                        minHeight: { xs: 340, md: 460 },
+                        aspectRatio: frameAspectRatio,
+                        minHeight: { xs: 420, md: 620, lg: 700 },
                         backgroundColor: (theme) =>
                           theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
                         overflow: "hidden",
@@ -946,6 +1035,7 @@ const DeepScanPage = () => {
                         src={renderedTifSrc || status.tif_png_url || status.tif_url}
                         alt={status.tif_name}
                         onLoad={handleImageLoad}
+                        onError={() => setBaseImageLoading(false)}
                         sx={{
                           width: "100%",
                           height: "100%",
@@ -1042,23 +1132,20 @@ const DeepScanPage = () => {
                           })}
                         </Box>
                       )}
-                      {renderingTif && (
+                      {(renderingTif || imageSwitching || baseImageLoading) && (
                         <Box
                           sx={{
                             position: "absolute",
                             inset: 0,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            backgroundColor: "rgba(255,255,255,0.4)",
+                            zIndex: 20,
+                            backgroundColor: "#000",
+                            pointerEvents: "none",
                           }}
-                        >
-                          <CircularProgress size={42} />
-                        </Box>
+                        />
                       )}
                     </Box>
                   </Box>
-                  <Stack spacing={1.25} sx={{ minWidth: { md: 360 }, width: { md: 420 }, maxWidth: 520, alignSelf: "stretch" }}>
+                  <Stack spacing={1.25} sx={{ minWidth: { md: 260 }, width: { md: 300, lg: 320 }, maxWidth: 360, alignSelf: "stretch" }}>
                     <Box sx={{ minHeight: { md: 76 }, display: "flex", flexDirection: "column", justifyContent: "flex-start", gap: 1 }}>
                       <Stack direction="row" spacing={1}>
                         <Button
@@ -1411,9 +1498,42 @@ const DeepScanPage = () => {
               })}
             </Box>
           </Stack>
-        ) : (
-          <Alert severity="info">{labels.infoSelectDb}</Alert>
-        )}
+        ) : dbName ? (
+          <Stack spacing={3}>
+            <Card variant="outlined">
+              <CardContent>
+                <Stack direction={{ xs: "column", md: "row" }} spacing={2.5} alignItems="stretch">
+                  <Box
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      borderRadius: 1,
+                      overflow: "hidden",
+                      border: "1px solid rgba(15,23,42,0.1)",
+                      backgroundColor: (theme) => theme.palette.background.paper,
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        width: "100%",
+                        minHeight: { xs: 340, md: 460 },
+                        backgroundColor: "#000",
+                      }}
+                    />
+                  </Box>
+                  <Stack spacing={1.25} sx={{ minWidth: { md: 260 }, width: { md: 300, lg: 320 }, maxWidth: 360, alignSelf: "stretch" }}>
+                    <Typography variant="subtitle1" fontWeight={600}>
+                      {labels.targetDb}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {dbName}
+                    </Typography>
+                  </Stack>
+                </Stack>
+              </CardContent>
+            </Card>
+          </Stack>
+        ) : null}
       </Stack>
     </Container>
     </ThemeProvider>

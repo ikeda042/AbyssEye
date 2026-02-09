@@ -45,6 +45,11 @@ class InferenceRequest(BaseModel):
     folder_name: str = Field(..., description="推論対象のフォルダ名")
 
 
+class InferenceImageRequest(BaseModel):
+    folder_name: str = Field(..., description="推論対象のフォルダ名")
+    relative_path: str = Field(..., description="対象画像の相対パス")
+
+
 class ExtractionFileResponse(BaseModel):
     tif_name: str
     relative_path: str
@@ -172,3 +177,15 @@ async def extract_folder(payload: ExtractionRequest) -> BulkExtractionResponse:
 async def infer_folder(payload: InferenceRequest) -> BulkInferenceResponse:
     result = await crud.infer_folder(payload.folder_name)
     return BulkInferenceResponse.from_dataclass(result)
+
+
+@router.post("/infer/manifest", response_model=BulkInferenceResponse)
+async def infer_manifest(payload: InferenceRequest) -> BulkInferenceResponse:
+    result = await crud.infer_manifest(payload.folder_name)
+    return BulkInferenceResponse.from_dataclass(result)
+
+
+@router.post("/infer/image", response_model=InferenceFileResponse)
+async def infer_single_image(payload: InferenceImageRequest) -> InferenceFileResponse:
+    result = await crud.infer_single_image(payload.folder_name, payload.relative_path)
+    return InferenceFileResponse.from_dataclass(result)
