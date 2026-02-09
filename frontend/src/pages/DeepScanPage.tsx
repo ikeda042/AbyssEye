@@ -50,6 +50,7 @@ type RealtimeROI = {
   image_height_px: number;
   png_base64: string;
   manual_label?: string | number | null;
+  manual_added?: boolean;
 };
 
 type Dimensions = {
@@ -93,6 +94,15 @@ const buildManualLabelEndpoint = (dbName: string, recordId: number) =>
     `databases/${encodeURIComponent(dbName)}/records/${recordId}/manual-label`,
     API_BASE_URL,
   ).toString();
+const buildManualRoiAddEndpoint = (dbName: string) =>
+  new URL(`deepscan/${encodeURIComponent(dbName)}/manual-rois`, API_BASE_URL).toString();
+const buildManualRoiDeleteEndpoint = (dbName: string, recordId: number, tifName?: string) => {
+  const url = new URL(`deepscan/${encodeURIComponent(dbName)}/manual-rois/${recordId}`, API_BASE_URL);
+  if (tifName) {
+    url.searchParams.set("tif_name", tifName);
+  }
+  return url.toString();
+};
 type DisplayMode = "raw" | "normalized" | "jet" | "opticalBoost";
 type LabelMode = "ai" | "manual";
 const storageKeys = {
@@ -313,6 +323,9 @@ const DeepScanPage = () => {
   const [manualLabelSaving, setManualLabelSaving] = useState(false);
   const [manualLabelMessage, setManualLabelMessage] = useState<string | null>(null);
   const [manualLabelError, setManualLabelError] = useState<string | null>(null);
+  const [manualRoiMode, setManualRoiMode] = useState(false);
+  const [manualRoiSaving, setManualRoiSaving] = useState(false);
+  const [manualRoiError, setManualRoiError] = useState<string | null>(null);
   const [draggingRoiId, setDraggingRoiId] = useState<number | null>(null);
   const [dragOverClass, setDragOverClass] = useState<number | null>(null);
   const statusCacheRef = useRef<Map<string, DeepScanStatus>>(new Map());
@@ -330,8 +343,8 @@ const DeepScanPage = () => {
       tiffDisplayMode: tt("TIFF表示モード", "TIFF display mode"),
       frameBasis: tt("フレーム基準", "Frame label"),
       manualFallbackNote: tt(
-        "Manualモードでもラベルが無いROIはAIラベルで描画します。",
-        "Manual mode falls back to AI labels when manual labels are missing.",
+        "Manualモードでもラベルが無いROIはAIラベルで描画します。手動追加ROIは破線で表示されます。",
+        "Manual mode falls back to AI labels when manual labels are missing. Manually added ROIs are shown with dashed boxes.",
       ),
       previewLabelMode: tt("プレビューのラベル基準", "Preview label mode"),
       dragToReassign: tt(
@@ -362,6 +375,14 @@ const DeepScanPage = () => {
       confidence: tt("信頼度", "Confidence"),
       manualFallbackWarning: tt("manual label が無いため AI ラベルを使用しています。", "Using AI label because manual label is missing."),
       noRoiSelected: tt("ROIが選択されていません。", "No ROI selected."),
+      manualRoiMode: tt("手動ROI追加", "Manual ROI add"),
+      manualRoiHint: tt("追加モードON中: 画像をクリックすると48x48 ROIを追加します。", "Add mode ON: click image to add a 48x48 ROI."),
+      manualRoiDelete: tt("手動ROI削除", "Delete manual ROI"),
+      manualRoiAdded: tt("手動ROIを追加しました。", "Manual ROI added."),
+      manualRoiDeleted: tt("選択ROIを削除しました。", "Selected ROI deleted."),
+      manualRoiAddFailed: tt("手動ROI追加に失敗しました。", "Failed to add manual ROI."),
+      manualRoiDeleteFailed: tt("ROI削除に失敗しました。", "Failed to delete ROI."),
+      manualOnlyDeleteHint: tt("削除できるのは手動追加ROIのみです。", "Only manually added ROIs can be deleted."),
       inferencePreview: tt("推論プレビュー表示モード", "Inference preview display mode"),
       noImages: tt("まだ割り当てられた画像がありません。", "No images assigned yet."),
       infoSelectDb: tt("DeepScanを表示するDBを選択してください。", "Select a DB to view DeepScan."),
@@ -498,6 +519,7 @@ const DeepScanPage = () => {
     setSelectedOverlayRoiMeta(null);
     setManualLabelError(null);
     setManualLabelMessage(null);
+    setManualRoiError(null);
     setOverlayRevision((prev) => prev + 1);
     setBaseImageLoading(true);
   }, [status?.tif_name]);
@@ -510,7 +532,6 @@ const DeepScanPage = () => {
   }, [
     status?.tif_name,
     status?.saved_at,
-    status?.rois?.length,
     imageLayout?.displayWidth,
     imageLayout?.displayHeight,
     imageLayout?.offsetX,
@@ -728,9 +749,11 @@ const DeepScanPage = () => {
     return parsed !== null ? String(parsed) : "none";
   })();
 
+
   const availableImages = status?.available_images ?? [];
   const hasImagePager = availableImages.length > 1;
   const currentImageIndex = Math.max(0, status?.current_index ?? 0);
+  const frameRois = useMemo(() => status?.rois ?? [], [status?.rois]);
 
   const handleMoveImage = (direction: -1 | 1) => {
     if (!status || !hasImagePager) return;
@@ -774,6 +797,146 @@ const DeepScanPage = () => {
     if (!dbName) return;
     void fetchStatus(dbName, { tifName: currentTifParam || undefined });
   };
+
+  const applyStatusMutator = useCallback(
+    (mutator: (prev: DeepScanStatus) => DeepScanStatus) => {
+      setStatus((prev) => {
+        if (!prev) return prev;
+        const next = mutator(prev);
+        const cacheKey = `${dbName}::${currentTifParam || "__default__"}`;
+        statusCacheRef.current.set(cacheKey, next);
+        return next;
+      });
+    },
+    [dbName, currentTifParam],
+  );
+
+  const appendRoi = useCallback(
+    (roi: RealtimeROI) => {
+      applyStatusMutator((prev) => ({
+        ...prev,
+        rois: [...(prev.rois ?? []), roi],
+      }));
+    },
+    [applyStatusMutator],
+  );
+
+  const removeRoi = useCallback(
+    (roiId: number) => {
+      applyStatusMutator((prev) => ({
+        ...prev,
+        rois: (prev.rois ?? []).filter((roi) => roi.roi_id !== roiId),
+      }));
+    },
+    [applyStatusMutator],
+  );
+
+  const handleImageClickForManualRoi = useCallback(
+    async (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!manualRoiMode || !dbName || !imageLayout || manualRoiSaving) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const localX = event.clientX - rect.left - imageLayout.offsetX;
+      const localY = event.clientY - rect.top - imageLayout.offsetY;
+      if (localX < 0 || localY < 0 || localX > imageLayout.displayWidth || localY > imageLayout.displayHeight) {
+        return;
+      }
+
+      const refRoi = status?.rois?.[0];
+      const baseWidth = refRoi?.image_width_px || status?.processed_shape?.width || status?.original_shape?.width || imageNaturalSize?.width || 0;
+      const baseHeight = refRoi?.image_height_px || status?.processed_shape?.height || status?.original_shape?.height || imageNaturalSize?.height || 0;
+      if (!baseWidth || !baseHeight) return;
+
+      const centerX = Math.round((localX / imageLayout.displayWidth) * baseWidth);
+      const centerY = Math.round((localY / imageLayout.displayHeight) * baseHeight);
+
+      setManualRoiSaving(true);
+      setManualRoiError(null);
+      setManualLabelMessage(null);
+      try {
+        const response = await fetch(buildManualRoiAddEndpoint(dbName), {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            center_x: centerX,
+            center_y: centerY,
+            roi_width: 48,
+            roi_height: 48,
+            tif_name: status?.current_image_relative_path || currentTifParam || undefined,
+          }),
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload) {
+          const detail = (payload as { detail?: string } | null)?.detail;
+          throw new Error(detail || labels.manualRoiAddFailed);
+        }
+        appendRoi(payload as RealtimeROI);
+        setSelectedOverlayRoiId((payload as RealtimeROI).roi_id);
+        setManualLabelMessage(labels.manualRoiAdded);
+      } catch (err) {
+        setManualRoiError(err instanceof Error ? err.message : labels.manualRoiAddFailed);
+      } finally {
+        setManualRoiSaving(false);
+      }
+    },
+    [
+      appendRoi,
+      currentTifParam,
+      dbName,
+      imageLayout,
+      imageNaturalSize?.height,
+      imageNaturalSize?.width,
+      labels.manualRoiAddFailed,
+      labels.manualRoiAdded,
+      manualRoiMode,
+      manualRoiSaving,
+      status?.current_image_relative_path,
+      status?.original_shape?.height,
+      status?.original_shape?.width,
+      status?.processed_shape?.height,
+      status?.processed_shape?.width,
+      status?.rois,
+    ],
+  );
+
+  const handleDeleteSelectedRoi = useCallback(async () => {
+    if (!dbName || !selectedOverlayRoiId || manualRoiSaving) return;
+    setManualRoiSaving(true);
+    setManualRoiError(null);
+    setManualLabelMessage(null);
+    try {
+      const response = await fetch(
+        buildManualRoiDeleteEndpoint(dbName, selectedOverlayRoiId, status?.current_image_relative_path || currentTifParam || undefined),
+        {
+          method: "DELETE",
+          headers: { Accept: "application/json" },
+        },
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detail = (payload as { detail?: string } | null)?.detail;
+        throw new Error(detail || labels.manualRoiDeleteFailed);
+      }
+      removeRoi(selectedOverlayRoiId);
+      setSelectedOverlayRoiId(null);
+      setManualLabelMessage(labels.manualRoiDeleted);
+    } catch (err) {
+      setManualRoiError(err instanceof Error ? err.message : labels.manualRoiDeleteFailed);
+    } finally {
+      setManualRoiSaving(false);
+    }
+  }, [
+    currentTifParam,
+    dbName,
+    labels.manualRoiDeleteFailed,
+    labels.manualRoiDeleted,
+    manualRoiSaving,
+    removeRoi,
+    selectedOverlayRoiId,
+    status?.current_image_relative_path,
+  ]);
 
   const updateManualLabel = useCallback(
     async (roiId: number, label: string | null) => {
@@ -1019,6 +1182,7 @@ const DeepScanPage = () => {
                     </Stack>
                     <Box
                       ref={imageContainerRef}
+                      onClick={(event) => void handleImageClickForManualRoi(event)}
                       sx={{
                         flex: "0 0 auto",
                         position: "relative",
@@ -1028,6 +1192,7 @@ const DeepScanPage = () => {
                         backgroundColor: (theme) =>
                           theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
                         overflow: "hidden",
+                        cursor: manualRoiMode ? "crosshair" : "default",
                       }}
                     >
                       <Box
@@ -1043,7 +1208,7 @@ const DeepScanPage = () => {
                           display: "block",
                         }}
                       />
-                      {deepVisionOverlayEnabled && imageLayout && (status.rois?.length ?? 0) > 0 && (
+                      {deepVisionOverlayEnabled && imageLayout && (frameRois.length ?? 0) > 0 && (
                         <Box
                           key={overlayKey}
                           sx={{
@@ -1052,7 +1217,7 @@ const DeepScanPage = () => {
                             pointerEvents: "auto",
                           }}
                         >
-                          {(status.rois ?? []).map((roi, index) => {
+                          {frameRois.map((roi, index) => {
                             const baseWidth = roi.image_width_px || 0;
                             const baseHeight = roi.image_height_px || 0;
                             if (!baseWidth || !baseHeight) return null;
@@ -1064,6 +1229,7 @@ const DeepScanPage = () => {
                             const height = (roi.roi_end_y - roi.roi_start_y) * scaleY;
                             const { label } = resolveLabel(roi, frameLabelMode);
                             const color = classColors[label] ?? "#6366f1";
+                            const isManualAdded = Boolean(roi.manual_added);
                             const isSelected = selectedOverlayRoiId === roi.roi_id;
                             const sequenceIndex = roiCaptureOrder[roi.roi_id] ?? index;
                             const delay = sequenceIndex * overlayStaggerSeconds;
@@ -1077,15 +1243,17 @@ const DeepScanPage = () => {
                                   width,
                                   height,
                                   borderRadius: 0.75,
-                                  border: isSelected ? `1.8px solid ${color}` : `1px solid ${color}c0`,
-                                  backgroundColor: isSelected ? `${color}26` : `${color}12`,
+                                  border: isSelected
+                                    ? `1.8px ${isManualAdded ? "dashed" : "solid"} ${color}`
+                                    : `1px ${isManualAdded ? "dashed" : "solid"} ${color}c0`,
+                                  backgroundColor: isManualAdded ? (isSelected ? "rgba(249,115,22,0.16)" : "rgba(249,115,22,0.08)") : (isSelected ? `${color}26` : `${color}12`),
                                   opacity: 0,
                                   transform: "scale(0.97)",
                                   animation: `${overlayReveal} 0.35s ease ${delay}s forwards`,
                                   overflow: "hidden",
                                   cursor: "pointer",
                                   boxShadow: isSelected
-                                    ? `0 0 0 1px ${color}70, 0 0 0 5px ${color}1c`
+                                    ? `0 0 0 1px ${isManualAdded ? "rgba(249,115,22,0.75)" : `${color}70`}, 0 0 0 5px ${isManualAdded ? "rgba(249,115,22,0.14)" : `${color}1c`}`
                                     : "0 0 0 0.5px rgba(15,23,42,0.06)",
                                   transition: "box-shadow 160ms ease, background-color 160ms ease, transform 160ms ease",
                                   "&:hover": {
@@ -1097,7 +1265,7 @@ const DeepScanPage = () => {
                                     position: "absolute",
                                     inset: 0,
                                     borderRadius: "inherit",
-                                    border: `1.5px solid ${color}`,
+                                    border: `1.5px ${isManualAdded ? "dashed" : "solid"} ${color}`,
                                     clipPath: "inset(65% 65% 65% 65%)",
                                     opacity: 0,
                                     animation: `${drawFrame} 0.6s cubic-bezier(0.18, 0.72, 0.25, 1) ${delay}s forwards`,
@@ -1113,14 +1281,17 @@ const DeepScanPage = () => {
                                     animation: `${scanLine} 0.8s ease-out ${delay + overlayScanDelayOffset}s 1`,
                                   },
                                 }}
-                                onClick={() => setSelectedOverlayRoiId(roi.roi_id)}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedOverlayRoiId(roi.roi_id);
+                                }}
                               >
                                 <Box
                                   sx={{
                                     position: "absolute",
                                     inset: "-10%",
                                     borderRadius: "inherit",
-                                    background: `${color}24`,
+                                    background: isManualAdded ? "rgba(249,115,22,0.22)" : `${color}24`,
                                     filter: "blur(14px)",
                                     opacity: 0,
                                     pointerEvents: "none",
@@ -1234,11 +1405,50 @@ const DeepScanPage = () => {
                           borderTop: "1px solid rgba(15,23,42,0.08)",
                         }}
                       >
+                        <Stack spacing={0.75} mb={0.75}>
+                          <FormControlLabel
+                            control={
+                              <Switch
+                                size="small"
+                                checked={manualRoiMode}
+                                onChange={(_, checked) => setManualRoiMode(checked)}
+                                disabled={manualRoiSaving}
+                              />
+                            }
+                            label={labels.manualRoiMode}
+                            sx={{ m: 0 }}
+                          />
+                          {manualRoiMode && (
+                            <Typography variant="caption" color="text.secondary">
+                              {labels.manualRoiHint}
+                            </Typography>
+                          )}
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            color="error"
+                            onClick={() => void handleDeleteSelectedRoi()}
+                            disabled={!selectedOverlayRoiId || !selectedOverlayRoiMeta?.manual_added || manualRoiSaving}
+                            sx={{ width: "fit-content" }}
+                          >
+                            {labels.manualRoiDelete}
+                          </Button>
+                          {selectedOverlayRoiId && !selectedOverlayRoiMeta?.manual_added && (
+                            <Typography variant="caption" color="text.secondary">
+                              {labels.manualOnlyDeleteHint}
+                            </Typography>
+                          )}
+                          {manualRoiError && (
+                            <Typography variant="caption" color="error">
+                              {manualRoiError}
+                            </Typography>
+                          )}
+                        </Stack>
                         <Stack direction="row" alignItems="center" justifyContent="space-between" mb={0.5}>
                           <Typography variant="subtitle2" fontWeight={600}>
                             {labels.manualLabelTitle}
                           </Typography>
-                          {manualLabelSaving && (
+                          {(manualLabelSaving || manualRoiSaving) && (
                             <Typography variant="caption" color="text.secondary">
                               {labels.updating}
                             </Typography>
@@ -1254,7 +1464,7 @@ const DeepScanPage = () => {
                               const next = value === "none" ? null : String(value);
                               void handleManualLabelUpdate(next);
                             }}
-                            disabled={!selectedOverlayRoiMeta || manualLabelSaving || !dbName}
+                            disabled={!selectedOverlayRoiMeta || manualLabelSaving || manualRoiSaving || !dbName}
                           >
                             <ToggleButton value="none">{labels.noLabel}</ToggleButton>
                             <ToggleButton value="0">0</ToggleButton>
@@ -1475,7 +1685,10 @@ const DeepScanPage = () => {
                               draggable
                               onDragStart={(event) => handleRoiDragStart(event, roi.roi_id)}
                               onDragEnd={handleRoiDragEnd}
-                              onClick={() => setSelectedOverlayRoiId(roi.roi_id)}
+                              onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedOverlayRoiId(roi.roi_id);
+                                }}
                             >
                               <Box
                                 component="img"

@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+import cv2
+import numpy as np
 from fastapi import HTTPException
 
 from ..databases import crud as databases_crud
@@ -279,7 +281,8 @@ def _load_rois_for_image(db_name: str, db_path: Path, image_relative_path: str) 
                   image_height_px,
                   manual_label,
                   ai_label,
-                  ai_model_name
+                  ai_model_name,
+                  roi_meta
                 FROM roi_records
                 WHERE image_filename = ?
                 ORDER BY id
@@ -296,6 +299,8 @@ def _load_rois_for_image(db_name: str, db_path: Path, image_relative_path: str) 
         record_id = int(row["id"])
         base64_png = base64.b64encode(blob).decode("ascii")
         result = inference_crud.predict_label_for_record(db_name=db_name, record_id=record_id)
+        raw_meta = _deserialize_roi_meta(row["roi_meta"])
+        manual_added = bool(raw_meta.get("manual_added")) if isinstance(raw_meta, dict) else False
         rois.append(
             realtime_crud.RealtimeROI(
                 roi_id=record_id,
@@ -313,10 +318,298 @@ def _load_rois_for_image(db_name: str, db_path: Path, image_relative_path: str) 
                 manual_label=row["manual_label"],
                 ai_label=row["ai_label"],
                 ai_model_name=row["ai_model_name"],
+                manual_added=manual_added,
             )
         )
 
     return rois
+
+
+def _safe_int(value: object, default: int) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(float(value))
+        except ValueError:
+            return default
+    return default
+
+
+def _encode_manual_patch(img_rgb: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> bytes:
+    patch_rgb = img_rgb[y1:y2, x1:x2, :]
+    if patch_rgb.size == 0:
+        raise HTTPException(status_code=400, detail="ROI領域が空です。")
+    ok, buf = cv2.imencode(".png", cv2.cvtColor(patch_rgb, cv2.COLOR_RGB2BGR))
+    if not ok:
+        raise HTTPException(status_code=500, detail="ROI画像のエンコードに失敗しました。")
+    return bytes(buf)
+
+
+def _normalize_roi_box(center_x: int, center_y: int, roi_width: int, roi_height: int, image_width: int, image_height: int) -> tuple[int, int, int, int]:
+    roi_width = max(8, min(int(roi_width), image_width))
+    roi_height = max(8, min(int(roi_height), image_height))
+    half_w = roi_width // 2
+    half_h = roi_height // 2
+    x1 = int(center_x) - half_w
+    y1 = int(center_y) - half_h
+    x1 = max(0, min(x1, image_width - roi_width))
+    y1 = max(0, min(y1, image_height - roi_height))
+    x2 = x1 + roi_width
+    y2 = y1 + roi_height
+    return x1, y1, x2, y2
+
+
+def add_manual_roi(
+    db_name: str,
+    *,
+    tif_name: str | None,
+    center_x: int,
+    center_y: int,
+    roi_width: int = 48,
+    roi_height: int = 48,
+    manual_label: str | None = None,
+) -> realtime_crud.RealtimeROI:
+    db_path = databases_crud.get_database_file_path(db_name)
+    tif_path, _, current_image, _ = _resolve_tif_path(db_path, tif_name=tif_name)
+    image_relative_path = current_image.relative_path if current_image else tif_path.name
+
+    img_bgr = cv2.imread(str(tif_path), cv2.IMREAD_COLOR)
+    if img_bgr is None:
+        raise HTTPException(status_code=400, detail="TIFF画像の読み込みに失敗しました。")
+    tif_h, tif_w = img_bgr.shape[:2]
+
+    databases_crud.ensure_label_columns(db_path)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            columns = _columns_for_table(conn, "roi_records")
+            has_image_filename = "image_filename" in columns
+            has_folder_name = "folder_name" in columns
+            has_image_stem = "image_stem" in columns
+            has_scale = "scale" in columns
+            has_num_rois = "num_rois" in columns
+            has_roi_center = "roi_center_x" in columns and "roi_center_y" in columns
+
+            if has_image_filename:
+                template_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM roi_records
+                    WHERE image_filename = ?
+                    ORDER BY id
+                    LIMIT 1
+                    """,
+                    (image_relative_path,),
+                ).fetchone()
+            else:
+                template_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM roi_records
+                    ORDER BY id
+                    LIMIT 1
+                    """
+                ).fetchone()
+
+            if template_row is None:
+                raise HTTPException(status_code=400, detail="ROIレコードが存在しないDBには手動ROIを追加できません。")
+
+            processed_w = _safe_int(template_row["image_width_px"], tif_w) if "image_width_px" in columns else tif_w
+            processed_h = _safe_int(template_row["image_height_px"], tif_h) if "image_height_px" in columns else tif_h
+            processed_w = max(8, processed_w)
+            processed_h = max(8, processed_h)
+
+            if processed_w != tif_w or processed_h != tif_h:
+                resized_bgr = cv2.resize(img_bgr, (processed_w, processed_h))
+            else:
+                resized_bgr = img_bgr
+            resized_rgb = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2RGB)
+
+            x1, y1, x2, y2 = _normalize_roi_box(center_x, center_y, roi_width, roi_height, processed_w, processed_h)
+            png_blob = _encode_manual_patch(resized_rgb, x1, y1, x2, y2)
+            center_px_x = (x1 + x2) // 2
+            center_px_y = (y1 + y2) // 2
+
+            if has_image_filename:
+                max_row = conn.execute(
+                    "SELECT COALESCE(MAX(roi_id), 0) AS max_roi_id, COUNT(*) AS image_count FROM roi_records WHERE image_filename = ?",
+                    (image_relative_path,),
+                ).fetchone()
+            else:
+                max_row = conn.execute(
+                    "SELECT COALESCE(MAX(roi_id), 0) AS max_roi_id, COUNT(*) AS image_count FROM roi_records",
+                ).fetchone()
+            next_roi_id = int(max_row["max_roi_id"] or 0) + 1
+            current_count = int(max_row["image_count"] or 0)
+            if has_num_rois:
+                next_num_rois = max(current_count + 1, _safe_int(template_row["num_rois"], 0) + 1)
+            else:
+                next_num_rois = current_count + 1
+
+            raw_meta = template_row["roi_meta"] if "roi_meta" in columns else None
+            meta = _deserialize_roi_meta(raw_meta)
+            if not isinstance(meta, dict):
+                meta = {}
+            if isinstance(current_image, DeepScanImageInfo):
+                meta["tif_path"] = current_image.relative_path
+            meta.update(
+                {
+                    "manual_added": True,
+                    "filename": f"{Path(image_relative_path).stem}_manual_roi_{next_roi_id:04d}.png",
+                    "ID": next_roi_id,
+                    "ST": [int(x1), int(y1)],
+                    "EN": [int(x2), int(y2)],
+                    "CE": [int(center_px_x), int(center_px_y)],
+                    "processed_shape": {"height": int(processed_h), "width": int(processed_w)},
+                    "original_shape": {"height": int(tif_h), "width": int(tif_w)},
+                }
+            )
+            roi_meta_json = json.dumps(meta, ensure_ascii=False)
+
+            insert_columns = [
+                "roi_id",
+                "roi_start_x",
+                "roi_start_y",
+                "roi_end_x",
+                "roi_end_y",
+                "roi_meta",
+                "image_width_px",
+                "image_height_px",
+                "png_blob",
+                "manual_label",
+            ]
+            insert_values: list[object] = [
+                next_roi_id,
+                int(x1),
+                int(y1),
+                int(x2),
+                int(y2),
+                roi_meta_json,
+                int(processed_w),
+                int(processed_h),
+                sqlite3.Binary(png_blob),
+                manual_label,
+            ]
+
+            if has_image_filename:
+                insert_columns.append("image_filename")
+                insert_values.append(image_relative_path)
+            if has_folder_name:
+                insert_columns.append("folder_name")
+                insert_values.append(str(template_row["folder_name"] or ""))
+            if has_image_stem:
+                insert_columns.append("image_stem")
+                insert_values.append(Path(image_relative_path).stem)
+            if has_scale:
+                insert_columns.append("scale")
+                insert_values.append(float(template_row["scale"] if template_row["scale"] is not None else 1.0))
+            if has_num_rois:
+                insert_columns.append("num_rois")
+                insert_values.append(int(next_num_rois))
+            if has_roi_center:
+                insert_columns.extend(["roi_center_x", "roi_center_y"])
+                insert_values.extend([int(center_px_x), int(center_px_y)])
+            if "ai_label" in columns:
+                insert_columns.append("ai_label")
+                insert_values.append(None)
+            if "ai_model_name" in columns:
+                insert_columns.append("ai_model_name")
+                insert_values.append(None)
+
+            placeholders = ", ".join("?" for _ in insert_columns)
+            conn.execute(
+                f"INSERT INTO roi_records ({', '.join(insert_columns)}) VALUES ({placeholders})",
+                tuple(insert_values),
+            )
+            record_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+            if has_num_rois:
+                if has_image_filename:
+                    conn.execute(
+                        "UPDATE roi_records SET num_rois = ? WHERE image_filename = ?",
+                        (int(next_num_rois), image_relative_path),
+                    )
+                else:
+                    conn.execute("UPDATE roi_records SET num_rois = ?", (int(next_num_rois),))
+            conn.commit()
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=f"手動ROI追加中にエラー: {exc}") from exc
+
+    result = inference_crud.predict_label_for_record(db_name=db_name, record_id=record_id)
+    return realtime_crud.RealtimeROI(
+        roi_id=record_id,
+        predicted_class=result.predicted_class,
+        confidence=result.confidence,
+        probabilities=result.probabilities,
+        model_path=result.model_path,
+        roi_start_x=int(x1),
+        roi_start_y=int(y1),
+        roi_end_x=int(x2),
+        roi_end_y=int(y2),
+        image_width_px=int(processed_w),
+        image_height_px=int(processed_h),
+        png_base64=base64.b64encode(png_blob).decode("ascii"),
+        manual_label=manual_label,
+        ai_label=str(result.predicted_class),
+        ai_model_name=result.model_path,
+        manual_added=True,
+    )
+
+
+def delete_manual_roi(db_name: str, record_id: int, *, tif_name: str | None = None) -> int:
+    if record_id <= 0:
+        raise HTTPException(status_code=400, detail="record_id は1以上で指定してください。")
+    db_path = databases_crud.get_database_file_path(db_name)
+    _, _, current_image, _ = _resolve_tif_path(db_path, tif_name=tif_name)
+    expected_relative_path = current_image.relative_path if current_image else None
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            columns = _columns_for_table(conn, "roi_records")
+            has_image_filename = "image_filename" in columns
+            has_num_rois = "num_rois" in columns
+
+            row = conn.execute(
+                "SELECT id, image_filename, roi_meta FROM roi_records WHERE id = ?",
+                (record_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="指定されたROIが見つかりません。")
+            image_filename = str(row["image_filename"] or "") if has_image_filename else ""
+            if expected_relative_path and has_image_filename and image_filename and image_filename != expected_relative_path:
+                raise HTTPException(status_code=400, detail="現在表示中の画像に属するROIのみ削除できます。")
+
+            raw_meta = _deserialize_roi_meta(row["roi_meta"])
+            is_manual_added = bool(raw_meta.get("manual_added")) if isinstance(raw_meta, dict) else False
+            if not is_manual_added:
+                raise HTTPException(status_code=400, detail="自動抽出ROIは削除できません。手動追加ROIのみ削除できます。")
+
+            conn.execute("DELETE FROM roi_records WHERE id = ?", (record_id,))
+
+            if has_num_rois:
+                if has_image_filename and image_filename:
+                    remain = conn.execute(
+                        "SELECT COUNT(*) AS c FROM roi_records WHERE image_filename = ?",
+                        (image_filename,),
+                    ).fetchone()
+                    next_count = int(remain["c"] or 0) if remain else 0
+                    conn.execute(
+                        "UPDATE roi_records SET num_rois = ? WHERE image_filename = ?",
+                        (next_count, image_filename),
+                    )
+                else:
+                    remain = conn.execute("SELECT COUNT(*) AS c FROM roi_records").fetchone()
+                    next_count = int(remain["c"] or 0) if remain else 0
+                    conn.execute("UPDATE roi_records SET num_rois = ?", (next_count,))
+            conn.commit()
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=f"ROI削除中にエラー: {exc}") from exc
+
+    return record_id
 
 
 async def get_deepscan_view(db_name: str, tif_name: str | None = None) -> DeepScanView:

@@ -9,6 +9,7 @@ import {
   CircularProgress,
   Collapse,
   Container,
+  FormControlLabel,
   InputAdornment,
   Link,
   Paper,
@@ -19,6 +20,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Switch,
   TextField,
   Tooltip,
   Typography,
@@ -100,6 +102,7 @@ const TiffManagerBulkPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [result, setResult] = useState<ExtractionResult | null>(null);
+  const [iterativeMode, setIterativeMode] = useState(false);
   const directoryInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchFolders = useCallback(async () => {
@@ -187,7 +190,7 @@ const TiffManagerBulkPage = () => {
         setIsUploading(false);
       }
     },
-    [fetchFolders, t],
+    [fetchFolders, iterativeMode, t],
   );
 
   const handleDirectoryChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -205,7 +208,7 @@ const TiffManagerBulkPage = () => {
         const response = await fetch(endpoint("tiff-bulk/extract"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ folder_name: folderName }),
+          body: JSON.stringify({ folder_name: folderName, iterative_mode: iterativeMode }),
         });
         const payload: ExtractionResult & { detail?: string } = await response.json().catch(() => ({} as ExtractionResult));
         if (!response.ok || !payload || !payload.folder_name) {
@@ -220,7 +223,7 @@ const TiffManagerBulkPage = () => {
         setExtractingFolder(null);
       }
     },
-    [fetchFolders, t],
+    [fetchFolders, iterativeMode, t],
   );
 
   const handleDelete = useCallback(
@@ -245,7 +248,7 @@ const TiffManagerBulkPage = () => {
         setDeletingFolder(null);
       }
     },
-    [fetchFolders, t],
+    [fetchFolders, iterativeMode, t],
   );
 
   const filteredFolders = useMemo(() => {
@@ -306,6 +309,17 @@ const TiffManagerBulkPage = () => {
             >
               {isUploading ? t("bulk.uploading") : t("bulk.uploadCta")}
             </Button>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={iterativeMode}
+                  onChange={(event) => setIterativeMode(event.target.checked)}
+                  inputProps={{ "aria-label": "iterative extraction mode" }}
+                />
+              }
+              label={t("bulk.iterativeMode")}
+              sx={{ ml: { md: 1 } }}
+            />
             <TextField
               size="small"
               placeholder={t("bulk.searchPlaceholder")}
@@ -325,6 +339,9 @@ const TiffManagerBulkPage = () => {
               }}
             />
           </Stack>
+          <Typography variant="caption" color="text.secondary">
+            {t("bulk.iterativeHint")}
+          </Typography>
         </Paper>
 
         <Stack spacing={1}>

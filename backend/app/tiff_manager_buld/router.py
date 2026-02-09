@@ -39,6 +39,7 @@ class DeleteFolderResponse(BaseModel):
 
 class ExtractionRequest(BaseModel):
     folder_name: str = Field(..., description="抽出対象のフォルダ名")
+    iterative_mode: bool | None = Field(None, description="反復抽出を有効にするか")
 
 
 class InferenceRequest(BaseModel):
@@ -142,6 +143,116 @@ class BulkInferenceResponse(BaseModel):
         )
 
 
+class Class1ExportResponse(BaseModel):
+    folder_name: str
+    db_name: str
+    db_path: str
+    export_dir: str
+    manifest_path: str
+    model_path: str
+    class1_roi_count: int
+    image_count: int
+    exported_at: str
+
+    @classmethod
+    def from_dataclass(cls, result: crud.Class1ExportResult) -> "Class1ExportResponse":
+        return cls(
+            folder_name=result.folder_name,
+            db_name=result.db_name,
+            db_path=str(result.db_path),
+            export_dir=str(result.export_dir),
+            manifest_path=str(result.manifest_path),
+            model_path=result.model_path,
+            class1_roi_count=result.class1_roi_count,
+            image_count=result.image_count,
+            exported_at=result.exported_at.isoformat(),
+        )
+
+
+class Class1OptimizationResponse(BaseModel):
+    folder_name: str
+    db_name: str
+    db_path: str
+    manifest_path: str
+    reconcile_path: str
+    search_report_path: str
+    tuning_path: str
+    model_path: str
+    evaluated_roi_count: int
+    best_mae: float
+    best_rmse: float
+    best_params: dict[str, float | int]
+    optimized_at: str
+
+    @classmethod
+    def from_dataclass(cls, result: crud.Class1OptimizationResult) -> "Class1OptimizationResponse":
+        return cls(
+            folder_name=result.folder_name,
+            db_name=result.db_name,
+            db_path=str(result.db_path),
+            manifest_path=str(result.manifest_path),
+            reconcile_path=str(result.reconcile_path),
+            search_report_path=str(result.search_report_path),
+            tuning_path=str(result.tuning_path),
+            model_path=result.model_path,
+            evaluated_roi_count=result.evaluated_roi_count,
+            best_mae=result.best_mae,
+            best_rmse=result.best_rmse,
+            best_params=result.best_params,
+            optimized_at=result.optimized_at.isoformat(),
+        )
+
+
+class ExtractionTuningTemplateResponse(BaseModel):
+    folder_name: str
+    db_name: str
+    db_path: str
+    template_path: str
+    image_count: int
+    exported_at: str
+
+    @classmethod
+    def from_dataclass(cls, result: crud.ExtractionTuningTemplateResult) -> "ExtractionTuningTemplateResponse":
+        return cls(
+            folder_name=result.folder_name,
+            db_name=result.db_name,
+            db_path=str(result.db_path),
+            template_path=str(result.template_path),
+            image_count=result.image_count,
+            exported_at=result.exported_at.isoformat(),
+        )
+
+
+class ExtractionOptimizationResponse(BaseModel):
+    folder_name: str
+    db_name: str
+    db_path: str
+    template_path: str
+    search_report_path: str
+    tuning_path: str
+    evaluated_image_count: int
+    best_mae: float
+    best_rmse: float
+    best_params: dict[str, float | int]
+    optimized_at: str
+
+    @classmethod
+    def from_dataclass(cls, result: crud.ExtractionOptimizationResult) -> "ExtractionOptimizationResponse":
+        return cls(
+            folder_name=result.folder_name,
+            db_name=result.db_name,
+            db_path=str(result.db_path),
+            template_path=str(result.template_path),
+            search_report_path=str(result.search_report_path),
+            tuning_path=str(result.tuning_path),
+            evaluated_image_count=result.evaluated_image_count,
+            best_mae=result.best_mae,
+            best_rmse=result.best_rmse,
+            best_params=result.best_params,
+            optimized_at=result.optimized_at.isoformat(),
+        )
+
+
 @router.post("/upload", response_model=BulkUploadResponse)
 async def upload_tiff_folder(files: list[UploadFile] = File(...)) -> BulkUploadResponse:  # type: ignore[valid-type]
     """Upload multiple TIFFs while keeping their folder hierarchy."""
@@ -169,7 +280,7 @@ async def delete_folder(folder_name: str) -> DeleteFolderResponse:
 
 @router.post("/extract", response_model=BulkExtractionResponse)
 async def extract_folder(payload: ExtractionRequest) -> BulkExtractionResponse:
-    result = await crud.extract_folder(payload.folder_name)
+    result = await crud.extract_folder(payload.folder_name, iterative_mode=payload.iterative_mode)
     return BulkExtractionResponse.from_dataclass(result)
 
 
@@ -189,3 +300,28 @@ async def infer_manifest(payload: InferenceRequest) -> BulkInferenceResponse:
 async def infer_single_image(payload: InferenceImageRequest) -> InferenceFileResponse:
     result = await crud.infer_single_image(payload.folder_name, payload.relative_path)
     return InferenceFileResponse.from_dataclass(result)
+
+
+@router.post("/infer/export-class1", response_model=Class1ExportResponse)
+async def export_class1_rois(payload: InferenceRequest) -> Class1ExportResponse:
+    result = await crud.export_class1_rois(payload.folder_name)
+    return Class1ExportResponse.from_dataclass(result)
+
+
+@router.post("/infer/optimize-class1", response_model=Class1OptimizationResponse)
+async def optimize_class1_thresholds(payload: InferenceRequest) -> Class1OptimizationResponse:
+    result = await crud.optimize_class1_thresholds(payload.folder_name)
+    return Class1OptimizationResponse.from_dataclass(result)
+
+
+@router.post("/extract/export-tuning-template", response_model=ExtractionTuningTemplateResponse)
+async def export_extraction_tuning_template(payload: ExtractionRequest) -> ExtractionTuningTemplateResponse:
+    result = await crud.export_extraction_tuning_template(payload.folder_name)
+    return ExtractionTuningTemplateResponse.from_dataclass(result)
+
+
+@router.post("/extract/optimize", response_model=ExtractionOptimizationResponse)
+async def optimize_extraction_params(payload: ExtractionRequest) -> ExtractionOptimizationResponse:
+    result = await crud.optimize_extraction_params(payload.folder_name)
+    return ExtractionOptimizationResponse.from_dataclass(result)
+

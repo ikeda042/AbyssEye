@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import binascii
 import os
 import sqlite3
@@ -34,6 +35,21 @@ MODEL_FILE_SUFFIXES = {".h5", ".hdf5", ".keras", ".pb", ".tflite"}
 DIRECTORY_DISALLOWED_PARTS = {"", ".", ".."}
 DEFAULT_ACTIVE_KEYWORD = "four"
 INFERENCE_DEVICE_ENV = "INFERENCE_DEVICE"
+ROI_PROFILE_CONFIG_FILENAME = "roi_profiles.json"
+DEFAULT_ROI_PROFILE: dict[str, int | float] = {
+    "roi_width": 48,
+    "roi_height": 48,
+    "green_rate": 0.07,
+    "min_distance": 0,
+    "min_green": 30,
+    "ratio_primary": 1.0,
+    "ratio_secondary": 1.5,
+    "kernel_size": 5,
+    "dilate_iterations": 2,
+    "disallow_overlap": 1,
+    "nms_iou_threshold": 0.15,
+    "iterative_passes": 1,
+}
 
 _active_model_path: Path | None = None
 _active_model_relative_path: str | None = None
@@ -300,6 +316,79 @@ def get_active_model() -> AvailableModel | None:
     if not active_rel or not active_path:
         return None
     return _build_available_model(active_path, is_active=True)
+
+
+def _to_int(value: object, fallback: int) -> int:
+    try:
+        if value is None:
+            return fallback
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _to_float(value: object, fallback: float) -> float:
+    try:
+        if value is None:
+            return fallback
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _normalize_roi_profile(raw: dict[str, object] | None) -> dict[str, int | float]:
+    base = dict(DEFAULT_ROI_PROFILE)
+    if not raw:
+        return base
+    base["roi_width"] = max(8, _to_int(raw.get("roi_width"), int(base["roi_width"])))
+    base["roi_height"] = max(8, _to_int(raw.get("roi_height"), int(base["roi_height"])))
+    base["green_rate"] = min(0.99, max(0.001, _to_float(raw.get("green_rate"), float(base["green_rate"]))))
+    base["min_distance"] = max(0, _to_int(raw.get("min_distance"), int(base["min_distance"])))
+    base["min_green"] = min(255, max(0, _to_int(raw.get("min_green"), int(base["min_green"]))))
+    base["ratio_primary"] = max(0.1, _to_float(raw.get("ratio_primary"), float(base["ratio_primary"])))
+    base["ratio_secondary"] = max(0.1, _to_float(raw.get("ratio_secondary"), float(base["ratio_secondary"])))
+    base["kernel_size"] = max(1, _to_int(raw.get("kernel_size"), int(base["kernel_size"])))
+    base["dilate_iterations"] = max(0, _to_int(raw.get("dilate_iterations"), int(base["dilate_iterations"])))
+    base["disallow_overlap"] = 1 if _to_int(raw.get("disallow_overlap"), int(base["disallow_overlap"])) > 0 else 0
+    base["nms_iou_threshold"] = min(0.95, max(0.0, _to_float(raw.get("nms_iou_threshold"), float(base["nms_iou_threshold"]))))
+    base["iterative_passes"] = max(1, _to_int(raw.get("iterative_passes"), int(base["iterative_passes"])))
+    return base
+
+
+def _load_roi_profile_config() -> dict[str, object]:
+    config_path = _models_root() / ROI_PROFILE_CONFIG_FILENAME
+    if not config_path.exists():
+        return {}
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def get_active_roi_profile(model_relative_path: str | None = None) -> dict[str, int | float]:
+    """Return ROI extraction parameters linked to the active model (or provided model path)."""
+    model_rel = (model_relative_path or "").strip().lower()
+    if not model_rel:
+        active = get_active_model()
+        model_rel = (active.relative_path if active else "").lower()
+
+    config = _load_roi_profile_config()
+    default_raw = config.get("default")
+    default_profile = _normalize_roi_profile(default_raw if isinstance(default_raw, dict) else None)
+
+    profiles = config.get("profiles")
+    if isinstance(profiles, list) and model_rel:
+        for item in profiles:
+            if not isinstance(item, dict):
+                continue
+            match = item.get("match")
+            if not isinstance(match, str) or not match.strip():
+                continue
+            if match.strip().lower() in model_rel:
+                return _normalize_roi_profile({**default_profile, **item})
+
+    return default_profile
 
 
 async def _save_single_model_file(upload_file: UploadFile) -> AvailableModel:

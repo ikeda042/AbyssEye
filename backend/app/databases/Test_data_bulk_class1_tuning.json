@@ -1,0 +1,9 @@
+{
+  "canvas_size": 144,
+  "invert_ratio_threshold": 0.6,
+  "distance_ratio": 0.45,
+  "min_contour_area": 4.0,
+  "morph_open_iterations": 0,
+  "min_cells": 2,
+  "max_cells": 12
+}

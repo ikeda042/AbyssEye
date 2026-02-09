@@ -12,3 +12,6 @@ docker/.env
 docker/letsencrypt/acme.json
 
 .venv311/
+
+# Runtime inference cache
+/backend/app/databases/*_inference_cache.json

@@ -45,6 +45,24 @@ class ROIExtractor:
     GREEN_RATE = 0.07
     MIN_DISTANCE = 0
 
+    @staticmethod
+    def _bbox_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        ix1 = max(ax1, bx1)
+        iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2)
+        iy2 = min(ay2, by2)
+        if ix2 <= ix1 or iy2 <= iy1:
+            return 0.0
+        inter = float((ix2 - ix1) * (iy2 - iy1))
+        area_a = float(max(0, ax2 - ax1) * max(0, ay2 - ay1))
+        area_b = float(max(0, bx2 - bx1) * max(0, by2 - by1))
+        denom = area_a + area_b - inter
+        if denom <= 0.0:
+            return 0.0
+        return inter / denom
+
     @classmethod
     def _percentile_threshold(cls, green: np.ndarray, green_rate: float | None = None) -> int:
         rate = cls.GREEN_RATE if green_rate is None else green_rate
@@ -56,50 +74,106 @@ class ROIExtractor:
         return int(percentile * 255 * 0.01)
 
     @classmethod
-    def detect_rois(cls, img_rgb: np.ndarray) -> list[dict[str, Iterable[int]]]:
+    def detect_rois(
+        cls,
+        img_rgb: np.ndarray,
+        *,
+        roi_width: int | None = None,
+        roi_height: int | None = None,
+        green_rate: float | None = None,
+        min_distance: int | None = None,
+        min_green: int = 30,
+        ratio_primary: float = 1.0,
+        ratio_secondary: float = 1.5,
+        kernel_size: int = 5,
+        dilate_iterations: int = 2,
+        disallow_overlap: bool = True,
+        nms_iou_threshold: float = 0.15,
+        iterative_passes: int = 1,
+    ) -> list[dict[str, Iterable[int]]]:
         height, width = img_rgb.shape[:2]
+        patch_w = max(8, int(cls.WIDTH if roi_width is None else roi_width))
+        patch_h = max(8, int(cls.HEIGHT if roi_height is None else roi_height))
+        min_dist = max(0, int(cls.MIN_DISTANCE if min_distance is None else min_distance))
+        iou_threshold = float(max(0.0, min(0.95, nms_iou_threshold)))
+        num_passes = max(1, int(iterative_passes))
+
         red = img_rgb[:, :, 0].astype(np.float32)
         green = img_rgb[:, :, 1].astype(np.float32)
 
-        thresh = cls._percentile_threshold(green)
+        thresh = cls._percentile_threshold(green, green_rate=green_rate)
 
-        mask1 = (green > thresh) & (green > 30) & ((green / (red + 1e-6)) > 1.0)
-        mask2 = (green < thresh) & (green > 30) & ((green / (red + 1e-6)) >= 1.5)
+        mask1 = (green > thresh) & (green > float(min_green)) & ((green / (red + 1e-6)) > float(ratio_primary))
+        mask2 = (green < thresh) & (green > float(min_green)) & ((green / (red + 1e-6)) >= float(ratio_secondary))
         mask = (mask1 | mask2).astype(np.uint8) * 255
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        dilated = cv2.morphologyEx(mask, cv2.MORPH_DILATE, kernel, iterations=2)
-        peaks = peak_local_max(dilated, min_distance=cls.MIN_DISTANCE)
-
-        tmp = np.zeros_like(mask, dtype=np.uint8)
-        for y, x in peaks:
-            tmp[y, x] = 1
-
-        nlabels, _, _, centers = cv2.connectedComponentsWithStats(tmp)
+        kernel_edge = max(1, int(kernel_size))
+        if kernel_edge % 2 == 0:
+            kernel_edge += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_edge, kernel_edge))
+        working = cv2.morphologyEx(mask, cv2.MORPH_DILATE, kernel, iterations=max(0, int(dilate_iterations)))
 
         rois: list[dict[str, Iterable[int]]] = []
-        for i in range(1, nlabels):
-            xc, yc = int(centers[i][0]), int(centers[i][1])
-            ys, xs = yc - cls.HEIGHT // 2, xc - cls.WIDTH // 2
-            ye, xe = yc + cls.HEIGHT // 2, xc + cls.WIDTH // 2
+        kept_boxes: list[tuple[int, int, int, int]] = []
+        next_id = 1
 
-            if ys < 0:
-                ys, ye = 0, cls.HEIGHT
-            if xs < 0:
-                xs, xe = 0, cls.WIDTH
-            if ye > height:
-                ys, ye = height - cls.HEIGHT, height
-            if xe > width:
-                xs, xe = width - cls.WIDTH, width
+        for _ in range(num_passes):
+            peaks = peak_local_max(working, min_distance=min_dist)
+            if peaks.size == 0:
+                break
 
-            rois.append(
-                {
-                    "ID": i,
-                    "ST": [int(xs), int(ys)],
-                    "EN": [int(xe), int(ye)],
-                    "CE": [int((xs + xe) / 2), int((ys + ye) / 2)],
-                }
-            )
+            tmp = np.zeros_like(mask, dtype=np.uint8)
+            for y, x in peaks:
+                tmp[y, x] = 1
+
+            nlabels, _, _, centers = cv2.connectedComponentsWithStats(tmp)
+            if nlabels <= 1:
+                break
+
+            candidates: list[tuple[float, tuple[int, int, int, int]]] = []
+            for i in range(1, nlabels):
+                xc, yc = int(centers[i][0]), int(centers[i][1])
+                ys, xs = yc - patch_h // 2, xc - patch_w // 2
+                ye, xe = ys + patch_h, xs + patch_w
+
+                if ys < 0:
+                    ys, ye = 0, patch_h
+                if xs < 0:
+                    xs, xe = 0, patch_w
+                if ye > height:
+                    ys, ye = max(0, height - patch_h), height
+                if xe > width:
+                    xs, xe = max(0, width - patch_w), width
+
+                score = float(green[yc, xc]) if 0 <= yc < height and 0 <= xc < width else 0.0
+                candidates.append((score, (int(xs), int(ys), int(xe), int(ye))))
+
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            accepted_any = False
+
+            for _, box in candidates:
+                if disallow_overlap and any(cls._bbox_iou(box, kept) > iou_threshold for kept in kept_boxes):
+                    continue
+                xs, ys, xe, ye = box
+                kept_boxes.append(box)
+                rois.append(
+                    {
+                        "ID": next_id,
+                        "ST": [xs, ys],
+                        "EN": [xe, ye],
+                        "CE": [int((xs + xe) / 2), int((ys + ye) / 2)],
+                    }
+                )
+                next_id += 1
+                accepted_any = True
+
+                # Optional iterative mode: clear accepted ROI area and try another pass.
+                if num_passes > 1:
+                    working[ys:ye, xs:xe] = 0
+
+            if num_passes == 1 or not accepted_any:
+                break
+
         return rois
 
     @staticmethod

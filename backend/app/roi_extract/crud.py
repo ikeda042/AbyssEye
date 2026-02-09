@@ -8,6 +8,7 @@ from datetime import datetime
 import cv2
 from fastapi import HTTPException
 
+from ..inference import crud as inference_crud
 from .roi_module import ROIExtractor
 
 APP_DIR = Path(__file__).resolve().parents[1]
@@ -85,7 +86,25 @@ async def create_database_from_tif(tif_name: str) -> ROIExtractionResult:
         img_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         processed_h, processed_w = img_rgb.shape[:2]
 
-        rois = ROIExtractor.detect_rois(img_rgb)
+        roi_profile = inference_crud.get_active_roi_profile()
+        roi_width = int(roi_profile.get("roi_width", ROIExtractor.WIDTH))
+        roi_height = int(roi_profile.get("roi_height", ROIExtractor.HEIGHT))
+
+        rois = ROIExtractor.detect_rois(
+            img_rgb,
+            roi_width=roi_width,
+            roi_height=roi_height,
+            green_rate=float(roi_profile.get("green_rate", ROIExtractor.GREEN_RATE)),
+            min_distance=int(roi_profile.get("min_distance", ROIExtractor.MIN_DISTANCE)),
+            min_green=int(roi_profile.get("min_green", 30)),
+            ratio_primary=float(roi_profile.get("ratio_primary", 1.0)),
+            ratio_secondary=float(roi_profile.get("ratio_secondary", 1.5)),
+            kernel_size=int(roi_profile.get("kernel_size", 5)),
+            dilate_iterations=int(roi_profile.get("dilate_iterations", 2)),
+            disallow_overlap=int(roi_profile.get("disallow_overlap", 1)) > 0,
+            nms_iou_threshold=float(roi_profile.get("nms_iou_threshold", 0.30)),
+            iterative_passes=int(roi_profile.get("iterative_passes", 1)),
+        )
         ROIExtractor.save_rois_to_db(
             img_rgb,
             rois,
@@ -107,7 +126,7 @@ async def create_database_from_tif(tif_name: str) -> ROIExtractionResult:
             roi_count=roi_count,
             original_shape=(h, w),
             processed_shape=(processed_h, processed_w),
-            roi_patch_shape=(ROIExtractor.HEIGHT, ROIExtractor.WIDTH),
+            roi_patch_shape=(roi_height, roi_width),
             saved_at=datetime.now(),
             db_size_bytes=db_size_bytes,
             roi_density_per_mp=roi_density,

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import quote
 
 from fastapi import APIRouter, Query, Request
+from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, Response
 
 from . import crud
@@ -47,6 +49,7 @@ def _build_status_payload(view: crud.DeepScanView, request: Request) -> dict:
                 "image_height_px": roi.image_height_px,
                 "png_base64": roi.png_base64,
                 "manual_label": roi.manual_label,
+                "manual_added": roi.manual_added,
             }
             for roi in status.rois
         ],
@@ -103,6 +106,74 @@ async def get_deepscan_status(
 ) -> dict:
     view = await crud.get_deepscan_view(db_name=db_name, tif_name=tif_name)
     return _build_status_payload(view, request)
+
+
+class ManualRoiAddRequest(BaseModel):
+    center_x: int = Field(..., ge=0, description="ROI中心X座標(px)")
+    center_y: int = Field(..., ge=0, description="ROI中心Y座標(px)")
+    roi_width: int = Field(48, ge=8, le=512, description="ROI幅(px)")
+    roi_height: int = Field(48, ge=8, le=512, description="ROI高さ(px)")
+    manual_label: str | None = Field(None, description="手動ラベル(任意)")
+    tif_name: str | None = Field(None, description="対象TIFF名(相対パス)")
+
+
+class ManualRoiResponse(BaseModel):
+    roi_id: int
+    predicted_class: int
+    confidence: float
+    probabilities: list[float]
+    roi_start_x: int
+    roi_start_y: int
+    roi_end_x: int
+    roi_end_y: int
+    image_width_px: int
+    image_height_px: int
+    png_base64: str
+    manual_label: str | None = None
+    manual_added: bool = False
+
+
+class ManualRoiDeleteResponse(BaseModel):
+    deleted_roi_id: int
+
+
+@router.post("/{db_name}/manual-rois", response_model=ManualRoiResponse)
+async def add_manual_roi(db_name: str, payload: ManualRoiAddRequest) -> ManualRoiResponse:
+    roi = await asyncio.to_thread(
+        crud.add_manual_roi,
+        db_name,
+        tif_name=payload.tif_name,
+        center_x=payload.center_x,
+        center_y=payload.center_y,
+        roi_width=payload.roi_width,
+        roi_height=payload.roi_height,
+        manual_label=payload.manual_label,
+    )
+    return ManualRoiResponse(
+        roi_id=roi.roi_id,
+        predicted_class=roi.predicted_class,
+        confidence=roi.confidence,
+        probabilities=roi.probabilities,
+        roi_start_x=roi.roi_start_x,
+        roi_start_y=roi.roi_start_y,
+        roi_end_x=roi.roi_end_x,
+        roi_end_y=roi.roi_end_y,
+        image_width_px=roi.image_width_px,
+        image_height_px=roi.image_height_px,
+        png_base64=roi.png_base64,
+        manual_label=roi.manual_label,
+        manual_added=roi.manual_added,
+    )
+
+
+@router.delete("/{db_name}/manual-rois/{record_id}", response_model=ManualRoiDeleteResponse)
+async def remove_manual_roi(
+    db_name: str,
+    record_id: int,
+    tif_name: str | None = Query(None, description="表示対象TIFF (相対パスまたはファイル名)"),
+) -> ManualRoiDeleteResponse:
+    deleted = await asyncio.to_thread(crud.delete_manual_roi, db_name, record_id, tif_name=tif_name)
+    return ManualRoiDeleteResponse(deleted_roi_id=deleted)
 
 
 @router.get("/{db_name}/tiff", name="get_deepscan_tif_file")

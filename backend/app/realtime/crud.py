@@ -61,6 +61,7 @@ class RealtimeROI:
     manual_label: str | None = None
     ai_label: str | None = None
     ai_model_name: str | None = None
+    manual_added: bool = False
 
 
 @dataclass
@@ -351,7 +352,22 @@ def _create_db_from_tif(tif_path: Path) -> Path:
         img_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         processed_h, processed_w = img_rgb.shape[:2]
 
-        rois = ROIExtractor.detect_rois(img_rgb)
+        roi_profile = inference_crud.get_active_roi_profile()
+        rois = ROIExtractor.detect_rois(
+            img_rgb,
+            roi_width=int(roi_profile.get("roi_width", ROIExtractor.WIDTH)),
+            roi_height=int(roi_profile.get("roi_height", ROIExtractor.HEIGHT)),
+            green_rate=float(roi_profile.get("green_rate", ROIExtractor.GREEN_RATE)),
+            min_distance=int(roi_profile.get("min_distance", ROIExtractor.MIN_DISTANCE)),
+            min_green=int(roi_profile.get("min_green", 30)),
+            ratio_primary=float(roi_profile.get("ratio_primary", 1.0)),
+            ratio_secondary=float(roi_profile.get("ratio_secondary", 1.5)),
+            kernel_size=int(roi_profile.get("kernel_size", 5)),
+            dilate_iterations=int(roi_profile.get("dilate_iterations", 2)),
+            disallow_overlap=int(roi_profile.get("disallow_overlap", 1)) > 0,
+            nms_iou_threshold=float(roi_profile.get("nms_iou_threshold", 0.30)),
+            iterative_passes=int(roi_profile.get("iterative_passes", 1)),
+        )
         try:
             ROIExtractor.save_rois_to_db(
                 img_rgb,
