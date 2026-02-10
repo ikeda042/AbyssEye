@@ -1243,19 +1243,21 @@ const DeepScanPage = () => {
                                   width,
                                   height,
                                   borderRadius: 0.75,
+                                  zIndex: isSelected ? 8 : 1,
                                   border: isSelected
                                     ? `1.8px ${isManualAdded ? "dashed" : "solid"} ${color}`
                                     : `1px ${isManualAdded ? "dashed" : "solid"} ${color}c0`,
                                   backgroundColor: isManualAdded ? (isSelected ? "rgba(249,115,22,0.16)" : "rgba(249,115,22,0.08)") : (isSelected ? `${color}26` : `${color}12`),
                                   opacity: 0,
                                   transform: "scale(0.97)",
+                                  transformOrigin: "center center",
                                   animation: `${overlayReveal} 0.35s ease ${delay}s forwards`,
                                   overflow: "hidden",
                                   cursor: "pointer",
                                   boxShadow: isSelected
-                                    ? `0 0 0 1px ${isManualAdded ? "rgba(249,115,22,0.75)" : `${color}70`}, 0 0 0 5px ${isManualAdded ? "rgba(249,115,22,0.14)" : `${color}1c`}`
+                                    ? `0 0 0 2px ${isManualAdded ? "rgba(249,115,22,0.9)" : `${color}`}, 0 0 24px 6px ${isManualAdded ? "rgba(249,115,22,0.35)" : `${color}66`}`
                                     : "0 0 0 0.5px rgba(15,23,42,0.06)",
-                                  transition: "box-shadow 160ms ease, background-color 160ms ease, transform 160ms ease",
+                                  transition: "box-shadow 160ms ease, background-color 160ms ease, transform 160ms ease, opacity 120ms ease",
                                   "&:hover": {
                                     boxShadow: `0 0 0 1.4px ${color}9a, 0 0 0 7px ${color}16`,
                                     backgroundColor: `${color}16`,
@@ -1291,11 +1293,13 @@ const DeepScanPage = () => {
                                     position: "absolute",
                                     inset: "-10%",
                                     borderRadius: "inherit",
-                                    background: isManualAdded ? "rgba(249,115,22,0.22)" : `${color}24`,
+                                    background: isManualAdded ? "rgba(249,115,22,0.28)" : `${color}30`,
                                     filter: "blur(14px)",
-                                    opacity: 0,
+                                    opacity: isSelected ? 0.45 : 0,
                                     pointerEvents: "none",
-                                    animation: `${capturePulse} 0.75s ease-out ${delay}s 1`,
+                                    animation: isSelected
+                                      ? `${capturePulse} 1.15s ease-in-out 0s infinite`
+                                      : `${capturePulse} 0.75s ease-out ${delay}s 1`,
                                   }}
                                 />
                               </Box>
@@ -1343,27 +1347,6 @@ const DeepScanPage = () => {
                       </Button>
                     </Box>
 
-                    <Typography variant="subtitle1" fontWeight={600}>
-                      {labels.targetDb}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {status.db_name || dbName}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      TIFF: {status.tif_name}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {labels.updatedAt}: {new Date(status.saved_at).toLocaleString()}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {labels.tiffSize}: {formatBytes(status.size_bytes)}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {labels.originalResolution}: {formatDimensions(status.original_shape)}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {labels.processedResolution}: {formatDimensions(status.processed_shape)}
-                    </Typography>
                     <Box
                       sx={{
                         flex: 1,
@@ -1549,6 +1532,28 @@ const DeepScanPage = () => {
                     </Box>
                   </Stack>
                 </Stack>
+
+                <Box
+                  sx={{
+                    mt: 1,
+                    border: "1px solid rgba(15,23,42,0.12)",
+                    borderRadius: 1,
+                    p: 1.25,
+                    backgroundColor: "rgba(15,23,42,0.02)",
+                  }}
+                >
+                  <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 0.75 }}>
+                    {labels.targetDb}
+                  </Typography>
+                  <Stack direction="row" flexWrap="wrap" columnGap={2.5} rowGap={0.75}>
+                    <Typography variant="body2" color="text.secondary">{status.db_name || dbName}</Typography>
+                    <Typography variant="body2" color="text.secondary">TIFF: {status.tif_name}</Typography>
+                    <Typography variant="body2" color="text.secondary">{labels.updatedAt}: {new Date(status.saved_at).toLocaleString()}</Typography>
+                    <Typography variant="body2" color="text.secondary">{labels.tiffSize}: {formatBytes(status.size_bytes)}</Typography>
+                    <Typography variant="body2" color="text.secondary">{labels.originalResolution}: {formatDimensions(status.original_shape)}</Typography>
+                    <Typography variant="body2" color="text.secondary">{labels.processedResolution}: {formatDimensions(status.processed_shape)}</Typography>
+                  </Stack>
+                </Box>
               </CardContent>
             </Card>
 
@@ -1734,7 +1739,7 @@ const DeepScanPage = () => {
                       }}
                     />
                   </Box>
-                  <Stack spacing={1.25} sx={{ minWidth: { md: 260 }, width: { md: 300, lg: 320 }, maxWidth: 360, alignSelf: "stretch" }}>
+                  <Stack spacing={1.25} sx={{ width: "100%", maxWidth: "none", alignSelf: "stretch" }}>
                     <Typography variant="subtitle1" fontWeight={600}>
                       {labels.targetDb}
                     </Typography>
