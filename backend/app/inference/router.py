@@ -43,6 +43,39 @@ class InferenceResponse(BaseModel):
     model_path: str = Field(..., description="使用したモデルパス")
 
 
+class InferenceBatchRequest(BaseModel):
+    images_base64: list[str] = Field(..., description="Base64 encoded ROI list")
+    model_path: str | None = Field(
+        None,
+        description="任意でモデルパスを上書きする場合に指定。省略時は既定候補から自動選択。",
+    )
+
+
+class InferenceBatchResponse(BaseModel):
+    predictions: list[InferenceResponse]
+
+
+class Class1ComponentsRequest(InferenceRequest):
+    threshold_value: int = Field(42, ge=0, le=255, description="固定閾値")
+    min_area_px: int = Field(8, ge=1, le=256, description="最小面積(px)")
+
+
+class Class1ComponentsSegmentResponse(BaseModel):
+    predicted_class: int
+    confidence: float
+    probabilities: list[float]
+
+
+class Class1ComponentsResponse(BaseModel):
+    refined_class: int
+    refined_confidence: float
+    refined_probabilities: list[float]
+    component_count: int
+    component_bboxes: list[list[int]]
+    predictions: list[Class1ComponentsSegmentResponse]
+    model_path: str
+
+
 def _serialize_model(model: crud.AvailableModel) -> ModelInfo:
     return ModelInfo(
         name=model.name,
@@ -107,4 +140,48 @@ async def predict_record(request: RecordInferenceRequest) -> InferenceResponse:
         confidence=result.confidence,
         probabilities=result.probabilities,
         model_path=result.model_path,
+    )
+
+
+@router.post("/predict-class1-components", response_model=Class1ComponentsResponse)
+async def predict_class1_components(request: Class1ComponentsRequest) -> Class1ComponentsResponse:
+    """Class1 ROIを固定閾値+連結成分+最小面積で再分割して再推論する。"""
+    result = crud.predict_label_with_class1_components(
+        request.image_base64,
+        model_path=request.model_path,
+        threshold_value=request.threshold_value,
+        min_area_px=request.min_area_px,
+    )
+    return Class1ComponentsResponse(
+        refined_class=result.refined_class,
+        refined_confidence=result.refined_confidence,
+        refined_probabilities=result.refined_probabilities,
+        component_count=result.component_count,
+        component_bboxes=[list(b) for b in result.component_bboxes],
+        predictions=[
+            Class1ComponentsSegmentResponse(
+                predicted_class=item.predicted_class,
+                confidence=item.confidence,
+                probabilities=item.probabilities,
+            )
+            for item in result.predictions
+        ],
+        model_path=result.model_path,
+    )
+
+
+@router.post("/predict-batch", response_model=InferenceBatchResponse)
+async def predict_batch(request: InferenceBatchRequest) -> InferenceBatchResponse:
+    """Accept multiple ROI patches and return predicted labels in one batch."""
+    results = crud.predict_labels_batch(request.images_base64, model_path=request.model_path)
+    return InferenceBatchResponse(
+        predictions=[
+            InferenceResponse(
+                predicted_class=item.predicted_class,
+                confidence=item.confidence,
+                probabilities=item.probabilities,
+                model_path=item.model_path,
+            )
+            for item in results
+        ]
     )

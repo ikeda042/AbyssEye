@@ -38,6 +38,8 @@ class DeepScanView:
     available_images: list[DeepScanImageInfo]
     current_image: DeepScanImageInfo | None
     current_index: int
+    focus_profile: dict[str, object] | None
+    focus_map: dict[str, object] | None
 
 
 def _deserialize_roi_meta(raw_meta: object) -> object:
@@ -131,6 +133,210 @@ def _shape_from_meta(meta: object, key: str) -> tuple[int, int] | None:
 def _columns_for_table(conn: sqlite3.Connection, table_name: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {str(row[1]) for row in rows}
+
+def _focus_normalized_variance(gray: np.ndarray) -> float:
+    g = gray.astype(np.float64)
+    mu = float(g.mean())
+    if mu <= 1e-9:
+        return 0.0
+    var = float(((g - mu) ** 2).mean())
+    return var / (mu + 1e-12)
+
+
+def _focus_tenengrad(gray: np.ndarray, ksize: int = 3) -> float:
+    gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=ksize)
+    gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=ksize)
+    g2 = gx * gx + gy * gy
+    return float(g2.mean())
+
+
+def _minmax(values: list[float]) -> list[float]:
+    if not values:
+        return []
+    mn = min(values)
+    mx = max(values)
+    if mx - mn <= 1e-12:
+        return [0.0 for _ in values]
+    return [(v - mn) / (mx - mn) for v in values]
+
+
+def _load_focus_gray(path: Path, max_side: int = 640) -> np.ndarray | None:
+    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    if img.ndim == 3:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = img
+    if gray.dtype != np.uint8:
+        gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    h, w = gray.shape[:2]
+    if max(h, w) > max_side and h > 0 and w > 0:
+        scale = max_side / float(max(h, w))
+        gray = cv2.resize(gray, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+    return gray
+
+
+def _collect_focus_stack(images: list[DeepScanImageInfo], max_side: int = 640) -> tuple[list[int], list[str], list[np.ndarray]]:
+    indices: list[int] = []
+    names: list[str] = []
+    stack: list[np.ndarray] = []
+    for idx, image in enumerate(images):
+        tif_path = image.tif_path
+        if tif_path is None or not tif_path.is_file():
+            continue
+        gray = _load_focus_gray(tif_path, max_side=max_side)
+        if gray is None:
+            continue
+        indices.append(idx)
+        names.append(image.relative_path)
+        stack.append(gray)
+    return indices, names, stack
+
+
+def _build_focus_map(images: list[DeepScanImageInfo], current_index: int, tile_size: int = 32) -> dict[str, object] | None:
+    indices, names, stack = _collect_focus_stack(images, max_side=640)
+    if len(stack) < 2:
+        return None
+
+    base_h, base_w = stack[0].shape[:2]
+    aligned: list[np.ndarray] = []
+    for gray in stack:
+        if gray.shape[:2] != (base_h, base_w):
+            gray = cv2.resize(gray, (base_w, base_h), interpolation=cv2.INTER_AREA)
+        aligned.append(gray)
+
+    rows = max(1, base_h // tile_size)
+    cols = max(1, base_w // tile_size)
+    stride_y = base_h / rows
+    stride_x = base_w / cols
+
+    best_indices: list[int] = []
+    best_depth_rel: list[float] = []
+    confidence: list[float] = []
+
+    for r in range(rows):
+        y0 = int(round(r * stride_y))
+        y1 = int(round((r + 1) * stride_y))
+        for c in range(cols):
+            x0 = int(round(c * stride_x))
+            x1 = int(round((c + 1) * stride_x))
+            tile_nvar: list[float] = []
+            tile_ten: list[float] = []
+            for gray in aligned:
+                tile = gray[y0:y1, x0:x1]
+                if tile.size == 0:
+                    tile_nvar.append(0.0)
+                    tile_ten.append(0.0)
+                else:
+                    tile_nvar.append(_focus_normalized_variance(tile))
+                    tile_ten.append(_focus_tenengrad(tile))
+            n_norm = _minmax(tile_nvar)
+            t_norm = _minmax(tile_ten)
+            scores = [0.5 * a + 0.5 * b for a, b in zip(n_norm, t_norm)]
+            order = np.argsort(np.array(scores))[::-1]
+            best_local = int(order[0])
+            second = float(scores[int(order[1])]) if len(order) > 1 else 0.0
+            best_score = float(scores[best_local])
+            conf = max(0.0, min(1.0, best_score - second))
+
+            best_idx = indices[best_local]
+            best_indices.append(best_idx)
+            if len(indices) <= 1:
+                best_depth_rel.append(0.0)
+            else:
+                best_depth_rel.append(best_local / float(len(indices) - 1))
+            confidence.append(conf)
+
+    # current depth relative within available stack
+    if current_index in indices and len(indices) > 1:
+        current_local = indices.index(current_index)
+        current_depth_rel = current_local / float(len(indices) - 1)
+    else:
+        current_depth_rel = 0.0
+
+    return {
+        "method": "tile_focus_map(normalized_variance+tenengrad)",
+        "tile_size": int(tile_size),
+        "rows": int(rows),
+        "cols": int(cols),
+        "image_width": int(base_w),
+        "image_height": int(base_h),
+        "z_indices": indices,
+        "z_paths": names,
+        "current_index": int(current_index),
+        "current_depth_relative": float(current_depth_rel),
+        "best_indices": best_indices,
+        "best_depth_relative": best_depth_rel,
+        "confidence": confidence,
+    }
+
+
+def _build_focus_profile(images: list[DeepScanImageInfo], current_index: int) -> dict[str, object] | None:
+    entries: list[dict[str, object]] = []
+    nvar_vals: list[float] = []
+    ten_vals: list[float] = []
+
+    for idx, image in enumerate(images):
+        tif_path = image.tif_path
+        if tif_path is None or not tif_path.is_file():
+            continue
+        gray = _load_focus_gray(tif_path)
+        if gray is None:
+            continue
+        nvar = _focus_normalized_variance(gray)
+        ten = _focus_tenengrad(gray)
+        entries.append(
+            {
+                "index": idx,
+                "relative_path": image.relative_path,
+                "tif_name": image.tif_name,
+                "normalized_variance": nvar,
+                "tenengrad": ten,
+            }
+        )
+        nvar_vals.append(nvar)
+        ten_vals.append(ten)
+
+    if not entries:
+        return None
+
+    nvar_norm = _minmax(nvar_vals)
+    ten_norm = _minmax(ten_vals)
+
+    for i, e in enumerate(entries):
+        combined = 0.5 * nvar_norm[i] + 0.5 * ten_norm[i]
+        e["combined_score"] = float(combined)
+        e["normalized_variance_norm"] = float(nvar_norm[i])
+        e["tenengrad_norm"] = float(ten_norm[i])
+
+    peak_entry = max(entries, key=lambda e: float(e["combined_score"]))
+    peak_index = int(peak_entry["index"])
+    peak_score = float(peak_entry["combined_score"])
+
+    current_entry = next((e for e in entries if int(e["index"]) == current_index), entries[0])
+    current_score = float(current_entry["combined_score"])
+    score_ratio = 0.0 if peak_score <= 1e-12 else current_score / peak_score
+
+    total = max(1, len(entries))
+    for e in entries:
+        idx = int(e["index"])
+        e["z_relative"] = 0.0 if total == 1 else (idx / (total - 1))
+        e["z_offset_from_peak"] = idx - peak_index
+
+    return {
+        "method": "normalized_variance+tenengrad",
+        "count": len(entries),
+        "current_index": int(current_entry["index"]),
+        "peak_index": peak_index,
+        "current_score": current_score,
+        "peak_score": peak_score,
+        "current_to_peak_ratio": score_ratio,
+        "z_offset_from_peak": int(current_entry["index"]) - peak_index,
+        "current_relative_path": str(current_entry["relative_path"]),
+        "peak_relative_path": str(peak_entry["relative_path"]),
+        "scores": entries,
+    }
 
 
 def _try_resolve_tif_by_name(tif_name_or_relative: str) -> Path | None:
@@ -642,9 +848,14 @@ async def get_deepscan_view(db_name: str, tif_name: str | None = None) -> DeepSc
         rois=rois,
     )
 
+    focus_profile = await asyncio.to_thread(_build_focus_profile, images, current_index)
+    focus_map = await asyncio.to_thread(_build_focus_map, images, current_index)
+
     return DeepScanView(
         status=status,
         available_images=images,
         current_image=current_image,
         current_index=current_index,
+        focus_profile=focus_profile,
+        focus_map=focus_map,
     )

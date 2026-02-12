@@ -45,6 +45,7 @@ type InferenceResult = {
   files: InferenceFile[];
 };
 
+
 const TiffManagerBulkInferencePage = () => {
   const { language } = useI18n();
   const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
@@ -148,6 +149,8 @@ const TiffManagerBulkInferencePage = () => {
       setIsRunning(false);
     }
   }, [dbName, folderName, labels.missingParams, labels.runError]);
+
+
 
   useEffect(() => {
     void fetchManifestAndRun();

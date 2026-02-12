@@ -58,6 +58,71 @@ type Dimensions = {
   height: number;
 };
 
+type FocusProfileScore = {
+  index: number;
+  relative_path: string;
+  tif_name: string;
+  normalized_variance: number;
+  tenengrad: number;
+  normalized_variance_norm: number;
+  tenengrad_norm: number;
+  combined_score: number;
+  z_relative: number;
+  z_offset_from_peak: number;
+};
+
+type FocusProfile = {
+  method: string;
+  count: number;
+  current_index: number;
+  peak_index: number;
+  current_score: number;
+  peak_score: number;
+  current_to_peak_ratio: number;
+  z_offset_from_peak: number;
+  current_relative_path: string;
+  peak_relative_path: string;
+  scores: FocusProfileScore[];
+};
+
+type Class1ShiftHit = {
+  predicted_class: number;
+  confidence: number;
+  probabilities: number[];
+  dx: number;
+  dy: number;
+  shifted_image_base64: string;
+};
+
+type Class1RecheckPrediction = {
+  predicted_class: number;
+  confidence: number;
+  probabilities: number[];
+  hits: Class1ShiftHit[];
+};
+
+type Class1RecheckedItem = {
+  origin_roi_id: number;
+  origin_roi: RealtimeROI;
+  hit: Class1ShiftHit;
+};
+
+type FocusMap = {
+  method: string;
+  tile_size: number;
+  rows: number;
+  cols: number;
+  image_width: number;
+  image_height: number;
+  z_indices: number[];
+  z_paths: string[];
+  current_index: number;
+  current_depth_relative: number;
+  best_indices: number[];
+  best_depth_relative: number[];
+  confidence: number[];
+};
+
 type DeepScanImageInfo = {
   relative_path: string;
   tif_name: string;
@@ -80,6 +145,8 @@ type DeepScanStatus = {
   current_image_relative_path?: string | null;
   original_shape?: Dimensions | null;
   processed_shape?: Dimensions | null;
+  focus_profile?: FocusProfile | null;
+  focus_map?: FocusMap | null;
 };
 
 const buildStatusEndpoint = (dbName: string, tifName?: string) => {
@@ -103,6 +170,7 @@ const buildManualRoiDeleteEndpoint = (dbName: string, recordId: number, tifName?
   }
   return url.toString();
 };
+const buildInferencePredictBatchEndpoint = () => new URL("inference/predict-batch", API_BASE_URL).toString();
 type DisplayMode = "raw" | "normalized" | "jet" | "opticalBoost";
 type LabelMode = "ai" | "manual";
 const storageKeys = {
@@ -110,6 +178,7 @@ const storageKeys = {
   deepVision: "deepscan:deepVisionEnabled",
   labelMode: "deepscan:labelMode",
   previewLabelMode: "deepscan:previewLabelMode",
+  focusMapOverlay: "deepscan:focusMapOverlay",
 };
 
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
@@ -303,6 +372,10 @@ const DeepScanPage = () => {
   });
   const [roiDisplayMode, setRoiDisplayMode] = useState<DisplayMode>("raw");
   const [deepVisionOverlayEnabled, setDeepVisionOverlayEnabled] = useState<boolean>(() => loadStoredDeepVision());
+  const [focusMapOverlayEnabled, setFocusMapOverlayEnabled] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem(storageKeys.focusMapOverlay) !== "0";
+  });
   const [renderedTifSrc, setRenderedTifSrc] = useState<string | null>(null);
   const [renderingTif, setRenderingTif] = useState(false);
   const [imageSwitching, setImageSwitching] = useState(false);
@@ -328,6 +401,10 @@ const DeepScanPage = () => {
   const [manualRoiError, setManualRoiError] = useState<string | null>(null);
   const [draggingRoiId, setDraggingRoiId] = useState<number | null>(null);
   const [dragOverClass, setDragOverClass] = useState<number | null>(null);
+  const [class1RecheckEnabled, setClass1RecheckEnabled] = useState(false);
+  const [class1RecheckRunning, setClass1RecheckRunning] = useState(false);
+  const [class1RecheckError, setClass1RecheckError] = useState<string | null>(null);
+  const [class1RecheckResults, setClass1RecheckResults] = useState<Record<number, Class1RecheckPrediction>>({});
   const statusCacheRef = useRef<Map<string, DeepScanStatus>>(new Map());
   const roiDisplayCacheRef = useRef<Map<string, string>>(new Map());
   const selectedRoiDisplayCacheRef = useRef<Map<string, string>>(new Map());
@@ -386,6 +463,24 @@ const DeepScanPage = () => {
       inferencePreview: tt("推論プレビュー表示モード", "Inference preview display mode"),
       noImages: tt("まだ割り当てられた画像がありません。", "No images assigned yet."),
       infoSelectDb: tt("DeepScanを表示するDBを選択してください。", "Select a DB to view DeepScan."),
+      focusIndicatorTitle: tt("フォーカスインジケーター", "Focus indicator"),
+      focusCurrent: tt("現在スコア", "Current score"),
+      focusPeak: tt("ピークスコア", "Peak score"),
+      focusRatio: tt("ピーク比", "Peak ratio"),
+      focusDepth: tt("ピークからの相対深度", "Relative depth from peak"),
+      focusNoData: tt("フォーカス指標データがありません。", "No focus metric data."),
+      focusMethod: tt("評価式", "Method"),
+      focusNearZ: tt("近傍Zスコア", "Nearby Z scores"),
+      focusMapOverlay: tt("フォーカスマップ表示", "Focus map overlay"),
+      focusMapLegendNear: tt("近(浅)", "Near"),
+      focusMapLegendFar: tt("遠(深)", "Far"),
+      class1Recheck: tt("Class1再検討", "Class1 recheck"),
+      class1RecheckRun: tt("再検討実行", "Run recheck"),
+      class1RecheckRunning: tt("再検討中...", "Rechecking..."),
+      class1RecheckAfter: tt("検討後", "After recheck"),
+      class1RecheckNoClass1: tt("Class1 ROIがありません。", "No Class1 ROIs."),
+      class1RecheckError: tt("Class1再検討に失敗しました。", "Class1 recheck failed."),
+      class1RecheckAggressiveHint: tt("探索: 4px刻み/最大48px/最大3候補", "Search: 4px step / max 48px / up to 3 hits"),
     }),
     [tt],
   );
@@ -418,6 +513,11 @@ const DeepScanPage = () => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(storageKeys.deepVision, deepVisionOverlayEnabled ? "1" : "0");
   }, [deepVisionOverlayEnabled]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(storageKeys.focusMapOverlay, focusMapOverlayEnabled ? "1" : "0");
+  }, [focusMapOverlayEnabled]);
 
   const recomputeImageLayout = useCallback(() => {
     const container = imageContainerRef.current;
@@ -715,6 +815,198 @@ const DeepScanPage = () => {
     return { buckets, others, counts };
   }, [status, previewLabelMode]);
 
+  useEffect(() => {
+    setClass1RecheckResults({});
+    setClass1RecheckEnabled(false);
+    setClass1RecheckError(null);
+  }, [dbName, status?.current_image_relative_path, previewLabelMode]);
+
+  const runClass1Recheck = useCallback(async () => {
+    const class1Rois = previewBuckets.buckets[1] ?? [];
+    if (!class1Rois.length) {
+      setClass1RecheckResults({});
+      setClass1RecheckError(labels.class1RecheckNoClass1);
+      return;
+    }
+
+    const stepPx = 4;
+    const maxShiftPx = 48;
+    const maxHitsPerRoi = 3;
+    const minConfidence = 0.8;
+    const overlapIou = 0.1;
+
+    const bboxIou = (a: [number, number, number, number], b: [number, number, number, number]) => {
+      const x1 = Math.max(a[0], b[0]);
+      const y1 = Math.max(a[1], b[1]);
+      const x2 = Math.min(a[2], b[2]);
+      const y2 = Math.min(a[3], b[3]);
+      const iw = Math.max(0, x2 - x1);
+      const ih = Math.max(0, y2 - y1);
+      const inter = iw * ih;
+      if (inter <= 0) return 0;
+      const areaA = Math.max(1, (a[2] - a[0]) * (a[3] - a[1]));
+      const areaB = Math.max(1, (b[2] - b[0]) * (b[3] - b[1]));
+      return inter / (areaA + areaB - inter);
+    };
+
+    const allBoxes = (status?.rois ?? []).map((r) => ({
+      roi_id: r.roi_id,
+      box: [r.roi_start_x, r.roi_start_y, r.roi_end_x, r.roi_end_y] as [number, number, number, number],
+    }));
+    const acceptedGlobal: [number, number, number, number][] = [];
+
+    setClass1RecheckRunning(true);
+    setClass1RecheckError(null);
+    try {
+      const next: Record<number, Class1RecheckPrediction> = {};
+
+      for (const roi of class1Rois) {
+        const roiWidth = Math.max(1, roi.roi_end_x - roi.roi_start_x);
+        const roiHeight = Math.max(1, roi.roi_end_y - roi.roi_start_y);
+        const rawSrc = `data:image/png;base64,${roi.png_base64}`;
+        const img = await loadImage(rawSrc);
+        const canvas = document.createElement("canvas");
+        canvas.width = 48;
+        canvas.height = 48;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) continue;
+
+        const shifts: Array<[number, number]> = [];
+        for (let d = stepPx; d <= maxShiftPx; d += stepPx) {
+          shifts.push(
+            [d, 0], [-d, 0], [0, d], [0, -d],
+            [d, d], [d, -d], [-d, d], [-d, -d],
+          );
+        }
+
+        const hits: Class1ShiftHit[] = [];
+        const candidates: Array<{ dx: number; dy: number; shiftedGlobal: [number, number, number, number]; shiftedBase64: string }> = [];
+
+        for (const [dx, dy] of shifts) {
+          const shiftedGlobal: [number, number, number, number] = [
+            roi.roi_start_x + dx,
+            roi.roi_start_y + dy,
+            roi.roi_start_x + dx + roiWidth,
+            roi.roi_start_y + dy + roiHeight,
+          ];
+
+          const overlapsExisting = allBoxes.some((item) => item.roi_id !== roi.roi_id && bboxIou(shiftedGlobal, item.box) > overlapIou);
+          if (overlapsExisting) continue;
+          const overlapsAccepted = acceptedGlobal.some((b) => bboxIou(shiftedGlobal, b) > overlapIou);
+          if (overlapsAccepted) continue;
+
+          ctx.fillStyle = "black";
+          ctx.fillRect(0, 0, 48, 48);
+          ctx.drawImage(img, dx, dy, 48, 48);
+          candidates.push({
+            dx,
+            dy,
+            shiftedGlobal,
+            shiftedBase64: canvas.toDataURL("image/png"),
+          });
+        }
+
+        const batchSize = 16;
+        for (let i = 0; i < candidates.length; i += batchSize) {
+          if (hits.length >= maxHitsPerRoi) break;
+          const chunk = candidates.slice(i, i + batchSize);
+          const response = await fetch(buildInferencePredictBatchEndpoint(), {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ images_base64: chunk.map((c) => c.shiftedBase64) }),
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok || !payload || !Array.isArray((payload as { predictions?: unknown[] }).predictions)) {
+            const detail = (payload as { detail?: string } | null)?.detail;
+            throw new Error(detail || labels.class1RecheckError);
+          }
+
+          const predictions = (payload as { predictions: Array<{ predicted_class: number; confidence: number; probabilities: number[] }> }).predictions;
+          for (let j = 0; j < chunk.length && j < predictions.length; j += 1) {
+            if (hits.length >= maxHitsPerRoi) break;
+            const candidate = chunk[j];
+            const pred = predictions[j];
+            const predictedClass = Number(pred.predicted_class);
+            const confidence = Number(pred.confidence);
+            const probabilities = Array.isArray(pred.probabilities) ? pred.probabilities : [];
+            if (predictedClass === 0 && confidence >= minConfidence) {
+              hits.push({
+                predicted_class: predictedClass,
+                confidence,
+                probabilities,
+                dx: candidate.dx,
+                dy: candidate.dy,
+                shifted_image_base64: candidate.shiftedBase64,
+              });
+              acceptedGlobal.push(candidate.shiftedGlobal);
+            }
+          }
+        }
+
+        if (hits.length > 0) {
+          const best = hits.reduce((acc, cur) => (cur.confidence > acc.confidence ? cur : acc), hits[0]);
+          next[roi.roi_id] = {
+            predicted_class: best.predicted_class,
+            confidence: best.confidence,
+            probabilities: best.probabilities,
+            hits,
+          };
+          continue;
+        }
+
+        const fallbackResp = await fetch(buildInferencePredictBatchEndpoint(), {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ images_base64: [rawSrc] }),
+        });
+        const fallbackPayload = await fallbackResp.json().catch(() => null);
+        const fallbackPred = (fallbackPayload as { predictions?: Array<{ predicted_class: number; confidence: number; probabilities: number[] }> } | null)?.predictions?.[0];
+        if (!fallbackResp.ok || !fallbackPred) {
+          const detail = (fallbackPayload as { detail?: string } | null)?.detail;
+          throw new Error(detail || labels.class1RecheckError);
+        }
+        next[roi.roi_id] = {
+          predicted_class: Number(fallbackPred.predicted_class),
+          confidence: Number(fallbackPred.confidence),
+          probabilities: Array.isArray(fallbackPred.probabilities) ? fallbackPred.probabilities : [],
+          hits: [],
+        };
+      }
+
+      setClass1RecheckResults(next);
+      setClass1RecheckEnabled(true);
+    } catch (err) {
+      setClass1RecheckError(err instanceof Error ? err.message : labels.class1RecheckError);
+    } finally {
+      setClass1RecheckRunning(false);
+    }
+  }, [labels.class1RecheckError, labels.class1RecheckNoClass1, previewBuckets.buckets, status?.rois]);
+
+  const class1RecheckedBuckets = useMemo(() => {
+    const grouped: Record<number, Class1RecheckedItem[]> = { 0: [], 1: [], 2: [], 3: [] };
+    const source = previewBuckets.buckets[1] ?? [];
+    source.forEach((roi) => {
+      const rec = class1RecheckResults[roi.roi_id];
+      if (!rec || rec.hits.length === 0) return;
+      rec.hits.forEach((hit) => {
+        if (hit.predicted_class >= 0 && hit.predicted_class < 4) {
+          grouped[hit.predicted_class].push({
+            origin_roi_id: roi.roi_id,
+            origin_roi: roi,
+            hit,
+          });
+        }
+      });
+    });
+    return grouped;
+  }, [class1RecheckResults, previewBuckets.buckets]);
+
   const overlayKeyPrefix = useMemo(() => {
     if (!status) return "overlay";
     return `${status.tif_name || "tif"}-${status.saved_at || "ts"}`;
@@ -749,6 +1041,17 @@ const DeepScanPage = () => {
     return parsed !== null ? String(parsed) : "none";
   })();
 
+
+  const focusProfile = status?.focus_profile ?? null;
+  const focusMap = status?.focus_map ?? null;
+  const nearbyFocusScores = useMemo(() => {
+    if (!focusProfile?.scores?.length) return [] as FocusProfileScore[];
+    const current = focusProfile.current_index;
+    return [...focusProfile.scores]
+      .sort((a, b) => Math.abs(a.index - current) - Math.abs(b.index - current))
+      .slice(0, 7)
+      .sort((a, b) => a.index - b.index);
+  }, [focusProfile]);
 
   const availableImages = status?.available_images ?? [];
   const hasImagePager = availableImages.length > 1;
@@ -1174,6 +1477,27 @@ const DeepScanPage = () => {
                               },
                             }}
                           />
+                          <FormControlLabel
+                            control={
+                              <Switch
+                                size="medium"
+                                checked={focusMapOverlayEnabled}
+                                onChange={(_, checked) => setFocusMapOverlayEnabled(checked)}
+                                color="secondary"
+                              />
+                            }
+                            label={labels.focusMapOverlay}
+                            sx={{
+                              ml: 0.5,
+                              mr: 0,
+                              "& .MuiFormControlLabel-label": {
+                                fontWeight: 700,
+                                fontSize: 13,
+                                color: focusMapOverlayEnabled ? "secondary.main" : "text.secondary",
+                                letterSpacing: "0.01em",
+                              },
+                            }}
+                          />
                         </Stack>
                         <Typography variant="caption" color="text.secondary">
                           {labels.manualFallbackNote}
@@ -1208,6 +1532,38 @@ const DeepScanPage = () => {
                           display: "block",
                         }}
                       />
+                      {focusMapOverlayEnabled && focusMap && imageLayout && focusMap.rows > 0 && focusMap.cols > 0 && (
+                        <Box
+                          sx={{
+                            position: "absolute",
+                            left: imageLayout.offsetX,
+                            top: imageLayout.offsetY,
+                            width: imageLayout.displayWidth,
+                            height: imageLayout.displayHeight,
+                            pointerEvents: "none",
+                            zIndex: 2,
+                            display: "grid",
+                            gridTemplateColumns: `repeat(${focusMap.cols}, 1fr)`,
+                            gridTemplateRows: `repeat(${focusMap.rows}, 1fr)`,
+                          }}
+                        >
+                          {focusMap.best_depth_relative.map((depth, i) => {
+                            const conf = focusMap.confidence[i] ?? 0;
+                            const hue = 220 - 220 * depth; // near=blue, far=red
+                            const alpha = Math.max(0.05, Math.min(0.38, 0.05 + conf * 0.45));
+                            return (
+                              <Box
+                                key={`focus-cell-${i}`}
+                                sx={{
+                                  backgroundColor: `hsla(${hue}, 95%, 55%, ${alpha})`,
+                                  border: "1px solid rgba(15,23,42,0.08)",
+                                }}
+                              />
+                            );
+                          })}
+                        </Box>
+                      )}
+
                       {deepVisionOverlayEnabled && imageLayout && (frameRois.length ?? 0) > 0 && (
                         <Box
                           key={overlayKey}
@@ -1554,6 +1910,67 @@ const DeepScanPage = () => {
                     <Typography variant="body2" color="text.secondary">{labels.processedResolution}: {formatDimensions(status.processed_shape)}</Typography>
                   </Stack>
                 </Box>
+
+                <Box
+                  sx={{
+                    mt: 1,
+                    border: "1px solid rgba(14,165,233,0.3)",
+                    borderRadius: 1,
+                    p: 1.25,
+                    backgroundColor: "rgba(14,165,233,0.04)",
+                  }}
+                >
+                  <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 0.75 }}>
+                    {labels.focusIndicatorTitle}
+                  </Typography>
+                  {focusProfile ? (
+                    <Stack spacing={0.75}>
+                      <Stack direction="row" flexWrap="wrap" columnGap={2} rowGap={0.5}>
+                        <Typography variant="body2" color="text.secondary">{labels.focusMethod}: {focusProfile.method}</Typography>
+                        <Typography variant="body2" color="text.secondary">{labels.focusCurrent}: {focusProfile.current_score.toFixed(4)}</Typography>
+                        <Typography variant="body2" color="text.secondary">{labels.focusPeak}: {focusProfile.peak_score.toFixed(4)}</Typography>
+                        <Typography variant="body2" color="text.secondary">{labels.focusRatio}: {(focusProfile.current_to_peak_ratio * 100).toFixed(1)}%</Typography>
+                        <Typography variant="body2" color="text.secondary">{labels.focusDepth}: {focusProfile.z_offset_from_peak > 0 ? `+${focusProfile.z_offset_from_peak}` : focusProfile.z_offset_from_peak}</Typography>
+                      </Stack>
+
+                      <Typography variant="caption" color="text.secondary">{labels.focusNearZ}</Typography>
+                      <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mt: 0.25 }}>
+                        <Typography variant="caption" color="text.secondary">{labels.focusMapLegendNear}</Typography>
+                        <Box sx={{ width: 120, height: 10, borderRadius: 999, background: "linear-gradient(90deg, hsl(220,95%,55%) 0%, hsl(120,95%,55%) 50%, hsl(0,95%,55%) 100%)", border: "1px solid rgba(15,23,42,0.2)" }} />
+                        <Typography variant="caption" color="text.secondary">{labels.focusMapLegendFar}</Typography>
+                      </Stack>
+
+                      <Stack direction="row" flexWrap="wrap" columnGap={1} rowGap={0.75}>
+                        {nearbyFocusScores.map((item) => {
+                          const isCurrent = item.index === focusProfile.current_index;
+                          const isPeak = item.index === focusProfile.peak_index;
+                          return (
+                            <Box
+                              key={`focus-${item.index}-${item.relative_path}`}
+                              sx={{
+                                px: 0.8,
+                                py: 0.45,
+                                borderRadius: 0.75,
+                                border: isPeak ? "1px solid rgba(34,197,94,0.9)" : "1px solid rgba(148,163,184,0.35)",
+                                backgroundColor: isCurrent
+                                  ? "rgba(14,165,233,0.22)"
+                                  : isPeak
+                                  ? "rgba(34,197,94,0.18)"
+                                  : "rgba(15,23,42,0.04)",
+                              }}
+                            >
+                              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                Z{item.index}: {(item.combined_score * 100).toFixed(1)}%
+                              </Typography>
+                            </Box>
+                          );
+                        })}
+                      </Stack>
+                    </Stack>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">{labels.focusNoData}</Typography>
+                  )}
+                </Box>
               </CardContent>
             </Card>
 
@@ -1639,6 +2056,32 @@ const DeepScanPage = () => {
                       <Typography variant="subtitle1" fontWeight={600}>
                         {label} ({bucket.length})
                       </Typography>
+                      {classIndex === 1 && (
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={() => void runClass1Recheck()}
+                            disabled={class1RecheckRunning}
+                          >
+                            {class1RecheckRunning ? labels.class1RecheckRunning : labels.class1RecheckRun}
+                          </Button>
+                          <FormControlLabel
+                            control={
+                              <Switch
+                                size="small"
+                                checked={class1RecheckEnabled}
+                                onChange={(_, checked) => setClass1RecheckEnabled(checked)}
+                              />
+                            }
+                            label={labels.class1Recheck}
+                            sx={{ m: 0 }}
+                          />
+                          <Typography variant="caption" color="text.secondary">
+                            {labels.class1RecheckAggressiveHint}
+                          </Typography>
+                        </Stack>
+                      )}
                     </Stack>
                     {bucket.length === 0 ? (
                       <Box
@@ -1709,6 +2152,77 @@ const DeepScanPage = () => {
                             </Box>
                           );
                         })}
+                      </Box>
+                    )}
+                    {classIndex === 1 && class1RecheckError && (
+                      <Typography variant="caption" color="error" sx={{ display: "block", mt: 1 }}>
+                        {class1RecheckError}
+                      </Typography>
+                    )}
+                    {classIndex === 1 && class1RecheckEnabled && (
+                      <Box sx={{ mt: 1.5, pt: 1.25, borderTop: "1px solid rgba(15,23,42,0.08)" }}>
+                        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 0.75 }}>
+                          {labels.class1RecheckAfter}
+                        </Typography>
+                        <Stack spacing={1}>
+                          {[0, 1, 2, 3].map((afterClass) => {
+                            const rechecked = class1RecheckedBuckets[afterClass] ?? [];
+                            return (
+                              <Box key={`class1-after-${afterClass}`}>
+                                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                  Class {afterClass} ({rechecked.length})
+                                </Typography>
+                                {rechecked.length === 0 ? (
+                                  <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                                    {labels.noImages}
+                                  </Typography>
+                                ) : (
+                                  <Box
+                                    sx={{
+                                      mt: 0.5,
+                                      display: "grid",
+                                      gridTemplateColumns: "repeat(10, minmax(0, 1fr))",
+                                      gap: 0.5,
+                                    }}
+                                  >
+                                    {rechecked.map((item, idx) => {
+                                      const imageSrc = item.hit.shifted_image_base64;
+                                      const isSelected = selectedOverlayRoiId === item.origin_roi_id;
+                                      return (
+                                        <Box
+                                          key={`class1-after-${afterClass}-${item.origin_roi_id}-${item.hit.dx}-${item.hit.dy}-${idx}`}
+                                          sx={{
+                                            border: "1px solid #e2e8f0",
+                                            borderRadius: 1,
+                                            overflow: "hidden",
+                                            borderColor: isSelected ? "primary.main" : undefined,
+                                            boxShadow: isSelected ? "0 0 0 2px rgba(14,165,233,0.35)" : undefined,
+                                            cursor: "pointer",
+                                            backgroundColor: (theme) => theme.palette.background.paper,
+                                          }}
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            setSelectedOverlayRoiId(item.origin_roi_id);
+                                          }}
+                                        >
+                                          <Box
+                                            component="img"
+                                            src={imageSrc}
+                                            alt={`ROI ${item.origin_roi_id} shifted class1-rechecked-${afterClass}`}
+                                            sx={{ width: "100%", aspectRatio: "1 / 1", objectFit: "cover", display: "block" }}
+                                          />
+                                          <Typography variant="caption" color="text.secondary" sx={{ px: 0.4, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                            src#{item.origin_roi_id} ({item.hit.dx},{item.hit.dy})
+                                          </Typography>
+                                        </Box>
+                                      );
+                                    })}
+                                  </Box>
+                                )}
+                              </Box>
+                            );
+                          })}
+                        </Stack>
                       </Box>
                     )}
                   </Card>

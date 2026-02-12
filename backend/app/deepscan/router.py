@@ -95,6 +95,8 @@ def _build_status_payload(view: crud.DeepScanView, request: Request) -> dict:
             if view.current_image and view.current_image.processed_shape
             else None
         ),
+        "focus_profile": view.focus_profile,
+        "focus_map": view.focus_map,
     }
 
 
