@@ -89,14 +89,12 @@ class ROIExtractor:
         dilate_iterations: int = 2,
         disallow_overlap: bool = True,
         nms_iou_threshold: float = 0.15,
-        iterative_passes: int = 1,
     ) -> list[dict[str, Iterable[int]]]:
         height, width = img_rgb.shape[:2]
         patch_w = max(8, int(cls.WIDTH if roi_width is None else roi_width))
         patch_h = max(8, int(cls.HEIGHT if roi_height is None else roi_height))
         min_dist = max(0, int(cls.MIN_DISTANCE if min_distance is None else min_distance))
         iou_threshold = float(max(0.0, min(0.95, nms_iou_threshold)))
-        num_passes = max(1, int(iterative_passes))
 
         red = img_rgb[:, :, 0].astype(np.float32)
         green = img_rgb[:, :, 1].astype(np.float32)
@@ -117,62 +115,52 @@ class ROIExtractor:
         kept_boxes: list[tuple[int, int, int, int]] = []
         next_id = 1
 
-        for _ in range(num_passes):
-            peaks = peak_local_max(working, min_distance=min_dist)
-            if peaks.size == 0:
-                break
+        peaks = peak_local_max(working, min_distance=min_dist)
+        if peaks.size == 0:
+            return rois
 
-            tmp = np.zeros_like(mask, dtype=np.uint8)
-            for y, x in peaks:
-                tmp[y, x] = 1
+        tmp = np.zeros_like(mask, dtype=np.uint8)
+        for y, x in peaks:
+            tmp[y, x] = 1
 
-            nlabels, _, _, centers = cv2.connectedComponentsWithStats(tmp)
-            if nlabels <= 1:
-                break
+        nlabels, _, _, centers = cv2.connectedComponentsWithStats(tmp)
+        if nlabels <= 1:
+            return rois
 
-            candidates: list[tuple[float, tuple[int, int, int, int]]] = []
-            for i in range(1, nlabels):
-                xc, yc = int(centers[i][0]), int(centers[i][1])
-                ys, xs = yc - patch_h // 2, xc - patch_w // 2
-                ye, xe = ys + patch_h, xs + patch_w
+        candidates: list[tuple[float, tuple[int, int, int, int]]] = []
+        for i in range(1, nlabels):
+            xc, yc = int(centers[i][0]), int(centers[i][1])
+            ys, xs = yc - patch_h // 2, xc - patch_w // 2
+            ye, xe = ys + patch_h, xs + patch_w
 
-                if ys < 0:
-                    ys, ye = 0, patch_h
-                if xs < 0:
-                    xs, xe = 0, patch_w
-                if ye > height:
-                    ys, ye = max(0, height - patch_h), height
-                if xe > width:
-                    xs, xe = max(0, width - patch_w), width
+            if ys < 0:
+                ys, ye = 0, patch_h
+            if xs < 0:
+                xs, xe = 0, patch_w
+            if ye > height:
+                ys, ye = max(0, height - patch_h), height
+            if xe > width:
+                xs, xe = max(0, width - patch_w), width
 
-                score = float(green[yc, xc]) if 0 <= yc < height and 0 <= xc < width else 0.0
-                candidates.append((score, (int(xs), int(ys), int(xe), int(ye))))
+            score = float(green[yc, xc]) if 0 <= yc < height and 0 <= xc < width else 0.0
+            candidates.append((score, (int(xs), int(ys), int(xe), int(ye))))
 
-            candidates.sort(key=lambda item: item[0], reverse=True)
-            accepted_any = False
+        candidates.sort(key=lambda item: item[0], reverse=True)
 
-            for _, box in candidates:
-                if disallow_overlap and any(cls._bbox_iou(box, kept) > iou_threshold for kept in kept_boxes):
-                    continue
-                xs, ys, xe, ye = box
-                kept_boxes.append(box)
-                rois.append(
-                    {
-                        "ID": next_id,
-                        "ST": [xs, ys],
-                        "EN": [xe, ye],
-                        "CE": [int((xs + xe) / 2), int((ys + ye) / 2)],
-                    }
-                )
-                next_id += 1
-                accepted_any = True
-
-                # Optional iterative mode: clear accepted ROI area and try another pass.
-                if num_passes > 1:
-                    working[ys:ye, xs:xe] = 0
-
-            if num_passes == 1 or not accepted_any:
-                break
+        for _, box in candidates:
+            if disallow_overlap and any(cls._bbox_iou(box, kept) > iou_threshold for kept in kept_boxes):
+                continue
+            xs, ys, xe, ye = box
+            kept_boxes.append(box)
+            rois.append(
+                {
+                    "ID": next_id,
+                    "ST": [xs, ys],
+                    "EN": [xe, ye],
+                    "CE": [int((xs + xe) / 2), int((ys + ye) / 2)],
+                }
+            )
+            next_id += 1
 
         return rois
 

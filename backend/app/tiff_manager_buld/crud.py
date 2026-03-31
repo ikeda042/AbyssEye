@@ -7,6 +7,8 @@ import json
 import math
 import shutil
 import sqlite3
+import tempfile
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +21,7 @@ from sqlalchemy import Column, Float, Integer, LargeBinary, String, create_engin
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.types import JSON as SAJSON
 
+from ..databases import crud as databases_crud
 from ..inference import crud as inference_crud
 from ..roi_extract.roi_module import ROIExtractor
 
@@ -27,6 +30,10 @@ TIFF_STORAGE_DIR = Path(__file__).resolve().parent
 DATABASE_DIR = APP_DIR / "databases"
 ALLOWED_EXTENSIONS = {".tif", ".tiff"}
 DEFAULT_SCALE = 0.5
+FOCUS_MERGED_FILENAME = "__focus_merged.tif"
+REALTIME_FOLDER_META_FILENAME = "__realtime_folder_meta.json"
+REALTIME_FOLDER_MODE_SINGLE = "single"
+REALTIME_FOLDER_MODE_STACK = "stack"
 
 Base = declarative_base()
 
@@ -61,6 +68,8 @@ class FolderInfo:
     name: str
     file_count: int
     has_extraction_db: bool
+    has_focus_merged: bool
+    realtime_folder_mode: str | None = None
 
 
 @dataclass
@@ -110,6 +119,34 @@ class BulkInferenceResult:
     total_cell_count: int
     inferred_at: datetime
     files: list[InferenceFileSummary]
+
+
+@dataclass
+class FocusMergeResult:
+    folder_name: str
+    merged_folder_name: str
+    source_image_count: int
+    merged_tif_name: str
+    merged_relative_path: str
+    merged_shape: tuple[int, int]
+
+
+@dataclass
+class FocusMergeExtractionResult:
+    folder_name: str
+    db_name: str
+    db_path: Path
+    db_size_bytes: int
+    saved_at: datetime
+    merged_tif_name: str
+    roi_count: int
+    total_roi_count: int
+
+
+@dataclass
+class ProjectDeleteResult:
+    deleted_project: str
+    deleted_folders: int
 
 
 @dataclass
@@ -182,16 +219,80 @@ def _sanitize_component(name: str, *, field: str) -> str:
     return cleaned
 
 
+def _db_name_for_folder(folder_name: str) -> str:
+    safe_name = _sanitize_component(folder_name, field="フォルダ名")
+    return f"{safe_name}_bulk.db"
+
+
+def _db_path_for_folder(folder_name: str) -> Path:
+    return DATABASE_DIR / _db_name_for_folder(folder_name)
+
+
+def _db_name_for_focus_merged(folder_name: str) -> str:
+    safe_name = _sanitize_component(folder_name, field="フォルダ名")
+    return f"{safe_name}_focus_merged.db"
+
+
+def _db_path_for_focus_merged(folder_name: str) -> Path:
+    return DATABASE_DIR / _db_name_for_focus_merged(folder_name)
+
+
+def _focus_merged_single_folder_name(folder_name: str) -> str:
+    safe_name = _sanitize_component(folder_name, field="フォルダ名")
+    return f"{safe_name}_merged"
+
+
+def _focus_merged_single_folder_path(folder_name: str) -> Path:
+    return TIFF_STORAGE_DIR / _focus_merged_single_folder_name(folder_name)
+
+
+def _focus_merged_single_tif_name(folder_name: str) -> str:
+    safe_name = _sanitize_component(folder_name, field="フォルダ名")
+    return f"{safe_name}_merged.tif"
+
+
+def _db_path_for_inference(folder_path: Path, prefer_focus_merged: bool = False) -> Path:
+    scoped_name = folder_path.name
+    bulk_db_path = _db_path_for_folder(scoped_name)
+    merged_db_path = _db_path_for_focus_merged(scoped_name)
+
+    if prefer_focus_merged and merged_db_path.exists():
+        return merged_db_path
+
+    if bulk_db_path.exists():
+        return bulk_db_path
+
+    if merged_db_path.exists():
+        return merged_db_path
+
+    raise HTTPException(status_code=400, detail="先に一括ROI抽出を実行してください。")
+
+
 def _normalize_relative_path(filename: str) -> Path:
     raw_path = Path(filename or "")
     if raw_path.is_absolute():
         raise HTTPException(status_code=400, detail="フォルダ名に絶対パスは使用できません。")
 
     parts = [p for p in raw_path.parts if p not in ("", ".", "/")]
-    if ".." in parts or len(parts) < 2:
+    if ".." in parts:
         raise HTTPException(status_code=400, detail="フォルダごとアップロードしてください。")
 
     sanitized_parts = [_sanitize_component(part, field="ファイル名") for part in parts]
+
+    if len(sanitized_parts) == 1:
+        rel_file = Path(sanitized_parts[0])
+        ext = rel_file.suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=".tif / .tiff のみアップロードできます。")
+        folder_name = rel_file.stem
+        if not folder_name:
+            folder_name = rel_file.name
+        scoped_folder = _sanitize_component(folder_name, field="フォルダ名")
+        return Path(scoped_folder, rel_file.name)
+
+    if len(sanitized_parts) < 2:
+        raise HTTPException(status_code=400, detail="フォルダごとアップロードしてください。")
+
     rel_path = Path(*sanitized_parts)
     ext = rel_path.suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -209,6 +310,33 @@ def _should_skip_upload(filename: str | None) -> bool:
     return Path(filename).suffix.lower() not in ALLOWED_EXTENSIONS
 
 
+def _project_prefix(project_name: str | None) -> str:
+    if not project_name:
+        return ""
+    safe_project = _sanitize_component(project_name, field="プロジェクト名")
+    return f"{safe_project}__"
+
+
+def _apply_project_prefix(path: Path, project_name: str | None) -> Path:
+    if not project_name:
+        return path
+    parts = list(path.parts)
+    if len(parts) < 2:
+        raise HTTPException(status_code=400, detail="フォルダごとアップロードしてください。")
+    scoped_field = f"{_sanitize_component(parts[0], field='フォルダ名')}"
+    return Path(f"{_project_prefix(project_name)}{scoped_field}", *parts[1:])
+
+
+def _scoped_folder_name(folder_name: str, project_name: str | None) -> str:
+    raw_name = Path(folder_name).name
+    if not project_name:
+        return _sanitize_component(raw_name, field="フォルダ名")
+    prefix = _project_prefix(project_name)
+    if raw_name.startswith(prefix):
+        return f"{prefix}{_sanitize_component(raw_name[len(prefix):], field='フォルダ名')}"
+    return f"{prefix}{_sanitize_component(raw_name, field='フォルダ名')}"
+
+
 def _resolve_folder(folder_name: str) -> Path:
     safe = _sanitize_component(folder_name, field="フォルダ名")
     folder_path = TIFF_STORAGE_DIR / safe
@@ -217,24 +345,153 @@ def _resolve_folder(folder_name: str) -> Path:
     return folder_path
 
 
+def get_single_tiff_file_path(folder_name: str, project_name: str | None = None) -> Path:
+    scoped_name = _scoped_folder_name(folder_name, project_name)
+    folder_path = _resolve_folder(scoped_name)
+    source_tiffs = sorted(_iter_source_tiff_files(folder_path), key=lambda path: str(path.relative_to(folder_path)).lower())
+    if not source_tiffs:
+        raise HTTPException(status_code=404, detail="TIFF画像が見つかりません。")
+    if len(source_tiffs) != 1:
+        raise HTTPException(status_code=400, detail="単一画像フォルダのみダウンロードできます。")
+    return source_tiffs[0]
+
+
+def get_tiff_file_in_folder_path(folder_name: str, relative_path: str, project_name: str | None = None) -> Path:
+    scoped_name = _scoped_folder_name(folder_name, project_name)
+    folder_path = _resolve_folder(scoped_name)
+    raw_path = Path(relative_path or "")
+    if raw_path.is_absolute():
+        raise HTTPException(status_code=400, detail="絶対パスは使用できません。")
+    parts = [part for part in raw_path.parts if part not in ("", ".", "/")]
+    if not parts or ".." in parts:
+        raise HTTPException(status_code=400, detail="不正なファイルパスです。")
+    sanitized_parts = [_sanitize_component(part, field="ファイル名") for part in parts]
+    target_path = folder_path.joinpath(*sanitized_parts)
+    if not target_path.is_file() or target_path.suffix.lower() not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="TIFF画像が見つかりません。")
+    return target_path
+
+
 def _iter_tiff_files(folder_path: Path) -> Iterable[Path]:
     for path in folder_path.rglob("*"):
         if path.is_file() and path.suffix.lower() in ALLOWED_EXTENSIONS:
             yield path
 
 
-async def save_tiff_folder(files: Sequence[UploadFile]) -> BulkUploadResult:
+def _iter_source_tiff_files(folder_path: Path) -> Iterable[Path]:
+    for path in _iter_tiff_files(folder_path):
+        if path.name != FOCUS_MERGED_FILENAME:
+            yield path
+
+
+def _focus_merge_candidate_files(folder_path: Path) -> list[Path]:
+    return [path for path in sorted(_iter_source_tiff_files(folder_path), key=lambda p: p.name.lower())]
+
+
+def _to_gray_float_for_focus(image: np.ndarray) -> np.ndarray:
+    if image.ndim == 2:
+        gray = image
+    elif image.ndim == 3:
+        if image.shape[2] >= 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image[:, :, 0]
+    else:
+        raise HTTPException(status_code=400, detail="対応していない画像形式です。")
+    return gray.astype(np.float32)
+
+
+def _focus_score_map(gray: np.ndarray) -> np.ndarray:
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    return cv2.GaussianBlur(np.abs(gx) + np.abs(gy), (3, 3), 0)
+
+
+def _resize_if_needed(image: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
+    h, w = target_shape
+    if image.shape[:2] == (h, w):
+        return image
+    return cv2.resize(image, (w, h), interpolation=cv2.INTER_LINEAR)
+
+
+def _merge_focus_stack(tiff_paths: list[Path]) -> tuple[np.ndarray, tuple[int, int], int]:
+    if not tiff_paths:
+        raise HTTPException(status_code=400, detail="マージ対象画像が見つかりません。")
+
+    first_path = tiff_paths[0]
+    first_img = cv2.imread(str(first_path), cv2.IMREAD_UNCHANGED)
+    if first_img is None:
+        raise HTTPException(status_code=400, detail=f"{first_path.name} の読み込みに失敗しました。")
+
+    if first_img.ndim == 2:
+        reference_shape = first_img.shape[:2]
+    else:
+        reference_shape = first_img.shape[:2]
+
+    if reference_shape[0] <= 1 or reference_shape[1] <= 1:
+        raise HTTPException(status_code=400, detail="画像サイズが不正です。")
+
+    if first_img.ndim == 2:
+        ref_color = cv2.cvtColor(first_img, cv2.COLOR_GRAY2BGR)
+    else:
+        ref_color = first_img[:, :, :3]
+
+    color_images: list[np.ndarray] = []
+    score_maps: list[np.ndarray] = []
+
+    for path in tiff_paths:
+        image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if image is None:
+            continue
+
+        if image.ndim == 2:
+            color_image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            focus_source = image
+        elif image.ndim == 3 and image.shape[2] >= 3:
+            color_image = image[:, :, :3]
+            focus_source = cv2.cvtColor(image[:, :, :3], cv2.COLOR_BGR2GRAY)
+        else:
+            continue
+
+        if color_image.shape[:2] != reference_shape:
+            color_image = _resize_if_needed(color_image, reference_shape)
+            focus_source = _resize_if_needed(focus_source, reference_shape)
+
+        gray = _to_gray_float_for_focus(focus_source)
+        score_maps.append(_focus_score_map(gray))
+        color_images.append(color_image)
+
+    if not score_maps:
+        raise HTTPException(status_code=400, detail="有効な画像が見つからなかったため、マージできませんでした。")
+
+    score_stack = np.stack(score_maps, axis=0).astype(np.float32, copy=False)
+    best_index = np.argmax(score_stack, axis=0).astype(np.int32, copy=False)
+
+    merged = np.empty_like(ref_color)
+    for idx, color_image in enumerate(color_images):
+        mask = best_index == idx
+        if not np.any(mask):
+            continue
+        merged[mask] = color_image[mask]
+
+    return merged, reference_shape, len(color_images)
+
+
+async def save_tiff_folder(files: Sequence[UploadFile], project_name: str | None = None) -> BulkUploadResult:
     """Save uploaded TIFFs with their relative folder paths preserved."""
     _ensure_dirs()
     if not files:
         raise HTTPException(status_code=400, detail="アップロードするフォルダを指定してください。")
 
     written: list[Path] = []
+    project_prefix = _project_prefix(project_name)
 
     for upload in files:
         if _should_skip_upload(upload.filename):
             continue
         rel_path = _normalize_relative_path(upload.filename or "")
+        if project_name:
+            rel_path = _apply_project_prefix(rel_path, project_name)
         data = await upload.read()
         if not data:
             raise HTTPException(status_code=400, detail=f"{rel_path.name} は空のファイルです。")
@@ -256,39 +513,295 @@ async def save_tiff_folder(files: Sequence[UploadFile]) -> BulkUploadResult:
     return BulkUploadResult(folders=folders, file_count=len(written), saved_files=saved_files)
 
 
-async def list_uploaded_folders() -> list[FolderInfo]:
+def _realtime_folder_meta_path(folder_path: Path) -> Path:
+    return folder_path / REALTIME_FOLDER_META_FILENAME
+
+
+def write_realtime_folder_mode(folder_path: Path, mode: str) -> None:
+    if mode not in {REALTIME_FOLDER_MODE_SINGLE, REALTIME_FOLDER_MODE_STACK}:
+        raise ValueError(f"Unsupported realtime folder mode: {mode}")
+    folder_path.mkdir(parents=True, exist_ok=True)
+    _realtime_folder_meta_path(folder_path).write_text(
+        json.dumps({"realtime_folder_mode": mode}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _read_realtime_folder_mode(folder_path: Path) -> str | None:
+    meta_path = _realtime_folder_meta_path(folder_path)
+    if not meta_path.is_file():
+        return None
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    mode = payload.get("realtime_folder_mode")
+    if mode in {REALTIME_FOLDER_MODE_SINGLE, REALTIME_FOLDER_MODE_STACK}:
+        return str(mode)
+    return None
+
+
+def _infer_realtime_folder_mode_from_files(folder_path: Path, source_tiffs: Sequence[Path]) -> str | None:
+    if not source_tiffs:
+        return None
+    folder_stem = folder_path.name
+    tif_stems = [path.stem for path in source_tiffs]
+    if len(tif_stems) == 1:
+        if tif_stems[0] == folder_stem:
+            return REALTIME_FOLDER_MODE_SINGLE
+        if tif_stems[0].startswith(f"{folder_stem}_"):
+            return REALTIME_FOLDER_MODE_STACK
+    if all(stem.startswith(f"{folder_stem}_") for stem in tif_stems):
+        return REALTIME_FOLDER_MODE_STACK
+    return None
+
+
+def _resolve_realtime_folder_mode(folder_path: Path, source_tiffs: Sequence[Path]) -> str | None:
+    return _read_realtime_folder_mode(folder_path) or _infer_realtime_folder_mode_from_files(folder_path, source_tiffs)
+
+
+async def list_uploaded_folders(project_name: str | None = None) -> list[FolderInfo]:
     _ensure_dirs()
+    expected_prefix = _project_prefix(project_name)
     folders: list[FolderInfo] = []
     for path in sorted(TIFF_STORAGE_DIR.iterdir(), key=lambda p: p.name.lower()):
         if not path.is_dir():
             continue
+        if project_name and not path.name.startswith(expected_prefix):
+            continue
         tiffs = list(_iter_tiff_files(path))
+        has_focus_merged = any(path_obj.name == FOCUS_MERGED_FILENAME for path_obj in tiffs) or _focus_merged_single_folder_path(path.name).is_dir()
+        source_tiffs = [path_obj for path_obj in tiffs if path_obj.name != FOCUS_MERGED_FILENAME]
         if not tiffs:
             continue
-        has_db = (DATABASE_DIR / f"{path.name}_bulk.db").exists()
-        folders.append(FolderInfo(name=path.name, file_count=len(tiffs), has_extraction_db=has_db))
+        has_db = _db_path_for_folder(path.name).exists() or _db_path_for_focus_merged(path.name).exists()
+        realtime_folder_mode = _resolve_realtime_folder_mode(path, source_tiffs)
+        folders.append(
+            FolderInfo(
+                name=path.name,
+                file_count=len(source_tiffs),
+                has_extraction_db=has_db,
+                has_focus_merged=has_focus_merged,
+                realtime_folder_mode=realtime_folder_mode,
+            )
+        )
     return folders
 
 
-async def list_files_in_folder(folder_name: str) -> list[str]:
-    folder_path = _resolve_folder(folder_name)
+async def list_files_in_folder(folder_name: str, project_name: str | None = None) -> list[str]:
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
     files = sorted(str(path.relative_to(folder_path)) for path in _iter_tiff_files(folder_path))
     if not files:
         raise HTTPException(status_code=404, detail="TIFFファイルが見つかりません。")
     return files
 
 
-async def delete_folder(folder_name: str) -> str:
-    folder_path = _resolve_folder(folder_name)
+async def delete_tiff_file_in_folder(folder_name: str, relative_path: str, project_name: str | None = None) -> str:
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+    target_path = get_tiff_file_in_folder_path(folder_name, relative_path, project_name)
+    normalized_relative = target_path.relative_to(folder_path).as_posix()
+    bulk_db_path = _db_path_for_folder(folder_path.name)
+    merged_tif_path = folder_path / FOCUS_MERGED_FILENAME
+    merged_db_path = _db_path_for_focus_merged(folder_path.name)
+    detached_folder_path = _focus_merged_single_folder_path(folder_path.name)
+    detached_db_path = _db_path_for_folder(detached_folder_path.name)
+
+    if target_path.name == FOCUS_MERGED_FILENAME:
+        raise HTTPException(status_code=400, detail="マージ画像は個別削除できません。")
+
+    def _remove() -> str:
+        if target_path.exists():
+            target_path.unlink()
+
+        if bulk_db_path.exists():
+            try:
+                with sqlite3.connect(bulk_db_path) as conn:
+                    conn.execute("DELETE FROM roi_records WHERE image_filename = ?", (normalized_relative,))
+                    remain_row = conn.execute("SELECT COUNT(*) FROM roi_records").fetchone()
+                    conn.commit()
+                remain_count = int(remain_row[0]) if remain_row else 0
+            except sqlite3.DatabaseError as exc:
+                raise HTTPException(status_code=500, detail=f"データベース更新中にエラー: {exc}") from exc
+            if remain_count <= 0 and bulk_db_path.exists():
+                bulk_db_path.unlink()
+
+        if merged_tif_path.exists():
+            merged_tif_path.unlink()
+        if merged_db_path.exists():
+            merged_db_path.unlink()
+        if detached_folder_path.exists():
+            shutil.rmtree(detached_folder_path, ignore_errors=True)
+        if detached_db_path.exists():
+            detached_db_path.unlink()
+
+        current = target_path.parent
+        while current != folder_path and current.exists():
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
+
+        remaining_sources = list(_iter_source_tiff_files(folder_path))
+        if not remaining_sources:
+            shutil.rmtree(folder_path, ignore_errors=True)
+            if bulk_db_path.exists():
+                bulk_db_path.unlink()
+
+        return normalized_relative
+
+    return await asyncio.to_thread(_remove)
+
+
+async def delete_folder(folder_name: str, project_name: str | None = None) -> str:
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
 
     def _remove() -> None:
         shutil.rmtree(folder_path, ignore_errors=True)
-        db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
+        db_path = _db_path_for_folder(folder_path.name)
+        merged_db_path = _db_path_for_focus_merged(folder_path.name)
         if db_path.exists():
             db_path.unlink()
+        if merged_db_path.exists():
+            merged_db_path.unlink()
 
     await asyncio.to_thread(_remove)
     return folder_path.name
+
+
+async def delete_focus_merged(folder_name: str, project_name: str | None = None) -> str:
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+    merged_tif_path = folder_path / FOCUS_MERGED_FILENAME
+    merged_db_path = _db_path_for_focus_merged(folder_path.name)
+    detached_folder_path = _focus_merged_single_folder_path(folder_path.name)
+    detached_db_path = _db_path_for_folder(detached_folder_path.name)
+
+    if not merged_tif_path.exists() and not merged_db_path.exists() and not detached_folder_path.exists() and not detached_db_path.exists():
+        raise HTTPException(status_code=404, detail="フォーカスマージ画像が見つかりません。")
+
+    def _remove() -> None:
+        if merged_tif_path.exists():
+            merged_tif_path.unlink()
+        if merged_db_path.exists():
+            merged_db_path.unlink()
+        if detached_folder_path.exists():
+            shutil.rmtree(detached_folder_path, ignore_errors=True)
+        if detached_db_path.exists():
+            detached_db_path.unlink()
+
+    await asyncio.to_thread(_remove)
+    return folder_path.name
+
+
+async def delete_project(project_name: str) -> ProjectDeleteResult:
+    safe_project = _sanitize_component(project_name, field="プロジェクト名")
+    prefix = _project_prefix(safe_project)
+
+    def _remove() -> int:
+        if not TIFF_STORAGE_DIR.exists():
+            return 0
+        folders = sorted(
+            [
+                path
+                for path in TIFF_STORAGE_DIR.iterdir()
+                if path.is_dir() and path.name.startswith(prefix)
+            ],
+            key=lambda path: path.name.lower(),
+        )
+
+        removed = 0
+        for folder_path in folders:
+            shutil.rmtree(folder_path, ignore_errors=True)
+            db_path = _db_path_for_folder(folder_path.name)
+            merged_db_path = _db_path_for_focus_merged(folder_path.name)
+            if db_path.exists():
+                db_path.unlink()
+            if merged_db_path.exists():
+                merged_db_path.unlink()
+            removed += 1
+
+        if DATABASE_DIR.exists():
+            for db_path in DATABASE_DIR.glob("*.db"):
+                if not db_path.is_file():
+                    continue
+                if db_path.name.startswith(prefix) or databases_crud._matches_project_scope(db_path.name, safe_project):
+                    try:
+                        db_path.unlink()
+                    except FileNotFoundError:
+                        pass
+        return removed
+
+    deleted_folders = await asyncio.to_thread(_remove)
+    return ProjectDeleteResult(deleted_project=safe_project, deleted_folders=deleted_folders)
+
+
+def _project_export_display_name(folder_name: str, project_name: str) -> str:
+    prefix = _project_prefix(project_name)
+    if folder_name.startswith(prefix):
+        return folder_name[len(prefix):]
+    return folder_name
+
+
+def _project_export_sort_key(folder_name: str) -> tuple[tuple[int, int | str], ...]:
+    parts = [part for part in folder_name.split("_") if part]
+    key: list[tuple[int, int | str]] = []
+    for part in parts:
+        if part.isdigit():
+            key.append((0, int(part)))
+        else:
+            key.append((1, part.lower()))
+    return tuple(key)
+
+
+async def export_project_archive(project_name: str) -> Path:
+    safe_project = _sanitize_component(project_name, field="プロジェクト名")
+    prefix = _project_prefix(safe_project)
+
+    def _build_archive() -> Path:
+        if not TIFF_STORAGE_DIR.exists():
+            raise HTTPException(status_code=404, detail="エクスポート対象のプロジェクトがありません。")
+
+        folders = sorted(
+            [
+                path
+                for path in TIFF_STORAGE_DIR.iterdir()
+                if path.is_dir() and path.name.startswith(prefix)
+            ],
+            key=lambda path: _project_export_sort_key(_project_export_display_name(path.name, safe_project)),
+        )
+        if not folders:
+            raise HTTPException(status_code=404, detail=f"{safe_project} のエクスポート対象が見つかりません。")
+
+        export_dir = Path(tempfile.gettempdir()) / "abyss_eye" / "project_exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = export_dir / f"{safe_project}.zip"
+        if archive_path.exists():
+            archive_path.unlink()
+
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for folder_path in folders:
+                source_tiffs = sorted(_iter_source_tiff_files(folder_path), key=lambda path: str(path.relative_to(folder_path)).lower())
+                if not source_tiffs:
+                    continue
+
+                display_name = _project_export_display_name(folder_path.name, safe_project)
+                folder_mode = _resolve_realtime_folder_mode(folder_path, source_tiffs)
+                is_stack = folder_mode == REALTIME_FOLDER_MODE_STACK or len(source_tiffs) > 1
+
+                if is_stack:
+                    for tif_path in source_tiffs:
+                        relative_name = tif_path.relative_to(folder_path).with_suffix(".tif")
+                        arcname = Path(display_name) / relative_name
+                        zf.write(tif_path, arcname.as_posix())
+                    continue
+
+                single_tif = source_tiffs[0]
+                arcname = f"{display_name}.tif"
+                zf.write(single_tif, arcname)
+
+        return archive_path
+
+    return await asyncio.to_thread(_build_archive)
 
 
 def _encode_patch(img_rgb, roi: dict) -> bytes | None:
@@ -301,15 +814,60 @@ def _encode_patch(img_rgb, roi: dict) -> bytes | None:
     return buf.tobytes()
 
 
-async def extract_folder(folder_name: str, iterative_mode: bool | None = None) -> BulkExtractionResult:
+def _extract_rois_from_tiff(
+    tif_path: Path,
+    folder_name: str,
+) -> tuple[np.ndarray, list[dict], tuple[int, int], tuple[int, int]]:
+    roi_profile = inference_crud.get_active_roi_profile()
+    folder_tuning = _load_bulk_extract_tuning(folder_name)
+    roi_width = int(roi_profile.get("roi_width", ROIExtractor.WIDTH))
+    roi_height = int(roi_profile.get("roi_height", ROIExtractor.HEIGHT))
+    green_rate = float(roi_profile.get("green_rate", ROIExtractor.GREEN_RATE))
+    min_distance = int(folder_tuning.get("min_distance", roi_profile.get("min_distance", ROIExtractor.MIN_DISTANCE)))
+    min_green = int(roi_profile.get("min_green", 30))
+    ratio_primary = float(roi_profile.get("ratio_primary", 1.0))
+    ratio_secondary = float(roi_profile.get("ratio_secondary", 1.5))
+    kernel_size = int(roi_profile.get("kernel_size", 5))
+    dilate_iterations = int(roi_profile.get("dilate_iterations", 2))
+    disallow_overlap = int(folder_tuning.get("disallow_overlap", roi_profile.get("disallow_overlap", 1))) > 0
+    nms_iou_threshold = float(folder_tuning.get("nms_iou_threshold", roi_profile.get("nms_iou_threshold", 0.15)))
+
+    img_bgr = cv2.imread(str(tif_path), cv2.IMREAD_COLOR)
+    if img_bgr is None:
+        raise HTTPException(status_code=400, detail=f"{tif_path.name} の読み込みに失敗しました。")
+
+    h, w = img_bgr.shape[:2]
+    resized = cv2.resize(img_bgr, (round(w / 2), round(h / 2)))
+    img_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+    processed_h, processed_w = img_rgb.shape[:2]
+
+    rois = ROIExtractor.detect_rois(
+        img_rgb,
+        roi_width=roi_width,
+        roi_height=roi_height,
+        green_rate=green_rate,
+        min_distance=min_distance,
+        min_green=min_green,
+        ratio_primary=ratio_primary,
+        ratio_secondary=ratio_secondary,
+        kernel_size=kernel_size,
+        dilate_iterations=dilate_iterations,
+        disallow_overlap=disallow_overlap,
+        nms_iou_threshold=nms_iou_threshold,
+    )
+
+    return img_rgb, rois, (h, w), (processed_h, processed_w)
+
+
+async def extract_folder(folder_name: str, project_name: str | None = None) -> BulkExtractionResult:
     """Run ROI extraction for every TIFF in the specified folder."""
     _ensure_dirs()
-    folder_path = _resolve_folder(folder_name)
-    tiff_paths = sorted(_iter_tiff_files(folder_path), key=lambda p: p.name.lower())
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+    tiff_paths = sorted(_iter_source_tiff_files(folder_path), key=lambda p: p.name.lower())
     if not tiff_paths:
         raise HTTPException(status_code=404, detail="TIFFファイルが見つかりません。")
 
-    db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
+    db_path = _db_path_for_folder(folder_path.name)
 
     def _run() -> BulkExtractionResult:
         engine = create_engine(f"sqlite:///{db_path}", echo=False)
@@ -322,52 +880,13 @@ async def extract_folder(folder_name: str, iterative_mode: bool | None = None) -
         total_roi = 0
         total_area_mp = 0.0
         try:
-            roi_profile = inference_crud.get_active_roi_profile()
-            folder_tuning = _load_bulk_extract_tuning(folder_path.name)
-            roi_width = int(roi_profile.get("roi_width", ROIExtractor.WIDTH))
-            roi_height = int(roi_profile.get("roi_height", ROIExtractor.HEIGHT))
-            green_rate = float(roi_profile.get("green_rate", ROIExtractor.GREEN_RATE))
-            min_distance = int(folder_tuning.get("min_distance", roi_profile.get("min_distance", ROIExtractor.MIN_DISTANCE)))
-            min_green = int(roi_profile.get("min_green", 30))
-            ratio_primary = float(roi_profile.get("ratio_primary", 1.0))
-            ratio_secondary = float(roi_profile.get("ratio_secondary", 1.5))
-            kernel_size = int(roi_profile.get("kernel_size", 5))
-            dilate_iterations = int(roi_profile.get("dilate_iterations", 2))
-            disallow_overlap = int(folder_tuning.get("disallow_overlap", roi_profile.get("disallow_overlap", 1))) > 0
-            nms_iou_threshold = float(folder_tuning.get("nms_iou_threshold", roi_profile.get("nms_iou_threshold", 0.15)))
-            iterative_passes = int(folder_tuning.get("iterative_passes", roi_profile.get("iterative_passes", 1)))
-            if iterative_mode is True:
-                iterative_passes = max(2, iterative_passes)
-                # Stricter NMS when iterative extraction is enabled.
-                nms_iou_threshold = min(nms_iou_threshold, 0.1)
-            elif iterative_mode is False:
-                iterative_passes = 1
-
             for tif_path in tiff_paths:
-                img_bgr = cv2.imread(str(tif_path), cv2.IMREAD_COLOR)
-                if img_bgr is None:
-                    raise HTTPException(status_code=400, detail=f"{tif_path.name} の読み込みに失敗しました。")
-
-                h, w = img_bgr.shape[:2]
-                resized = cv2.resize(img_bgr, (round(w / 2), round(h / 2)))
-                img_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-                processed_h, processed_w = img_rgb.shape[:2]
-
-                rois = ROIExtractor.detect_rois(
-                    img_rgb,
-                    roi_width=roi_width,
-                    roi_height=roi_height,
-                    green_rate=green_rate,
-                    min_distance=min_distance,
-                    min_green=min_green,
-                    ratio_primary=ratio_primary,
-                    ratio_secondary=ratio_secondary,
-                    kernel_size=kernel_size,
-                    dilate_iterations=dilate_iterations,
-                    disallow_overlap=disallow_overlap,
-                    nms_iou_threshold=nms_iou_threshold,
-                    iterative_passes=iterative_passes,
+                img_rgb, rois, original_shape, processed_shape = _extract_rois_from_tiff(
+                    tif_path,
+                    folder_path.name,
                 )
+                h, w = original_shape
+                processed_h, processed_w = processed_shape
                 roi_count = len(rois)
                 total_roi += roi_count
                 if processed_h and processed_w:
@@ -420,7 +939,7 @@ async def extract_folder(folder_name: str, iterative_mode: bool | None = None) -
                         original_shape=(h, w),
                         processed_shape=(processed_h, processed_w),
                     )
-                )
+                    )
 
             session.commit()
         finally:
@@ -439,6 +958,100 @@ async def extract_folder(folder_name: str, iterative_mode: bool | None = None) -
             roi_density_per_mp=roi_density,
             saved_at=datetime.now(),
             files=file_results,
+        )
+
+    return await asyncio.to_thread(_run)
+
+
+async def extract_focus_merged_rois(folder_name: str, project_name: str | None = None) -> FocusMergeExtractionResult:
+    """Run ROI extraction only for the focus-merged image in the folder."""
+    _ensure_dirs()
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+    merged_tif = folder_path / FOCUS_MERGED_FILENAME
+    if not merged_tif.exists():
+        raise HTTPException(status_code=404, detail="フォーカスマージ画像が見つかりません。")
+
+    db_path = _db_path_for_focus_merged(folder_path.name)
+
+    def _run() -> FocusMergeExtractionResult:
+        engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        Base.metadata.create_all(engine)
+        SessionLocal = sessionmaker(bind=engine)
+        session = SessionLocal()
+        total_roi_count = 0
+        file_result: FileExtractionSummary | None = None
+        try:
+            session.query(BulkRoiRecord).filter(BulkRoiRecord.image_filename == FOCUS_MERGED_FILENAME).delete()
+
+            img_rgb, rois, original_shape, processed_shape = _extract_rois_from_tiff(merged_tif, folder_path.name)
+            h, w = original_shape
+            processed_h, processed_w = processed_shape
+            roi_count = len(rois)
+            total_roi_count = roi_count
+            relative_path = merged_tif.relative_to(folder_path).as_posix()
+
+            for roi in rois:
+                png_blob = _encode_patch(img_rgb, roi)
+                if png_blob is None:
+                    continue
+                roi_meta = {
+                    "image": merged_tif.stem,
+                    "scale": DEFAULT_SCALE,
+                    "filename": f"{merged_tif.stem}_roi_{roi['ID']:04d}.png",
+                    "folder": folder_path.name,
+                    "tif_path": relative_path,
+                    "original_shape": {"height": int(h), "width": int(w)},
+                    "processed_shape": {"height": int(processed_h), "width": int(processed_w)},
+                    **roi,
+                }
+                record = BulkRoiRecord(
+                    folder_name=folder_path.name,
+                    image_filename=relative_path,
+                    image_stem=merged_tif.stem,
+                    scale=DEFAULT_SCALE,
+                    num_rois=roi_count,
+                    roi_id=int(roi["ID"]),
+                    roi_start_x=int(roi["ST"][0]),
+                    roi_start_y=int(roi["ST"][1]),
+                    roi_end_x=int(roi["EN"][0]),
+                    roi_end_y=int(roi["EN"][1]),
+                    roi_center_x=int(roi["CE"][0]),
+                    roi_center_y=int(roi["CE"][1]),
+                    roi_meta=roi_meta,
+                    image_width_px=int(processed_w),
+                    image_height_px=int(processed_h),
+                    png_blob=png_blob,
+                    manual_label=None,
+                    ai_label=None,
+                    ai_model_name=None,
+                )
+                session.add(record)
+
+            file_result = FileExtractionSummary(
+                tif_name=merged_tif.name,
+                relative_path=relative_path,
+                roi_count=roi_count,
+                original_shape=(h, w),
+                processed_shape=(processed_h, processed_w),
+            )
+            session.commit()
+        finally:
+            session.close()
+            engine.dispose()
+
+        if file_result is None:
+            raise HTTPException(status_code=500, detail="ROI 抽出結果の作成に失敗しました。")
+        db_size_bytes = db_path.stat().st_size if db_path.exists() else 0
+
+        return FocusMergeExtractionResult(
+            folder_name=folder_path.name,
+            db_name=db_path.name,
+            db_path=db_path,
+            db_size_bytes=db_size_bytes,
+            saved_at=datetime.now(),
+            merged_tif_name=FOCUS_MERGED_FILENAME,
+            roi_count=file_result.roi_count,
+            total_roi_count=total_roi_count,
         )
 
     return await asyncio.to_thread(_run)
@@ -488,7 +1101,6 @@ DEFAULT_EXTRACT_TUNING: dict[str, float | int] = {
     "min_distance": 0,
     "disallow_overlap": 1,
     "nms_iou_threshold": 0.15,
-    "iterative_passes": 1,
 }
 
 
@@ -567,15 +1179,9 @@ def _normalize_extract_tuning(raw: dict[str, Any] | None) -> dict[str, float | i
                 base["nms_iou_threshold"] = float(raw["nms_iou_threshold"])
             except Exception:
                 pass
-        if "iterative_passes" in raw:
-            try:
-                base["iterative_passes"] = int(raw["iterative_passes"])
-            except Exception:
-                pass
     base["min_distance"] = max(0, int(base["min_distance"]))
     base["disallow_overlap"] = 1 if int(base["disallow_overlap"]) > 0 else 0
     base["nms_iou_threshold"] = float(max(0.0, min(0.95, float(base["nms_iou_threshold"]))))
-    base["iterative_passes"] = max(1, int(base["iterative_passes"]))
     return base
 
 
@@ -806,13 +1412,55 @@ def _save_inference_cache(db_path: Path, model_path: str, files: dict[str, dict[
             pass
 
 
-async def infer_folder(folder_name: str) -> BulkInferenceResult:
+async def focus_merge_folder(folder_name: str, project_name: str | None = None) -> FocusMergeResult:
+    """Generate a focus-merged image from all TIFFs in the folder."""
+    _ensure_dirs()
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+
+    tiff_paths = _focus_merge_candidate_files(folder_path)
+    if not tiff_paths:
+        raise HTTPException(status_code=404, detail="TIFFファイルが見つかりません。")
+
+    output_path = folder_path / FOCUS_MERGED_FILENAME
+    detached_folder_name = _focus_merged_single_folder_name(folder_path.name)
+    detached_folder_path = _focus_merged_single_folder_path(folder_path.name)
+    detached_tif_name = _focus_merged_single_tif_name(folder_path.name)
+    detached_tif_path = detached_folder_path / detached_tif_name
+
+    def _run() -> FocusMergeResult:
+        merged, shape, valid_count = _merge_focus_stack(tiff_paths)
+        success_internal = cv2.imwrite(str(output_path), merged)
+        if not success_internal:
+            raise HTTPException(status_code=500, detail="フォーカスマージ画像の保存に失敗しました。")
+        shutil.rmtree(detached_folder_path, ignore_errors=True)
+        detached_folder_path.mkdir(parents=True, exist_ok=True)
+        write_realtime_folder_mode(detached_folder_path, REALTIME_FOLDER_MODE_SINGLE)
+        success_detached = cv2.imwrite(str(detached_tif_path), merged)
+        if not success_detached:
+            raise HTTPException(status_code=500, detail="単一画像用フォーカスマージ画像の保存に失敗しました。")
+
+        return FocusMergeResult(
+            folder_name=folder_path.name,
+            merged_folder_name=detached_folder_name,
+            source_image_count=valid_count,
+            merged_tif_name=detached_tif_name,
+            merged_relative_path=detached_tif_name,
+            merged_shape=shape,
+        )
+
+    return await asyncio.to_thread(_run)
+
+
+async def infer_folder(
+    folder_name: str,
+    project_name: str | None = None,
+    *,
+    prefer_focus_merged: bool = False,
+) -> BulkInferenceResult:
     """Run inference for all ROIs in the folder DB and summarize counts per image."""
     _ensure_dirs()
-    folder_path = _resolve_folder(folder_name)
-    db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
-    if not db_path.exists():
-        raise HTTPException(status_code=400, detail="先に一括ROI抽出を実行してください。")
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+    db_path = _db_path_for_inference(folder_path, prefer_focus_merged=prefer_focus_merged)
 
     def _run() -> BulkInferenceResult:
         db_name = db_path.name
@@ -927,13 +1575,16 @@ async def infer_folder(folder_name: str) -> BulkInferenceResult:
 
 
 
-async def infer_manifest(folder_name: str) -> BulkInferenceResult:
+async def infer_manifest(
+    folder_name: str,
+    project_name: str | None = None,
+    *,
+    prefer_focus_merged: bool = False,
+) -> BulkInferenceResult:
     """Return per-image ROI counts and cached inference progress."""
     _ensure_dirs()
-    folder_path = _resolve_folder(folder_name)
-    db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
-    if not db_path.exists():
-        raise HTTPException(status_code=400, detail="先に一括ROI抽出を実行してください。")
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+    db_path = _db_path_for_inference(folder_path, prefer_focus_merged=prefer_focus_merged)
 
     def _run() -> BulkInferenceResult:
         db_name = db_path.name
@@ -1041,14 +1692,17 @@ async def infer_manifest(folder_name: str) -> BulkInferenceResult:
     return await asyncio.to_thread(_run)
 
 
-async def infer_single_image(folder_name: str, relative_path: str) -> InferenceFileSummary:
+async def infer_single_image(
+    folder_name: str,
+    relative_path: str,
+    project_name: str | None = None,
+    *,
+    prefer_focus_merged: bool = False,
+) -> InferenceFileSummary:
     """Run inference only for one image in the bulk DB."""
     _ensure_dirs()
-    folder_path = _resolve_folder(folder_name)
-    db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
-    if not db_path.exists():
-        raise HTTPException(status_code=400, detail="先に一括ROI抽出を実行してください。")
-
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+    db_path = _db_path_for_inference(folder_path, prefer_focus_merged=prefer_focus_merged)
     target = (relative_path or "").strip()
     if not target:
         raise HTTPException(status_code=400, detail="relative_path を指定してください。")
@@ -1168,11 +1822,11 @@ def _sanitize_rel_for_dir(relative_path: str) -> str:
     return "__".join(parts)
 
 
-async def export_class1_rois(folder_name: str) -> Class1ExportResult:
+async def export_class1_rois(folder_name: str, project_name: str | None = None) -> Class1ExportResult:
     """Export Class1 ROI patches to a folder for manual counting."""
     _ensure_dirs()
-    folder_path = _resolve_folder(folder_name)
-    db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+    db_path = _db_path_for_folder(folder_path.name)
     if not db_path.exists():
         raise HTTPException(status_code=400, detail="先に一括ROI抽出を実行してください。")
 
@@ -1340,11 +1994,11 @@ def _parse_optional_manual_count(raw: str | None) -> int | None:
     return value
 
 
-async def optimize_class1_thresholds(folder_name: str) -> Class1OptimizationResult:
+async def optimize_class1_thresholds(folder_name: str, project_name: str | None = None) -> Class1OptimizationResult:
     """Optimize Class1 ROI split thresholds based on manual counts in manifest.csv."""
     _ensure_dirs()
-    folder_path = _resolve_folder(folder_name)
-    db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+    db_path = _db_path_for_folder(folder_path.name)
     if not db_path.exists():
         raise HTTPException(status_code=400, detail="先に一括ROI抽出を実行してください。")
 
@@ -1559,11 +2213,11 @@ def _extract_tuning_template_path(folder_name: str) -> Path:
     return DATABASE_DIR / f"{folder_name}_extract_tuning_template.csv"
 
 
-async def export_extraction_tuning_template(folder_name: str) -> ExtractionTuningTemplateResult:
+async def export_extraction_tuning_template(folder_name: str, project_name: str | None = None) -> ExtractionTuningTemplateResult:
     """Create CSV template for manual ROI-count ground truth per image."""
     _ensure_dirs()
-    folder_path = _resolve_folder(folder_name)
-    db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+    db_path = _db_path_for_folder(folder_path.name)
     if not db_path.exists():
         raise HTTPException(status_code=400, detail="先に一括ROI抽出を実行してください。")
 
@@ -1602,11 +2256,11 @@ async def export_extraction_tuning_template(folder_name: str) -> ExtractionTunin
     return await asyncio.to_thread(_run)
 
 
-async def optimize_extraction_params(folder_name: str) -> ExtractionOptimizationResult:
+async def optimize_extraction_params(folder_name: str, project_name: str | None = None) -> ExtractionOptimizationResult:
     """Grid-search min_distance and NMS IoU using manual ROI-count ground truth."""
     _ensure_dirs()
-    folder_path = _resolve_folder(folder_name)
-    db_path = DATABASE_DIR / f"{folder_path.name}_bulk.db"
+    folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
+    db_path = _db_path_for_folder(folder_path.name)
     if not db_path.exists():
         raise HTTPException(status_code=400, detail="先に一括ROI抽出を実行してください。")
 
@@ -1674,7 +2328,6 @@ async def optimize_extraction_params(folder_name: str) -> ExtractionOptimization
             "kernel_size": int(base_profile.get("kernel_size", 5)),
             "dilate_iterations": int(base_profile.get("dilate_iterations", 2)),
             "disallow_overlap": True,
-            "iterative_passes": int(current_tuning.get("iterative_passes", base_profile.get("iterative_passes", 1))),
         }
 
         search_rows: list[dict[str, Any]] = []
@@ -1698,7 +2351,6 @@ async def optimize_extraction_params(folder_name: str) -> ExtractionOptimization
                     dilate_iterations=fixed_params["dilate_iterations"],
                     disallow_overlap=True,
                     nms_iou_threshold=float(iou_th),
-                    iterative_passes=int(fixed_params["iterative_passes"]),
                 )
                 pred = len(rois)
                 diff = float(pred - int(row["manual_roi_count"]))
@@ -1725,7 +2377,6 @@ async def optimize_extraction_params(folder_name: str) -> ExtractionOptimization
             "min_distance": int(best["min_distance"]),
             "disallow_overlap": 1,
             "nms_iou_threshold": float(best["nms_iou_threshold"]),
-            "iterative_passes": int(fixed_params["iterative_passes"]),
         }
         tuning_path = _save_bulk_extract_tuning(folder_path.name, best_params)
 
@@ -1756,4 +2407,3 @@ async def optimize_extraction_params(folder_name: str) -> ExtractionOptimization
         )
 
     return await asyncio.to_thread(_run)
-

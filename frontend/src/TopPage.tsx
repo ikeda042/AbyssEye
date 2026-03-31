@@ -4,10 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Alert, Box, Card, CardActionArea, CardContent, Container, Typography, Stack, useTheme } from "@mui/material";
 import type { SvgIconProps } from "@mui/material/SvgIcon";
 import Grid from "@mui/material/GridLegacy";
-import StorageIcon from "@mui/icons-material/Storage";
-import DisplaySettingsIcon from "@mui/icons-material/DisplaySettings";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
-import AutoGraphIcon from "@mui/icons-material/AutoGraph";
 import Inventory2Icon from "@mui/icons-material/Inventory2";
 import { API_BASE_URL } from "./config";
 import { useI18n } from "./i18n";
@@ -27,7 +24,8 @@ type CardItem =
 
 const TopPage = () => {
   const navigate = useNavigate();
-  const { t } = useI18n();
+  const { t, language } = useI18n();
+  const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
   const [healthStatus, setHealthStatus] = useState<"loading" | "ok" | "error">("loading");
   const [backendStatusText, setBackendStatusText] = useState<string | null>(null);
   const theme = useTheme();
@@ -35,25 +33,14 @@ const TopPage = () => {
   const cards = useMemo<CardItem[]>(
     () => [
       {
-        title: t("top.cards.roi.title"),
-        description: t("top.cards.roi.desc"),
-        path: "/tiff-manager",
-        accent,
-        icon: <DisplaySettingsIcon />,
-      },
-      {
-        title: t("top.cards.roiBulk.title"),
-        description: t("top.cards.roiBulk.desc"),
-        path: "/tiff-manager-bulk",
+        title: tt("ROI抽出", "ROI extraction"),
+        description: tt(
+          "ファイルをアップロードするか、リアルタイムエンジンを使うかを選択します。",
+          "Choose whether to use file upload or the realtime engine.",
+        ),
+        path: "/roi",
         accent,
         icon: <Inventory2Icon />,
-      },
-      {
-        title: t("top.cards.databases.title"),
-        description: t("top.cards.databases.desc"),
-        path: "/databases",
-        accent,
-        icon: <StorageIcon />,
       },
       {
         title: t("top.cards.models.title"),
@@ -62,15 +49,8 @@ const TopPage = () => {
         accent,
         icon: <ModelTrainingIcon />,
       },
-      {
-        title: t("top.cards.realtime.title"),
-        description: t("top.cards.realtime.desc"),
-        path: "/realtime",
-        accent,
-        icon: <AutoGraphIcon />,
-      },
     ],
-    [accent, t]
+    [accent, t, tt]
   );
 
   const handleNavigate = useCallback(

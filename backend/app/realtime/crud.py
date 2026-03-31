@@ -18,21 +18,32 @@ from typing import Optional
 from fastapi import HTTPException, UploadFile
 from PIL import Image
 from sqlalchemy.exc import OperationalError as SAOperationalError
+import cv2
+import numpy as np
 
 from ..inference import crud as inference_crud
 from ..databases import crud as databases_crud
 from ..roi_extract.roi_module import ROIExtractor
+from ..tiff_manager_buld import crud as tiff_bulk_crud
 
 APP_DIR = Path(__file__).resolve().parents[1]
 REALTIME_TIFF_DIR = APP_DIR / "realtime_tiff"
 REALTIME_DB_DIR = APP_DIR / "realtime_databases"
 REALTIME_CACHE_DIR = APP_DIR / "realtime_cache"
-PRIMARY_TIFF_DIR = APP_DIR / "tiff_manager"
+PRIMARY_TIFF_DIR = APP_DIR / "tiff_manager_buld"
 PRIMARY_DB_DIR = APP_DIR / "databases"
 LEGACY_REALTIME_TIFF_DIR = APP_DIR.parent / "realtime_tiff"
 ALLOWED_EXTENSIONS = {".tif", ".tiff"}
 ROI_CACHE_VERSION = 1
+REALTIME_STACK_DB_SUFFIX = "_bulk.db"
 # fmt: on
+
+FOCUS_METRIC_ALIASES: dict[str, str] = {
+    "ten": "ften",
+    "tenengrad": "ften",
+    "tenen": "ften",
+    "f": "ften",
+}
 
 
 @dataclass
@@ -72,10 +83,320 @@ class RealtimeStatus:
     db_path: Path
     inference: InferenceResult
     rois: list[RealtimeROI]
+    focus_profile: dict[str, object] | None = None
+    focus_map: dict[str, object] | None = None
+    source_filename: str | None = None
+    source_is_uploaded: bool = False
 
 
 _latest_status: Optional[RealtimeStatus] = None
 _status_lock = asyncio.Lock()
+
+
+def _deserialize_roi_meta(raw_meta: object) -> object:
+    if raw_meta is None:
+        return None
+    if isinstance(raw_meta, (bytes, bytearray)):
+        try:
+            raw_meta = raw_meta.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw_meta
+    if isinstance(raw_meta, str):
+        try:
+            return json.loads(raw_meta)
+        except json.JSONDecodeError:
+            return raw_meta
+    return raw_meta
+
+
+def _normalize_focus_metric(raw: str) -> str:
+    if not raw:
+        return "ften"
+    normalized = raw.strip().lower().replace("-", "").replace("_", "")
+    return FOCUS_METRIC_ALIASES.get(normalized, "ften")
+
+
+def _focus_metric_values(gray: np.ndarray) -> dict[str, float]:
+    g = gray.astype(np.float64)
+    ften = float((cv2.Sobel(g, cv2.CV_64F, 1, 0, ksize=3) ** 2 + cv2.Sobel(g, cv2.CV_64F, 0, 1, ksize=3) ** 2).mean())
+    return {
+        "ften": ften,
+    }
+
+
+def _focus_profile_metric_names(focus_metric: str) -> list[str]:
+    return ["ften"]
+
+
+def _select_focus_score(norm_scores: dict[str, float], focus_metric: str) -> float:
+    return float(norm_scores.get(focus_metric, 0.0))
+
+
+def _minmax(values: list[float]) -> list[float]:
+    if not values:
+        return []
+    mn = min(values)
+    mx = max(values)
+    if mx - mn <= 1e-12:
+        return [0.0 for _ in values]
+    return [(v - mn) / (mx - mn) for v in values]
+
+
+def _load_focus_gray(path: Path, max_side: int = 640) -> np.ndarray | None:
+    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    if img.ndim == 3:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = img
+    if gray.dtype != np.uint8:
+        gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    h, w = gray.shape[:2]
+    if max(h, w) > max_side and h > 0 and w > 0:
+        scale = max_side / float(max(h, w))
+        gray = cv2.resize(gray, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+    return gray
+
+
+def _collect_realtime_tiff_stack(max_side: int = 640) -> tuple[list[int], list[str], list[np.ndarray]]:
+    candidate_paths: list[Path] = []
+    for directory in _candidate_tiff_dirs():
+        if not directory.exists():
+            continue
+        for p in directory.iterdir():
+            if not p.is_file() or p.suffix.lower() not in ALLOWED_EXTENSIONS:
+                continue
+            if any(existing.name == p.name for existing in candidate_paths):
+                continue
+            candidate_paths.append(p)
+
+    ordered = sorted(candidate_paths, key=lambda path: path.name.lower())
+
+    indices: list[int] = []
+    names: list[str] = []
+    stack: list[np.ndarray] = []
+    for idx, tif_path in enumerate(ordered):
+        gray = _load_focus_gray(tif_path, max_side=max_side)
+        if gray is None:
+            continue
+        indices.append(idx)
+        names.append(tif_path.name)
+        stack.append(gray)
+    return indices, names, stack
+
+
+def _build_focus_map(
+    indices: list[int],
+    names: list[str],
+    stack: list[np.ndarray],
+    current_index: int,
+    focus_metric: str,
+    tile_size: int = 32,
+) -> dict[str, object] | None:
+    if len(stack) < 2:
+        return None
+
+    metric_key = _normalize_focus_metric(focus_metric)
+    metric_names = _focus_profile_metric_names(metric_key)
+
+    base_h, base_w = stack[0].shape[:2]
+    aligned: list[np.ndarray] = []
+    for gray in stack:
+        if gray.shape[:2] != (base_h, base_w):
+            gray = cv2.resize(gray, (base_w, base_h), interpolation=cv2.INTER_AREA)
+        aligned.append(gray)
+
+    rows = max(1, base_h // tile_size)
+    cols = max(1, base_w // tile_size)
+    stride_y = base_h / rows
+    stride_x = base_w / cols
+
+    best_indices: list[int] = []
+    best_depth_rel: list[float] = []
+    confidence: list[float] = []
+    best_indices_by_metric: dict[str, list[int]] = {metric: [] for metric in metric_names}
+    best_depth_by_metric: dict[str, list[float]] = {metric: [] for metric in metric_names}
+
+    for r in range(rows):
+        y0 = int(round(r * stride_y))
+        y1 = int(round((r + 1) * stride_y))
+        for c in range(cols):
+            x0 = int(round(c * stride_x))
+            x1 = int(round((c + 1) * stride_x))
+            per_metric: dict[str, list[float]] = {metric: [] for metric in metric_names}
+            for gray in aligned:
+                tile = gray[y0:y1, x0:x1]
+                if tile.size == 0:
+                    for metric in metric_names:
+                        per_metric[metric].append(0.0)
+                else:
+                    values = _focus_metric_values(tile)
+                    for metric in metric_names:
+                        per_metric[metric].append(float(values.get(metric, 0.0)))
+
+            metric_norm: dict[str, list[float]] = {}
+            for metric in metric_names:
+                metric_norm[metric] = _minmax(per_metric[metric])
+
+            selected_metric = metric_key
+            scores = metric_norm.get(metric_key, [0.0 for _ in range(len(aligned))])
+
+            for metric, values in metric_norm.items():
+                order_metric = np.argsort(np.array(values))[::-1]
+                if len(values) > 0 and order_metric.size > 0:
+                    best_local_metric = int(order_metric[0])
+                    best_indices_by_metric[metric].append(indices[best_local_metric])
+                    if len(indices) <= 1:
+                        best_depth_by_metric[metric].append(0.0)
+                    else:
+                        best_depth_by_metric[metric].append(best_local_metric / float(len(indices) - 1))
+                else:
+                    best_indices_by_metric[metric].append(indices[0] if indices else 0)
+                    best_depth_by_metric[metric].append(0.0)
+
+            order = np.argsort(np.array(scores))[::-1]
+            if len(order) == 0:
+                continue
+            best_local = int(order[0])
+            second = float(scores[int(order[1])]) if len(order) > 1 else 0.0
+            best_score = float(scores[best_local])
+            conf = max(0.0, min(1.0, best_score - second))
+
+            best_idx = indices[best_local]
+            best_indices.append(best_idx)
+            if len(indices) <= 1:
+                best_depth_rel.append(0.0)
+            else:
+                best_depth_rel.append(best_local / float(len(indices) - 1))
+            confidence.append(conf)
+
+    if current_index in indices and len(indices) > 1:
+        current_local = indices.index(current_index)
+        current_depth_rel = current_local / float(len(indices) - 1)
+    else:
+        current_depth_rel = 0.0
+
+    return {
+        "method": f"tile_focus_map({metric_key})",
+        "focus_metric": metric_key,
+        "selected_metric": selected_metric if isinstance(metric_key, str) else metric_key,
+        "metric_names": metric_names,
+        "tile_size": int(tile_size),
+        "rows": int(rows),
+        "cols": int(cols),
+        "image_width": int(base_w),
+        "image_height": int(base_h),
+        "z_indices": indices,
+        "z_paths": names,
+        "current_index": int(current_index),
+        "current_depth_relative": float(current_depth_rel),
+        "best_indices": best_indices,
+        "best_depth_relative": best_depth_rel,
+        "confidence": confidence,
+        "best_indices_by_metric": best_indices_by_metric,
+        "best_depth_relative_by_metric": best_depth_by_metric,
+    }
+
+
+def _build_focus_profile(
+    indices: list[int],
+    names: list[str],
+    stack: list[np.ndarray],
+    current_index: int,
+    focus_metric: str,
+) -> dict[str, object] | None:
+    metric_key = _normalize_focus_metric(focus_metric)
+    metric_names = _focus_profile_metric_names(metric_key)
+
+    entries: list[dict[str, object]] = []
+    metric_values: dict[str, list[float]] = {metric: [] for metric in metric_names}
+
+    for idx, name, gray in zip(indices, names, stack):
+        values = _focus_metric_values(gray)
+        entry: dict[str, object] = {
+            "index": idx,
+            "relative_path": name,
+            "tif_name": Path(name).name,
+            "tenengrad": values["ften"],
+        }
+        for metric in metric_names:
+            entry[metric] = float(values.get(metric, 0.0))
+            metric_values[metric].append(float(values.get(metric, 0.0)))
+        entries.append(entry)
+
+    if not entries:
+        return None
+
+    normalized_scores: dict[str, list[float]] = {}
+    for metric in metric_names:
+        normalized_scores[metric] = _minmax(metric_values[metric])
+
+    for i, e in enumerate(entries):
+        for metric in metric_names:
+            norm_key = f"{metric}_norm"
+            e[norm_key] = float(normalized_scores[metric][i])
+        e["tenengrad_norm"] = float(normalized_scores["ften"][i]) if "ften" in normalized_scores else 0.0
+        score = _select_focus_score(
+            {metric: normalized_scores[metric][i] for metric in metric_names},
+            focus_metric=metric_key,
+        )
+        e["combined_score"] = float(score)
+        e["selected_metric"] = metric_key
+        e["per_metric_score"] = {
+            metric: float(normalized_scores[metric][i]) for metric in metric_names
+        }
+
+    peak_entry = max(entries, key=lambda e: float(e["combined_score"]))
+    peak_index = int(peak_entry["index"])
+    peak_score = float(peak_entry["combined_score"])
+
+    current_entry = next((e for e in entries if int(e["index"]) == current_index), entries[0])
+    current_score = float(current_entry["combined_score"])
+    score_ratio = 0.0 if peak_score <= 1e-12 else current_score / peak_score
+
+    total = max(1, len(entries))
+    for e in entries:
+        idx = int(e["index"])
+        e["z_relative"] = 0.0 if total == 1 else (idx / (total - 1))
+        e["z_offset_from_peak"] = idx - peak_index
+
+    return {
+        "method": f"focus_profile({metric_key})",
+        "focus_metric": metric_key,
+        "metric_names": metric_names,
+        "count": len(entries),
+        "current_index": int(current_entry["index"]),
+        "peak_index": peak_index,
+        "current_score": current_score,
+        "peak_score": peak_score,
+        "current_to_peak_ratio": score_ratio,
+        "z_offset_from_peak": int(current_entry["index"]) - peak_index,
+        "current_relative_path": str(current_entry["relative_path"]),
+        "peak_relative_path": str(peak_entry["relative_path"]),
+        "scores": entries,
+    }
+
+
+def _build_focus_snapshot(
+    tif_path: Path,
+    focus_metric: str = "tenengrad",
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+    indices, names, stack = _collect_realtime_tiff_stack()
+    if not indices or not names or not stack:
+        return None, None
+
+    current_index = indices[0]
+    target_name = tif_path.name if tif_path else ""
+    if target_name:
+        for idx, name in zip(indices, names):
+            if name == target_name:
+                current_index = idx
+                break
+
+    focus_profile = _build_focus_profile(indices, names, stack, current_index, focus_metric)
+    focus_map = _build_focus_map(indices, names, stack, current_index, focus_metric)
+    return focus_profile, focus_map
 
 
 def _ensure_storage_dir() -> None:
@@ -174,6 +495,137 @@ def _copy_with_dedup(src: Path, dest_dir: Path, *, dest_name: str | None = None)
     return target
 
 
+def _stack_db_path(stack_name: str) -> Path:
+    safe_name = _sanitize_prefix(stack_name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="同視野保存のための保存先名が不正です。")
+    return PRIMARY_DB_DIR / f"{safe_name}{REALTIME_STACK_DB_SUFFIX}"
+
+
+def _ensure_stack_tif_dir(stack_name: str) -> Path:
+    safe_name = _sanitize_prefix(stack_name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="同視野保存のための保存先名が不正です。")
+    target_dir = PRIMARY_TIFF_DIR / safe_name
+    target_dir.mkdir(parents=True, exist_ok=True)
+    return target_dir
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _ensure_realtime_roi_records_table(conn: sqlite3.Connection) -> None:
+    conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS roi_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            image_stem TEXT NOT NULL,
+            scale REAL NOT NULL,
+            num_rois INTEGER NOT NULL,
+            roi_id INTEGER NOT NULL,
+            roi_start_x INTEGER NOT NULL,
+            roi_start_y INTEGER NOT NULL,
+            roi_end_x INTEGER NOT NULL,
+            roi_end_y INTEGER NOT NULL,
+            roi_center_x INTEGER NOT NULL,
+            roi_center_y INTEGER NOT NULL,
+            roi_meta TEXT NOT NULL,
+            image_width_px INTEGER NOT NULL,
+            image_height_px INTEGER NOT NULL,
+            png_blob BLOB NOT NULL,
+            manual_label TEXT,
+            ai_label TEXT,
+            ai_model_name TEXT
+        )
+    """)
+    existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(roi_records)").fetchall()}
+    for column in ("manual_label", "ai_label", "ai_model_name"):
+        if column not in existing_columns:
+            conn.execute(f"ALTER TABLE roi_records ADD COLUMN {column} TEXT")
+
+
+def _copy_realtime_db_to_stack_db(source_db_path: Path, stack_name: str) -> Path:
+    stack_db_path = _stack_db_path(stack_name)
+    if not source_db_path.is_file():
+        raise HTTPException(status_code=404, detail=f"{source_db_path.name} が見つかりませんでした。")
+
+    if not stack_db_path.exists():
+        try:
+            shutil.copy2(source_db_path, stack_db_path)
+            return stack_db_path
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"{stack_db_path.name} への保存に失敗しました: {exc}") from exc
+
+    target_columns = (
+        "image_stem",
+        "scale",
+        "num_rois",
+        "roi_id",
+        "roi_start_x",
+        "roi_start_y",
+        "roi_end_x",
+        "roi_end_y",
+        "roi_center_x",
+        "roi_center_y",
+        "roi_meta",
+        "image_width_px",
+        "image_height_px",
+        "png_blob",
+        "manual_label",
+        "ai_label",
+        "ai_model_name",
+    )
+    target_expr = ", ".join(f'"{column}"' for column in target_columns)
+    placeholders = ", ".join("?" for _ in target_columns)
+    insert_sql = f"INSERT INTO roi_records ({target_expr}) VALUES ({placeholders})"
+
+    try:
+        with sqlite3.connect(stack_db_path) as target_conn:
+            target_conn.row_factory = sqlite3.Row
+            _ensure_realtime_roi_records_table(target_conn)
+            with sqlite3.connect(source_db_path) as source_conn:
+                source_conn.row_factory = sqlite3.Row
+                if not _table_exists(source_conn, "roi_records"):
+                    raise HTTPException(status_code=500, detail=f"{source_db_path.name} に ROI テーブルがありません。")
+                source_columns = {row["name"] for row in source_conn.execute("PRAGMA table_info(roi_records)").fetchall()}
+                # For legacy/変形スキーマでは欠けたカラムを NULL として補完
+                source_select = ", ".join(f'"{col}"' if col in source_columns else "NULL" for col in target_columns)
+                rows = source_conn.execute(f"SELECT {source_select} FROM roi_records").fetchall()
+                if rows:
+                    target_conn.executemany(insert_sql, rows)
+            target_conn.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"{stack_db_path.name} への統合に失敗しました: {exc}") from exc
+
+    return stack_db_path
+
+
+def _project_scoped_prefix(project_name: str | None, base_prefix: str | None) -> str | None:
+    def _sanitize_project_name(raw: str | None) -> str | None:
+        value = (raw or "").strip()
+        if not value:
+            return None
+        value = str(Path(value).name).replace("#", "")
+        value = re.sub(r"[^A-Za-z0-9._()\\-]+", "_", value)
+        value = value.replace("__", "_").strip("._-")
+        return value or None
+
+    project = _sanitize_project_name(project_name)
+    if not project:
+        return _sanitize_prefix(base_prefix)
+    safe_base = _sanitize_prefix(base_prefix)
+    if safe_base is None:
+        return f"{project}__"
+    return f"{project}__{safe_base}"
+
+
 def _sanitize_prefix(prefix: str | None) -> str | None:
     if not prefix:
         return None
@@ -198,6 +650,10 @@ def _prefixed_filename(src: Path, prefix: str | None) -> str:
     if not safe_prefix:
         return src.name
     return f"{safe_prefix}_{src.name}"
+
+
+def _stack_folder_name(sample_name: str | None, field_name: str | None) -> str | None:
+    return _build_prefix(sample_name, field_name)
 
 
 def _roi_cache_path(tif_path: Path) -> Path:
@@ -332,8 +788,6 @@ def _create_db_from_tif(tif_path: Path) -> Path:
         raise HTTPException(status_code=404, detail=f"{tif_path.name} が見つかりませんでした。")
     _invalidate_roi_cache(tif_path)
 
-    import cv2  # local import to avoid heavy import at module load
-
     stem = _sanitize_stem(tif_path.stem)
     db_path = _resolve_db_path(stem)
     if db_path.exists():
@@ -366,7 +820,6 @@ def _create_db_from_tif(tif_path: Path) -> Path:
             dilate_iterations=int(roi_profile.get("dilate_iterations", 2)),
             disallow_overlap=int(roi_profile.get("disallow_overlap", 1)) > 0,
             nms_iou_threshold=float(roi_profile.get("nms_iou_threshold", 0.30)),
-            iterative_passes=int(roi_profile.get("iterative_passes", 1)),
         )
         try:
             ROIExtractor.save_rois_to_db(
@@ -425,7 +878,8 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                 image_height_px,
                 manual_label,
                 ai_label,
-                ai_model_name
+                ai_model_name,
+                roi_meta
             FROM roi_records
             ORDER BY id
             """
@@ -441,6 +895,9 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
         manual_label_val = row["manual_label"] if "manual_label" in row.keys() else None
         ai_label_val = row["ai_label"] if "ai_label" in row.keys() else None
         ai_model_val = row["ai_model_name"] if "ai_model_name" in row.keys() else None
+        raw_meta = row["roi_meta"] if "roi_meta" in row.keys() else None
+        meta_obj = _deserialize_roi_meta(raw_meta)
+        manual_added = bool(meta_obj.get("manual_added")) if isinstance(meta_obj, dict) else False
         if cached_result:
             rois.append(
                 RealtimeROI(
@@ -459,6 +916,7 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                     manual_label=manual_label_val,
                     ai_label=ai_label_val,
                     ai_model_name=ai_model_val,
+                    manual_added=manual_added,
                 )
             )
             predicted_class_str = str(int(cached_result["predicted_class"]))
@@ -492,6 +950,7 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                 manual_label=manual_label_val,
                 ai_label=ai_label_val,
                 ai_model_name=ai_model_val,
+                manual_added=manual_added,
             )
         )
         cache_dirty = True
@@ -555,6 +1014,11 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
     db_path = await asyncio.to_thread(_create_db_from_tif, target_path)
     rois = await asyncio.to_thread(_load_rois_with_inference, db_path, target_path)
     inference = _build_inference_summary(rois, target_path.name)
+    focus_profile, focus_map = await asyncio.to_thread(
+        _build_focus_snapshot,
+        target_path,
+        "tenengrad",
+    )
     try:
         saved_ts = max(target_path.stat().st_mtime, db_path.stat().st_mtime)
     except OSError:
@@ -567,11 +1031,29 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
         db_path=db_path,
         inference=inference,
         rois=rois,
+        focus_profile=focus_profile,
+        focus_map=focus_map,
+        source_filename=safe_name,
+        source_is_uploaded=True,
     )
     return target_path
 
 
-async def get_latest_status() -> RealtimeStatus:
+def _safe_stem(value: str | None) -> str | None:
+    stem = Path(value or "").stem
+    return _sanitize_prefix(stem)
+
+
+def _tif_extension(path: Path) -> str:
+    ext = path.suffix
+    if ext.lower() in ALLOWED_EXTENSIONS:
+        return ext
+    return ".tif"
+
+
+async def get_latest_status(
+    focus_metric: str = "tenengrad",
+) -> RealtimeStatus:
     global _latest_status
     _ensure_storage_dir()
     async with _status_lock:
@@ -591,16 +1073,29 @@ async def get_latest_status() -> RealtimeStatus:
         latest = candidates[0]
         latest_mtime = latest.stat().st_mtime
         latest_size = latest.stat().st_size
-        if (
-            _latest_status
-            and _latest_status.tif_path == latest
-            and _latest_status.size_bytes == latest_size
-            and _latest_status.saved_at.timestamp() >= latest_mtime
-        ):
-            return _latest_status
-
         latest_local = _ensure_local_copy(latest)
         existing_db = _find_existing_db(latest_local)
+        latest_db_mtime = 0.0
+        if existing_db is not None:
+            try:
+                latest_db_mtime = existing_db.stat().st_mtime
+            except OSError:
+                latest_db_mtime = 0.0
+        latest_status_mtime = max(latest_mtime, latest_db_mtime)
+        if (
+            _latest_status
+            and _latest_status.tif_path == latest_local
+            and _latest_status.size_bytes == latest_size
+            and _latest_status.saved_at.timestamp() >= latest_status_mtime
+        ):
+            focus_profile, focus_map = await asyncio.to_thread(
+                _build_focus_snapshot,
+                latest_local,
+                focus_metric,
+            )
+            _latest_status.focus_profile = focus_profile
+            _latest_status.focus_map = focus_map
+            return _latest_status
 
         if existing_db and existing_db.stat().st_mtime >= latest_mtime:
             db_path = existing_db
@@ -612,6 +1107,11 @@ async def get_latest_status() -> RealtimeStatus:
             status_saved_ts = max(latest_mtime, db_path.stat().st_mtime)
         except OSError:
             status_saved_ts = latest_mtime
+        focus_profile, focus_map = await asyncio.to_thread(
+            _build_focus_snapshot,
+            latest_local,
+            focus_metric,
+        )
         _latest_status = RealtimeStatus(
             tif_path=latest_local,
             saved_at=datetime.fromtimestamp(status_saved_ts),
@@ -619,6 +1119,10 @@ async def get_latest_status() -> RealtimeStatus:
             db_path=db_path,
             inference=_build_inference_summary(rois, latest_local.name),
             rois=rois,
+            focus_profile=focus_profile,
+            focus_map=focus_map,
+            source_filename=latest_local.name,
+            source_is_uploaded=False,
         )
         return _latest_status
 
@@ -636,28 +1140,66 @@ def get_realtime_tif_path(tif_name: str) -> Path:
 
 
 async def copy_latest_to_primary_locations(
-    *, sample_name: str | None = None, field_name: str | None = None
+    *,
+    sample_name: str | None = None,
+    field_name: str | None = None,
+    project_name: str | None = None,
+    stack_mode: bool = False,
 ) -> tuple[Path, Path]:
-    """Copy latest realtime TIFF/DB into primary folders used by tiff_manager & databases."""
+    """Save latest realtime TIFF as a bulk-style folder, then run ROI抽出+推論."""
     _ensure_storage_dir()
     status = await get_latest_status()
 
-    prefix = _build_prefix(sample_name, field_name)
-    tif_name = _prefixed_filename(status.tif_path, prefix)
-    db_name = _prefixed_filename(status.db_path, prefix)
+    requested_sample_stem = _safe_stem(sample_name)
+    requested_field_stem = _safe_stem(field_name)
+
+    if stack_mode:
+        folder_name = requested_field_stem or requested_sample_stem
+        if not folder_name:
+            raise HTTPException(status_code=400, detail="同視野保存時はサンプル名またはフィールド名を指定してください。")
+    else:
+        folder_name = requested_sample_stem or _safe_stem(status.source_filename) or _safe_stem(status.tif_path.stem)
+        if not folder_name:
+            raise HTTPException(status_code=400, detail="保存時に有効なファイル名を決定できませんでした。")
+
+    # Scope project folders explicitly so realtime保存時にもtiff_manager_buld側の
+    # プロジェクト分離ルールに完全一致させる。
+    scoped_folder_name = tiff_bulk_crud._scoped_folder_name(folder_name, project_name)
+
+    folder = PRIMARY_TIFF_DIR / scoped_folder_name
+
+    folder.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(
+        tiff_bulk_crud.write_realtime_folder_mode,
+        folder,
+        tiff_bulk_crud.REALTIME_FOLDER_MODE_STACK if stack_mode else tiff_bulk_crud.REALTIME_FOLDER_MODE_SINGLE,
+    )
+
+    target_suffix = status.tif_path.suffix.lower() if status.tif_path.suffix.lower() in ALLOWED_EXTENSIONS else ".tif"
+    target_stem = requested_sample_stem or _safe_stem(status.source_filename) or _safe_stem(status.tif_path.stem)
+    target_filename = f"{target_stem}{target_suffix}" if target_stem else status.tif_path.name
 
     tif_target = await asyncio.to_thread(
         _copy_with_dedup,
         status.tif_path,
-        PRIMARY_TIFF_DIR,
-        dest_name=tif_name,
+        folder,
+        dest_name=target_filename,
     )
-    db_target = await asyncio.to_thread(
-        _copy_with_dedup,
-        status.db_path,
-        PRIMARY_DB_DIR,
-        dest_name=db_name,
+
+    extract_result = await tiff_bulk_crud.extract_folder(
+        folder_name=scoped_folder_name,
+        project_name=project_name,
     )
+    # 推論は可能な場合のみ試行し、失敗時でも保存自体は維持します（既存運用を中断しないため）
+    try:
+        infer_result = await tiff_bulk_crud.infer_folder(
+            folder_name=scoped_folder_name,
+            project_name=project_name,
+        )
+        db_target = infer_result.db_path
+    except HTTPException:
+        db_target = extract_result.db_path
+
     return tif_target, db_target
 
 

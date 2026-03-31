@@ -37,76 +37,87 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
       }}
     >
       <Toolbar sx={{ px: { xs: 1, sm: 2, md: 3, lg: 4 }, gap: 1.5, transition: "background-color 160ms ease" }}>
-        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexGrow: 1 }}>
-          <Box
-            component="img"
-            src={logoSrc}
-            alt={t("header.logoAlt")}
-            title={t("header.logoTitle")}
-            onClick={handleHomeClick}
-            sx={{
-              height: 40,
-              width: "auto",
-              cursor: isHome ? "default" : "pointer",
-              userSelect: "none",
-            }}
-          />
+        <Box
+          sx={{
+            width: "min(100%, 1720px)",
+            margin: "0 auto",
+            display: "flex",
+            alignItems: "center",
+            gap: 1.5,
+            flex: 1,
+          }}
+        >
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexGrow: 1 }}>
+            <Box
+              component="img"
+              src={logoSrc}
+              alt={t("header.logoAlt")}
+              title={t("header.logoTitle")}
+              onClick={handleHomeClick}
+              sx={{
+                height: 40,
+                width: "auto",
+                cursor: isHome ? "default" : "pointer",
+                userSelect: "none",
+              }}
+            />
+            <Typography
+              variant="h5"
+              onClick={handleHomeClick}
+              sx={{
+                fontWeight: 700,
+                fontSize: { xs: "1.35rem", sm: "1.5rem" },
+                fontFamily: '"Bricolage Grotesque", "Noto Sans JP", "Inter", system-ui, -apple-system, sans-serif',
+                letterSpacing: "0.04em",
+                textTransform: "lowercase",
+                cursor: isHome ? "default" : "pointer",
+                userSelect: "none",
+              }}
+            >
+              AbyssEye
+            </Typography>
+          </Stack>
+          <Divider flexItem orientation="vertical" sx={{ borderColor: headerBorder }} />
           <Typography
-            variant="h5"
-            onClick={handleHomeClick}
+            variant="caption"
             sx={{
-              fontWeight: 700,
-              fontSize: { xs: "1.35rem", sm: "1.5rem" },
-              fontFamily: '"Bricolage Grotesque", "Noto Sans JP", "Inter", system-ui, -apple-system, sans-serif',
-              letterSpacing: "0.04em",
-              textTransform: "lowercase",
-              cursor: isHome ? "default" : "pointer",
-              userSelect: "none",
+              color: "text.secondary",
+              display: { xs: "none", md: "block" },
             }}
           >
-            AbyssEye
+            {t("header.apiBase", { url: API_BASE_URL })}
           </Typography>
-        </Stack>
-        <Divider flexItem orientation="vertical" sx={{ borderColor: headerBorder }} />
-        <Typography
-          variant="caption"
-          sx={{
-            color: "text.secondary",
-            display: { xs: "none", md: "block" },
-          }}
-        >
-          {t("header.apiBase", { url: API_BASE_URL })}
-        </Typography>
-        <ToggleButtonGroup
-          value={language}
-          exclusive
-          size="small"
-          aria-label={t("header.languageToggle")}
-          onChange={(_event, value) => {
-            if (value === "ja" || value === "en") {
-              setLanguage(value);
-            }
-          }}
-          sx={{
-            ml: 1,
-            "& .MuiToggleButton-root": {
-              py: 0.5,
-              px: 1.25,
-            },
-          }}
-        >
-          <ToggleButton value="ja">{t("header.languageJa")}</ToggleButton>
-          <ToggleButton value="en">{t("header.languageEn")}</ToggleButton>
-        </ToggleButtonGroup>
-        <IconButton
-          color="inherit"
-          onClick={onToggleMode}
-          size="small"
-          sx={{ ml: 1, bgcolor: "transparent" }}
-          aria-label={t("header.toggleTheme")}
-        >
-          {mode === "dark" ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
-        </IconButton>
+          <ToggleButtonGroup
+            value={language}
+            exclusive
+            size="small"
+            aria-label={t("header.languageToggle")}
+            onChange={(_event, value) => {
+              if (value === "ja" || value === "en") {
+                setLanguage(value);
+              }
+            }}
+            sx={{
+              ml: 1,
+              "& .MuiToggleButton-root": {
+                py: 0.5,
+                px: 1.25,
+              },
+            }}
+          >
+            <ToggleButton value="ja">{t("header.languageJa")}</ToggleButton>
+            <ToggleButton value="en">{t("header.languageEn")}</ToggleButton>
+          </ToggleButtonGroup>
+          <IconButton
+            color="inherit"
+            onClick={onToggleMode}
+            size="small"
+            sx={{ ml: 1, bgcolor: "transparent" }}
+            aria-label={t("header.toggleTheme")}
+          >
+            {mode === "dark" ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
+          </IconButton>
+        </Box>
       </Toolbar>
     </AppBar>
   );

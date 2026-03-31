@@ -97,6 +97,7 @@ def _build_status_payload(view: crud.DeepScanView, request: Request) -> dict:
         ),
         "focus_profile": view.focus_profile,
         "focus_map": view.focus_map,
+        "roi_components_3d": view.roi_components_3d,
     }
 
 
@@ -105,8 +106,13 @@ async def get_deepscan_status(
     request: Request,
     db_name: str = Query(..., description="推論対象のDBファイル名"),
     tif_name: str | None = Query(None, description="表示対象TIFF (相対パスまたはファイル名)"),
+    focus_metric: str = Query("tenengrad", description="フォーカス指標: tenengrad"),
 ) -> dict:
-    view = await crud.get_deepscan_view(db_name=db_name, tif_name=tif_name)
+    view = await crud.get_deepscan_view(
+        db_name=db_name,
+        tif_name=tif_name,
+        focus_metric=focus_metric,
+    )
     return _build_status_payload(view, request)
 
 
@@ -137,6 +143,26 @@ class ManualRoiResponse(BaseModel):
 
 class ManualRoiDeleteResponse(BaseModel):
     deleted_roi_id: int
+
+
+class DeepscanCellCountImageResponse(BaseModel):
+    relative_path: str
+    tif_name: str
+    roi_count: int
+    class0_count: int
+    class1_count: int
+    class2_count: int
+    class3_count: int
+
+
+class DeepscanCellCountSummaryResponse(BaseModel):
+    db_name: str
+    total_roi_count: int
+    class0_total: int
+    class1_total: int
+    class2_total: int
+    class3_total: int
+    images: list[DeepscanCellCountImageResponse]
 
 
 @router.post("/{db_name}/manual-rois", response_model=ManualRoiResponse)
@@ -176,6 +202,31 @@ async def remove_manual_roi(
 ) -> ManualRoiDeleteResponse:
     deleted = await asyncio.to_thread(crud.delete_manual_roi, db_name, record_id, tif_name=tif_name)
     return ManualRoiDeleteResponse(deleted_roi_id=deleted)
+
+
+@router.get("/{db_name}/cell-count-summary", response_model=DeepscanCellCountSummaryResponse)
+async def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummaryResponse:
+    summary = await asyncio.to_thread(crud.get_cell_count_summary, db_name)
+    return DeepscanCellCountSummaryResponse(
+        db_name=summary.db_name,
+        total_roi_count=summary.total_roi_count,
+        class0_total=summary.class0_total,
+        class1_total=summary.class1_total,
+        class2_total=summary.class2_total,
+        class3_total=summary.class3_total,
+        images=[
+            DeepscanCellCountImageResponse(
+                relative_path=image.relative_path,
+                tif_name=image.tif_name,
+                roi_count=image.roi_count,
+                class0_count=image.class0_count,
+                class1_count=image.class1_count,
+                class2_count=image.class2_count,
+                class3_count=image.class3_count,
+            )
+            for image in summary.images
+        ],
+    )
 
 
 @router.get("/{db_name}/tiff", name="get_deepscan_tif_file")

@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, File, UploadFile, Request, HTTPException, Body
+from fastapi import APIRouter, File, UploadFile, Request, HTTPException, Body, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from . import crud
@@ -43,9 +43,12 @@ def _build_status_payload(status: crud.RealtimeStatus, request: Request) -> dict
                 "image_height_px": roi.image_height_px,
                 "png_base64": roi.png_base64,
                 "manual_label": roi.manual_label,
+                "manual_added": roi.manual_added,
             }
             for roi in status.rois
         ],
+        "focus_profile": status.focus_profile,
+        "focus_map": status.focus_map,
     }
 
 
@@ -56,8 +59,11 @@ async def upload_realtime_tiff(file: UploadFile = File(...)) -> dict:
 
 
 @router.get("/latest")
-async def get_latest_realtime_status(request: Request) -> dict:
-    status = await crud.get_latest_status()
+async def get_latest_realtime_status(
+    request: Request,
+    focus_metric: str = Query("tenengrad", description="フォーカス指標: tenengrad"),
+) -> dict:
+    status = await crud.get_latest_status(focus_metric=focus_metric)
     return _build_status_payload(status, request)
 
 
@@ -88,7 +94,10 @@ async def get_latest_realtime_tif_png():
 
 
 @router.get("/stream")
-async def stream_realtime_status(request: Request) -> StreamingResponse:
+async def stream_realtime_status(
+    request: Request,
+    focus_metric: str = Query("tenengrad", description="フォーカス指標: tenengrad"),
+) -> StreamingResponse:
     async def event_generator() -> AsyncGenerator[str, None]:
         last_signature: str | None = None
         heartbeat_seconds = 15.0
@@ -97,11 +106,11 @@ async def stream_realtime_status(request: Request) -> StreamingResponse:
             if await request.is_disconnected():
                 break
             try:
-                status = await crud.get_latest_status()
+                status = await crud.get_latest_status(focus_metric=focus_metric)
                 payload = _build_status_payload(status, request)
                 size_signature = str(payload.get("size_bytes", ""))
                 roi_signature = "|".join(
-                    f"{roi['roi_id']}-{roi['predicted_class']}-{roi['confidence']:.3f}"
+                    f"{roi['roi_id']}-{roi['predicted_class']}-{roi['confidence']:.3f}-{roi.get('manual_label') or ''}-{int(bool(roi.get('manual_added')))}"
                     for roi in payload.get("rois", [])
                 )
                 signature = f"{payload['tif_name']}::{payload['saved_at']}::{size_signature}::{roi_signature}"
@@ -137,10 +146,14 @@ async def stream_realtime_status(request: Request) -> StreamingResponse:
 async def use_current_realtime_assets(
     field_name: str | None = Body(default=None, embed=True),
     sample_name: str | None = Body(default=None, embed=True),
+    project_name: str | None = Body(default=None, embed=True),
+    stack_mode: bool = Body(default=False, embed=True),
 ) -> dict:
     tif_path, db_path = await crud.copy_latest_to_primary_locations(
         sample_name=sample_name,
         field_name=field_name,
+        project_name=project_name,
+        stack_mode=stack_mode,
     )
     return {
         "tif_name": tif_path.name,

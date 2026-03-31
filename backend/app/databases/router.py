@@ -14,6 +14,7 @@ class DatabaseFileResponse(BaseModel):
     name: str
     size_bytes: int
     updated_at: str
+    image_stem_count: int
 
 
 class DatabaseOverviewResponse(BaseModel):
@@ -59,15 +60,16 @@ def _serialize_database_overview(overview: crud.DatabaseOverview) -> DatabaseOve
 
 
 @router.get("/", response_model=list[DatabaseFileResponse])
-async def list_databases() -> list[DatabaseFileResponse]:
-    """List all `.db` files plus basic metadata."""
+async def list_databases(project_name: str | None = Query(default=None)) -> list[DatabaseFileResponse]:
+    """List `.db` files plus basic metadata, optionally filtered by project."""
     return [
         DatabaseFileResponse(
             name=entry.name,
             size_bytes=entry.size_bytes,
             updated_at=entry.updated_at.isoformat(),
+            image_stem_count=entry.image_stem_count,
         )
-        for entry in crud.list_database_files()
+        for entry in crud.list_database_files(project_name=project_name)
     ]
 
 

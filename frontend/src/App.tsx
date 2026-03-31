@@ -3,17 +3,15 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Box, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 import type { PaletteMode } from "@mui/material";
 import TopPage from "./TopPage";
-import TiffManagerPage from "./pages/TiffManagerPage";
+import RoiEntryPage from "./pages/RoiEntryPage";
 import TiffManagerBulkPage from "./pages/TiffManagerBulkPage";
 import TiffManagerBulkInferencePage from "./pages/TiffManagerBulkInferencePage";
-import RoiExtractPage from "./pages/RoiExtractPage";
-import DatabasesPage from "./pages/DatabasesPage";
-import DatabaseOverviewPage from "./pages/DatabaseOverviewPage";
-import SingleCellPage from "./pages/SingleCellPage";
+import TiffManagerBulkCellCountResultsPage from "./pages/TiffManagerBulkCellCountResultsPage";
 import InferencePage from "./pages/InferencePage";
 import AnnotationPage from "./pages/AnnotationPage";
 import ModelManagerPage from "./pages/ModelManagerPage";
 import RealtimePage from "./pages/RealtimePage";
+import RealtimeProjectsPage from "./pages/RealtimeProjectsPage";
 import DeepScanPage from "./pages/DeepScanPage";
 import DevPage from "./pages/DevPage";
 import AppHeader from "./AppHeader";
@@ -84,25 +82,39 @@ const App = () => {
             bgcolor: "background.default",
             color: "text.primary",
             transition: "background-color 160ms ease, color 160ms ease",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "stretch",
+            width: "100%",
           }}
         >
-          <Routes>
-            <Route path="/" element={<TopPage />} />
-            <Route path="/tiff-manager" element={<TiffManagerPage />} />
-            <Route path="/tiff-manager-bulk" element={<TiffManagerBulkPage />} />
-            <Route path="/tiff-manager-bulk/inference" element={<TiffManagerBulkInferencePage />} />
-            <Route path="/roi-extract" element={<RoiExtractPage />} />
-            <Route path="/databases" element={<DatabasesPage />} />
-            <Route path="/databases/overview" element={<DatabaseOverviewPage />} />
-            <Route path="/databases/single-cell" element={<SingleCellPage />} />
-            <Route path="/inference" element={<InferencePage />} />
-            <Route path="/annotation" element={<AnnotationPage />} />
-            <Route path="/model-manager" element={<ModelManagerPage />} />
-            <Route path="/realtime" element={<RealtimePage />} />
-            <Route path="/deepscan" element={<DeepScanPage />} />
-            <Route path="/dev" element={<DevPage />} />
-            <Route path="/temptext" element={<DevPage />} />
-          </Routes>
+          <Box
+            sx={{
+              width: "min(100%, 1720px)",
+              maxWidth: "100%",
+              marginInline: "auto",
+              overflowX: "auto",
+              px: { xs: 1, sm: 1.5, md: 2 },
+              boxSizing: "border-box",
+            }}
+          >
+            <Routes>
+              <Route path="/" element={<TopPage />} />
+              <Route path="/roi" element={<RoiEntryPage />} />
+              <Route path="/tiff-manager-bulk" element={<TiffManagerBulkPage />} />
+              <Route path="/tiff-manager-bulk/inference" element={<TiffManagerBulkInferencePage />} />
+              <Route path="/tiff-manager-bulk/cell-count-results" element={<TiffManagerBulkCellCountResultsPage />} />
+              <Route path="/databases" element={<TiffManagerBulkPage />} />
+              <Route path="/inference" element={<InferencePage />} />
+              <Route path="/annotation" element={<AnnotationPage />} />
+              <Route path="/model-manager" element={<ModelManagerPage />} />
+              <Route path="/realtime/projects" element={<RealtimeProjectsPage />} />
+              <Route path="/realtime" element={<RealtimePage />} />
+              <Route path="/deepscan" element={<DeepScanPage />} />
+              <Route path="/dev" element={<DevPage />} />
+              <Route path="/temptext" element={<DevPage />} />
+            </Routes>
+          </Box>
         </Box>
       </BrowserRouter>
     </ThemeProvider>

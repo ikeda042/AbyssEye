@@ -23,6 +23,15 @@ PROJECT_ROOT = BACKEND_DIR.parent
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 
+try:
+    import cv2  # type: ignore
+
+    # TIFF warning noise from unknown vendor tags.
+    if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+except Exception:
+    pass
+
 app = FastAPI(
     title="AbyssEye APIs",
     docs_url=None,  # handled by fastapi_swagger

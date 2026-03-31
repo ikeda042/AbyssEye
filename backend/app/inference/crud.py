@@ -49,7 +49,6 @@ DEFAULT_ROI_PROFILE: dict[str, int | float] = {
     "dilate_iterations": 2,
     "disallow_overlap": 1,
     "nms_iou_threshold": 0.15,
-    "iterative_passes": 1,
 }
 
 _active_model_path: Path | None = None
@@ -71,17 +70,6 @@ class InferenceResult:
     predicted_class: int
     confidence: float
     probabilities: list[float]
-    model_path: str
-
-
-@dataclass(slots=True)
-class Class1ComponentsResult:
-    refined_class: int
-    refined_confidence: float
-    refined_probabilities: list[float]
-    component_count: int
-    component_bboxes: list[tuple[int, int, int, int]]
-    predictions: list[InferenceResult]
     model_path: str
 
 
@@ -363,7 +351,6 @@ def _normalize_roi_profile(raw: dict[str, object] | None) -> dict[str, int | flo
     base["dilate_iterations"] = max(0, _to_int(raw.get("dilate_iterations"), int(base["dilate_iterations"])))
     base["disallow_overlap"] = 1 if _to_int(raw.get("disallow_overlap"), int(base["disallow_overlap"])) > 0 else 0
     base["nms_iou_threshold"] = min(0.95, max(0.0, _to_float(raw.get("nms_iou_threshold"), float(base["nms_iou_threshold"]))))
-    base["iterative_passes"] = max(1, _to_int(raw.get("iterative_passes"), int(base["iterative_passes"])))
     return base
 
 
@@ -696,148 +683,6 @@ def predict_label(image_base64: str, model_path: str | None = None) -> Inference
 def predict_labels_batch(images_base64: list[str], model_path: str | None = None) -> list[InferenceResult]:
     image_bytes_list = [_decode_image_bytes(item) for item in images_base64 if item]
     return _predict_from_bytes_multi(image_bytes_list, model_path=model_path)
-
-
-def _prepare_batch_from_rgb_arrays(images: list[np.ndarray]) -> np.ndarray:
-    if not images:
-        raise HTTPException(status_code=400, detail="再検討画像がありません。")
-    arrays: list[np.ndarray] = []
-    for img in images:
-        if img.ndim != 3:
-            img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-        h, w = img.shape[:2]
-        if w != IMG_SIZE[0] or h != IMG_SIZE[1]:
-            img = cv2.resize(img, IMG_SIZE, interpolation=cv2.INTER_AREA)
-        arrays.append(img.astype(np.float32) / 255.0)
-    return np.stack(arrays, axis=0)
-
-
-def _place_crop_on_black_48(crop_rgb: np.ndarray, margin: int = 2) -> np.ndarray:
-    if crop_rgb.ndim != 3:
-        crop_rgb = cv2.cvtColor(crop_rgb, cv2.COLOR_GRAY2RGB)
-    h, w = crop_rgb.shape[:2]
-    target = IMG_SIZE[0]
-    inner = max(4, target - margin * 2)
-    scale = min(1.0, inner / float(max(1, max(h, w))))
-    if scale < 1.0:
-        nw = max(1, int(round(w * scale)))
-        nh = max(1, int(round(h * scale)))
-        crop_rgb = cv2.resize(crop_rgb, (nw, nh), interpolation=cv2.INTER_AREA)
-        h, w = crop_rgb.shape[:2]
-    canvas = np.zeros((target, target, 3), dtype=np.uint8)
-    y0 = (target - h) // 2
-    x0 = (target - w) // 2
-    canvas[y0:y0+h, x0:x0+w] = crop_rgb
-    return canvas
-
-
-def _split_roi_with_components(
-    image_bytes: bytes,
-    *,
-    threshold_value: int = 42,
-    min_area_px: int = 8,
-) -> tuple[list[np.ndarray], list[tuple[int, int, int, int]]]:
-    try:
-        with Image.open(BytesIO(image_bytes)) as img:
-            rgb = np.asarray(img.convert("RGB"), dtype=np.uint8)
-    except UnidentifiedImageError as exc:
-        raise HTTPException(status_code=400, detail="画像データの読み込みに失敗しました。") from exc
-
-    if rgb.size == 0:
-        return [], []
-
-    # Fixed-threshold strategy on green channel for reproducibility.
-    g = rgb[:, :, 1]
-    mask = (g >= int(threshold_value)).astype(np.uint8)
-
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-
-    crops: list[np.ndarray] = []
-    bboxes: list[tuple[int, int, int, int]] = []
-    min_area = max(1, int(min_area_px))
-
-    for label_id in range(1, int(num_labels)):
-        area = int(stats[label_id, cv2.CC_STAT_AREA])
-        if area < min_area:
-            continue
-        x = int(stats[label_id, cv2.CC_STAT_LEFT])
-        y = int(stats[label_id, cv2.CC_STAT_TOP])
-        w = int(stats[label_id, cv2.CC_STAT_WIDTH])
-        h = int(stats[label_id, cv2.CC_STAT_HEIGHT])
-        x2 = min(rgb.shape[1], x + w)
-        y2 = min(rgb.shape[0], y + h)
-        crop = rgb[y:y2, x:x2]
-        if crop.size == 0:
-            continue
-        crops.append(_place_crop_on_black_48(crop))
-        bboxes.append((x, y, x2, y2))
-
-    if not crops:
-        return [_place_crop_on_black_48(rgb)], [(0, 0, rgb.shape[1], rgb.shape[0])]
-    return crops, bboxes
-
-
-def predict_label_with_class1_components(
-    image_base64: str,
-    model_path: str | None = None,
-    *,
-    threshold_value: int = 42,
-    min_area_px: int = 8,
-) -> Class1ComponentsResult:
-    image_bytes = _decode_image_bytes(image_base64)
-    crops, bboxes = _split_roi_with_components(
-        image_bytes,
-        threshold_value=threshold_value,
-        min_area_px=min_area_px,
-    )
-
-    resolved_path = _resolve_model_path(model_path)
-    model = _load_model(str(resolved_path))
-    batch = _prepare_batch_from_rgb_arrays(crops)
-
-    with _tf_device_scope():
-        predictions = model.predict(batch, verbose=0)
-    if predictions.ndim != 2 or predictions.shape[0] != batch.shape[0]:
-        raise HTTPException(status_code=500, detail="再検討推論結果の形状が不正です。")
-
-    per_component: list[InferenceResult] = []
-    vote_counts: dict[int, int] = {}
-    vote_conf_sum: dict[int, float] = {}
-    probs_sum: np.ndarray | None = None
-
-    for row in predictions:
-        probs = np.asarray(row, dtype=float)
-        cls = int(np.argmax(probs))
-        conf = float(probs[cls])
-        per_component.append(InferenceResult(
-            predicted_class=cls,
-            confidence=conf,
-            probabilities=[float(p) for p in probs.tolist()],
-            model_path=str(resolved_path),
-        ))
-        vote_counts[cls] = vote_counts.get(cls, 0) + 1
-        vote_conf_sum[cls] = vote_conf_sum.get(cls, 0.0) + conf
-        probs_sum = probs.copy() if probs_sum is None else probs_sum + probs
-
-    max_votes = max(vote_counts.values())
-    top_classes = [c for c, n in vote_counts.items() if n == max_votes]
-    if len(top_classes) == 1:
-        refined_class = top_classes[0]
-    else:
-        refined_class = max(top_classes, key=lambda c: vote_conf_sum.get(c, 0.0) / max(1, vote_counts.get(c, 1)))
-
-    refined_probs = (probs_sum / float(len(per_component))) if probs_sum is not None else np.zeros((4,), dtype=float)
-    refined_conf = float(refined_probs[refined_class]) if refined_class < refined_probs.shape[0] else 0.0
-
-    return Class1ComponentsResult(
-        refined_class=int(refined_class),
-        refined_confidence=refined_conf,
-        refined_probabilities=[float(p) for p in refined_probs.tolist()],
-        component_count=len(per_component),
-        component_bboxes=bboxes,
-        predictions=per_component,
-        model_path=str(resolved_path),
-    )
 
 
 def _fetch_roi_png_blob(db_name: str, record_id: int) -> bytes:

@@ -103,7 +103,6 @@ async def create_database_from_tif(tif_name: str) -> ROIExtractionResult:
             dilate_iterations=int(roi_profile.get("dilate_iterations", 2)),
             disallow_overlap=int(roi_profile.get("disallow_overlap", 1)) > 0,
             nms_iou_threshold=float(roi_profile.get("nms_iou_threshold", 0.30)),
-            iterative_passes=int(roi_profile.get("iterative_passes", 1)),
         )
         ROIExtractor.save_rois_to_db(
             img_rgb,

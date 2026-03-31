@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import math
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -20,6 +21,41 @@ APP_DIR = Path(__file__).resolve().parents[1]
 TIFF_DIR = APP_DIR / "tiff_manager"
 BULK_TIFF_DIR = APP_DIR / "tiff_manager_buld"
 TIFF_SUFFIXES = (".tif", ".tiff", ".TIF", ".TIFF")
+FOCUS_MERGED_FILENAME = "__focus_merged.tif"
+ROI_3D_IOU_THRESHOLD = 0.20
+ROI_3D_CENTER_DISTANCE = 0.08
+ROI_3D_AREA_RATIO_MAX = 8.0
+
+FOCUS_METRIC_ALIASES: dict[str, str] = {
+    "ten": "ften",
+    "tenengrad": "ften",
+    "tenen": "ften",
+    "f": "ften",
+}
+
+
+def _normalize_focus_metric(raw: str) -> str:
+    if not raw:
+        return "ften"
+    normalized = raw.strip().lower().replace("-", "").replace("_", "")
+    return FOCUS_METRIC_ALIASES.get(normalized, "ften")
+
+
+def _focus_metric_values(gray: np.ndarray) -> dict[str, float]:
+    g = gray.astype(np.float64)
+    ften = _focus_tenengrad(g)
+
+    return {
+        "ften": ften,
+    }
+
+
+def _select_focus_score(norm_scores: dict[str, float], focus_metric: str) -> float:
+    return float(norm_scores.get(focus_metric, 0.0))
+
+
+def _focus_profile_metric_names(focus_metric: str) -> list[str]:
+    return ["ften"]
 
 
 @dataclass
@@ -33,6 +69,28 @@ class DeepScanImageInfo:
 
 
 @dataclass
+class DeepscanCellCountImageInfo:
+    relative_path: str
+    tif_name: str
+    roi_count: int
+    class0_count: int
+    class1_count: int
+    class2_count: int
+    class3_count: int
+
+
+@dataclass
+class DeepscanCellCountSummary:
+    db_name: str
+    total_roi_count: int
+    class0_total: int
+    class1_total: int
+    class2_total: int
+    class3_total: int
+    images: list[DeepscanCellCountImageInfo]
+
+
+@dataclass
 class DeepScanView:
     status: realtime_crud.RealtimeStatus
     available_images: list[DeepScanImageInfo]
@@ -40,6 +98,27 @@ class DeepScanView:
     current_index: int
     focus_profile: dict[str, object] | None
     focus_map: dict[str, object] | None
+    roi_components_3d: dict[str, object] | None
+
+
+@dataclass
+class _Roi3DNode:
+    node_id: int
+    image_index: int
+    image_relative_path: str
+    roi_id: int
+    predicted_class: int
+    confidence: float
+    roi_start_x: int
+    roi_start_y: int
+    roi_end_x: int
+    roi_end_y: int
+    image_width_px: int
+    image_height_px: int
+    x1_norm: float
+    y1_norm: float
+    x2_norm: float
+    y2_norm: float
 
 
 def _deserialize_roi_meta(raw_meta: object) -> object:
@@ -56,6 +135,328 @@ def _deserialize_roi_meta(raw_meta: object) -> object:
         except json.JSONDecodeError:
             return raw_meta
     return raw_meta
+
+
+def _safe_int_or_none(raw: object) -> int | None:
+    if isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    if isinstance(raw, str):
+        try:
+            return int(float(raw.strip()))
+        except ValueError:
+            return None
+    return None
+
+
+def _safe_class_label(raw: object) -> int | None:
+    value = _safe_int_or_none(raw)
+    if value is None:
+        return None
+    return int(value)
+
+
+def _chunked(values: list[str], chunk_size: int = 500) -> list[list[str]]:
+    if chunk_size <= 0:
+        chunk_size = 500
+    return [values[i : i + chunk_size] for i in range(0, len(values), chunk_size)]
+
+
+def _bbox_iou(norm_a: tuple[float, float, float, float], norm_b: tuple[float, float, float, float]) -> float:
+    ax1, ay1, ax2, ay2 = norm_a
+    bx1, by1, bx2, by2 = norm_b
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    inter = (ix2 - ix1) * (iy2 - iy1)
+    area_a = max(0.0, (ax2 - ax1) * (ay2 - ay1))
+    area_b = max(0.0, (bx2 - bx1) * (by2 - by1))
+    denom = area_a + area_b - inter
+    if denom <= 0.0:
+        return 0.0
+    return inter / denom
+
+
+def _roi_center_dist(norm_a: _Roi3DNode, norm_b: _Roi3DNode) -> float:
+    ax = (norm_a.x1_norm + norm_a.x2_norm) * 0.5
+    ay = (norm_a.y1_norm + norm_a.y2_norm) * 0.5
+    bx = (norm_b.x1_norm + norm_b.x2_norm) * 0.5
+    by = (norm_b.y1_norm + norm_b.y2_norm) * 0.5
+    return math.hypot(ax - bx, ay - by)
+
+
+def _roi_area(norm: _Roi3DNode) -> float:
+    return max(0.0, (norm.x2_norm - norm.x1_norm) * (norm.y2_norm - norm.y1_norm))
+
+
+def _roi_area_ratio(a: _Roi3DNode, b: _Roi3DNode) -> float:
+    area_a = _roi_area(a)
+    area_b = _roi_area(b)
+    if area_a <= 0.0 or area_b <= 0.0:
+        return 1.0
+    return max(area_a, area_b) / min(area_a, area_b)
+
+
+def _build_roi_signature(node: _Roi3DNode) -> dict[str, object]:
+    return {
+        "track_id": node.node_id,
+        "roi_id": int(node.roi_id),
+        "image_index": int(node.image_index),
+        "image_relative_path": node.image_relative_path,
+        "predicted_class": int(node.predicted_class),
+        "roi_bbox": [
+            int(node.roi_start_x),
+            int(node.roi_start_y),
+            int(node.roi_end_x),
+            int(node.roi_end_y),
+        ],
+        "confidence": float(node.confidence),
+    }
+
+
+def _normalize_roi_to_relative(
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    width: int,
+    height: int,
+) -> tuple[float, float, float, float]:
+    max_w = max(1, width)
+    max_h = max(1, height)
+    nx1 = min(1.0, max(0.0, float(x1) / float(max_w)))
+    ny1 = min(1.0, max(0.0, float(y1) / float(max_h)))
+    nx2 = min(1.0, max(0.0, float(x2) / float(max_w)))
+    ny2 = min(1.0, max(0.0, float(y2) / float(max_h)))
+    if nx2 < nx1:
+        nx1, nx2 = nx2, nx1
+    if ny2 < ny1:
+        ny1, ny2 = ny2, ny1
+    return nx1, ny1, nx2, ny2
+
+
+def _load_rois_for_3d_merge(
+    db_name: str,
+    db_path: Path,
+    images: list[DeepScanImageInfo],
+) -> tuple[list[_Roi3DNode], dict[str, int]]:
+    image_index_map: dict[str, int] = {}
+    target_names: list[str] = []
+    for idx, image in enumerate(images):
+        image_index_map[image.relative_path] = idx
+        target_names.append(image.relative_path)
+
+    if not target_names:
+        return [], {}
+
+    nodes: list[_Roi3DNode] = []
+    class_hist: dict[str, int] = {}
+
+    databases_crud.ensure_label_columns(db_path)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            columns = _columns_for_table(conn, "roi_records")
+            if "image_filename" not in columns:
+                return [], {}
+
+            selects = [
+                "id",
+                "image_filename",
+                "roi_start_x",
+                "roi_start_y",
+                "roi_end_x",
+                "roi_end_y",
+                "image_width_px",
+                "image_height_px",
+                "ai_label",
+                "ai_model_name",
+            ]
+            if "roi_meta" in columns:
+                selects.append("roi_meta")
+            else:
+                selects.append("NULL AS roi_meta")
+
+            for chunk in _chunked(target_names, chunk_size=500):
+                if not chunk:
+                    continue
+                placeholders = ",".join("?" for _ in chunk)
+                sql = f"""
+                    SELECT {", ".join(selects)}
+                    FROM roi_records
+                    WHERE image_filename IN ({placeholders})
+                """
+                rows = conn.execute(sql, tuple(chunk)).fetchall()
+
+                for row in rows:
+                    raw_label = row["ai_label"]
+                    predicted_class = _safe_class_label(raw_label)
+
+                    if predicted_class is None:
+                        record_id = _safe_int_or_none(row["id"])
+                        if record_id is None:
+                            continue
+                        try:
+                            inferred = inference_crud.predict_label_for_record(db_name=db_name, record_id=record_id)
+                            predicted_class = int(inferred.predicted_class)
+                            confidence = float(inferred.confidence)
+                        except HTTPException:
+                            continue
+                    else:
+                        confidence = 0.0
+
+                    relative_path = str(row["image_filename"] or "").strip()
+                    if not relative_path:
+                        continue
+                    image_index = image_index_map.get(relative_path)
+                    if image_index is None:
+                        continue
+
+                    x1 = _safe_int_or_none(row["roi_start_x"]) or 0
+                    y1 = _safe_int_or_none(row["roi_start_y"]) or 0
+                    x2 = _safe_int_or_none(row["roi_end_x"]) or 0
+                    y2 = _safe_int_or_none(row["roi_end_y"]) or 0
+                    w = _safe_int_or_none(row["image_width_px"]) or 1
+                    h = _safe_int_or_none(row["image_height_px"]) or 1
+                    if w <= 0 or h <= 0:
+                        continue
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+
+                    nx1, ny1, nx2, ny2 = _normalize_roi_to_relative(x1, y1, x2, y2, w, h)
+                    if nx1 == nx2 or ny1 == ny2:
+                        continue
+
+                    node_id = int(row["id"])
+                    nodes.append(
+                        _Roi3DNode(
+                            node_id=node_id,
+                            image_index=image_index,
+                            image_relative_path=relative_path,
+                            roi_id=int(row["id"]),
+                            predicted_class=int(predicted_class),
+                            confidence=float(confidence),
+                            roi_start_x=x1,
+                            roi_start_y=y1,
+                            roi_end_x=x2,
+                            roi_end_y=y2,
+                            image_width_px=w,
+                            image_height_px=h,
+                            x1_norm=nx1,
+                            y1_norm=ny1,
+                            x2_norm=nx2,
+                            y2_norm=ny2,
+                        )
+                    )
+                    key = str(int(predicted_class))
+                    class_hist[key] = class_hist.get(key, 0) + 1
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=f"データベース読込中にエラー: {exc}") from exc
+
+    return nodes, class_hist
+
+
+def _build_roi_3d_components(
+    nodes: list[_Roi3DNode],
+) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
+    if not nodes:
+        return None, []
+
+    layers: dict[int, list[int]] = {}
+    for idx, node in enumerate(nodes):
+        layers.setdefault(node.image_index, []).append(idx)
+
+    if len(layers) <= 1:
+        class_counts: dict[str, int] = {}
+        for node in nodes:
+            class_counts[str(node.predicted_class)] = class_counts.get(str(node.predicted_class), 0) + 1
+        return {
+            "method": "roi_3d_merge",
+            "image_count": len({node.image_relative_path for node in nodes}),
+            "roi_count": len(nodes),
+            "component_count": len(nodes),
+            "by_class": class_counts,
+        }, [_build_roi_signature(node) for node in nodes]
+
+    n = len(nodes)
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra = find(a)
+        rb = find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    def can_merge(a: _Roi3DNode, b: _Roi3DNode) -> bool:
+        if a.predicted_class != b.predicted_class:
+            return False
+        iou = _bbox_iou((a.x1_norm, a.y1_norm, a.x2_norm, a.y2_norm), (b.x1_norm, b.y1_norm, b.x2_norm, b.y2_norm))
+        if iou >= ROI_3D_IOU_THRESHOLD:
+            area_ratio = _roi_area_ratio(a, b)
+            return area_ratio <= ROI_3D_AREA_RATIO_MAX
+        dist = _roi_center_dist(a, b)
+        if dist > ROI_3D_CENTER_DISTANCE:
+            return False
+        area_ratio = _roi_area_ratio(a, b)
+        return area_ratio <= ROI_3D_AREA_RATIO_MAX
+
+    ordered_layers = sorted(layers.keys())
+    for curr_idx, next_idx in zip(ordered_layers, ordered_layers[1:]):
+        curr_layer = layers[curr_idx]
+        next_layer = layers[next_idx]
+        for left in curr_layer:
+            left_node = nodes[left]
+            for right in next_layer:
+                right_node = nodes[right]
+                if can_merge(left_node, right_node):
+                    union(left, right)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        root = find(i)
+        groups.setdefault(root, []).append(i)
+
+    by_class: dict[str, int] = {}
+    tracks: list[dict[str, object]] = []
+
+    for members in groups.values():
+        representative = nodes[members[0]]
+        image_indices = sorted({nodes[i].image_index for i in members})
+        track_signature = [
+            {"id": nodes[i].node_id, "roi_id": nodes[i].roi_id, "image_index": nodes[i].image_index}
+            for i in members
+        ]
+        tracks.append(
+            {
+                "class": int(representative.predicted_class),
+                "component_size": int(len(members)),
+                "slice_count": int(len(image_indices)),
+                "slice_indices": image_indices,
+                "first_slice": int(image_indices[0]) if image_indices else -1,
+                "last_slice": int(image_indices[-1]) if image_indices else -1,
+                "rois": track_signature[:100],
+            }
+        )
+        by_class[str(representative.predicted_class)] = by_class.get(str(representative.predicted_class), 0) + 1
+
+    return {
+        "method": "roi_3d_merge",
+        "image_count": int(len(layers)),
+        "roi_count": int(len(nodes)),
+        "component_count": int(len(tracks)),
+        "by_class": by_class,
+        "track_count": int(len(tracks)),
+    }, tracks
 
 
 def _normalize_stem_variants(raw: str) -> list[str]:
@@ -130,18 +531,21 @@ def _shape_from_meta(meta: object, key: str) -> tuple[int, int] | None:
     return None
 
 
+def _read_shape_from_tif(path: Path) -> tuple[int, int] | None:
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        return None
+    if image.ndim < 2:
+        return None
+    h, w = image.shape[:2]
+    if h <= 0 or w <= 0:
+        return None
+    return (int(h), int(w))
+
+
 def _columns_for_table(conn: sqlite3.Connection, table_name: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {str(row[1]) for row in rows}
-
-def _focus_normalized_variance(gray: np.ndarray) -> float:
-    g = gray.astype(np.float64)
-    mu = float(g.mean())
-    if mu <= 1e-9:
-        return 0.0
-    var = float(((g - mu) ** 2).mean())
-    return var / (mu + 1e-12)
-
 
 def _focus_tenengrad(gray: np.ndarray, ksize: int = 3) -> float:
     gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=ksize)
@@ -194,10 +598,18 @@ def _collect_focus_stack(images: list[DeepScanImageInfo], max_side: int = 640) -
     return indices, names, stack
 
 
-def _build_focus_map(images: list[DeepScanImageInfo], current_index: int, tile_size: int = 32) -> dict[str, object] | None:
+def _build_focus_map(
+    images: list[DeepScanImageInfo],
+    current_index: int,
+    focus_metric: str,
+    tile_size: int = 32,
+) -> dict[str, object] | None:
     indices, names, stack = _collect_focus_stack(images, max_side=640)
     if len(stack) < 2:
         return None
+
+    metric_key = _normalize_focus_metric(focus_metric)
+    metric_names = _focus_profile_metric_names(metric_key)
 
     base_h, base_w = stack[0].shape[:2]
     aligned: list[np.ndarray] = []
@@ -214,6 +626,8 @@ def _build_focus_map(images: list[DeepScanImageInfo], current_index: int, tile_s
     best_indices: list[int] = []
     best_depth_rel: list[float] = []
     confidence: list[float] = []
+    best_indices_by_metric: dict[str, list[int]] = {metric: [] for metric in metric_names}
+    best_depth_by_metric: dict[str, list[float]] = {metric: [] for metric in metric_names}
 
     for r in range(rows):
         y0 = int(round(r * stride_y))
@@ -221,19 +635,37 @@ def _build_focus_map(images: list[DeepScanImageInfo], current_index: int, tile_s
         for c in range(cols):
             x0 = int(round(c * stride_x))
             x1 = int(round((c + 1) * stride_x))
-            tile_nvar: list[float] = []
-            tile_ten: list[float] = []
+            per_metric: dict[str, list[float]] = {metric: [] for metric in metric_names}
             for gray in aligned:
                 tile = gray[y0:y1, x0:x1]
                 if tile.size == 0:
-                    tile_nvar.append(0.0)
-                    tile_ten.append(0.0)
+                    for metric in metric_names:
+                        per_metric[metric].append(0.0)
                 else:
-                    tile_nvar.append(_focus_normalized_variance(tile))
-                    tile_ten.append(_focus_tenengrad(tile))
-            n_norm = _minmax(tile_nvar)
-            t_norm = _minmax(tile_ten)
-            scores = [0.5 * a + 0.5 * b for a, b in zip(n_norm, t_norm)]
+                    values = _focus_metric_values(tile)
+                    for metric in metric_names:
+                        per_metric[metric].append(float(values.get(metric, 0.0)))
+
+            metric_norm: dict[str, list[float]] = {}
+            for metric in metric_names:
+                metric_norm[metric] = _minmax(per_metric[metric])
+
+            selected_metric = metric_key
+            scores = metric_norm.get(metric_key, [0.0 for _ in range(len(aligned))])
+
+            for metric, values in metric_norm.items():
+                order_metric = np.argsort(np.array(values))[::-1]
+                if len(values) > 0 and order_metric.size > 0:
+                    best_local_metric = int(order_metric[0])
+                    best_indices_by_metric[metric].append(indices[best_local_metric])
+                    if len(indices) <= 1:
+                        best_depth_by_metric[metric].append(0.0)
+                    else:
+                        best_depth_by_metric[metric].append(best_local_metric / float(len(indices) - 1))
+                else:
+                    best_indices_by_metric[metric].append(indices[0] if indices else 0)
+                    best_depth_by_metric[metric].append(0.0)
+
             order = np.argsort(np.array(scores))[::-1]
             best_local = int(order[0])
             second = float(scores[int(order[1])]) if len(order) > 1 else 0.0
@@ -256,7 +688,10 @@ def _build_focus_map(images: list[DeepScanImageInfo], current_index: int, tile_s
         current_depth_rel = 0.0
 
     return {
-        "method": "tile_focus_map(normalized_variance+tenengrad)",
+        "method": f"tile_focus_map({metric_key})",
+        "focus_metric": metric_key,
+        "selected_metric": selected_metric if isinstance(metric_key, str) else "ften",
+        "metric_names": metric_names,
         "tile_size": int(tile_size),
         "rows": int(rows),
         "cols": int(cols),
@@ -269,13 +704,21 @@ def _build_focus_map(images: list[DeepScanImageInfo], current_index: int, tile_s
         "best_indices": best_indices,
         "best_depth_relative": best_depth_rel,
         "confidence": confidence,
+        "best_indices_by_metric": best_indices_by_metric,
+        "best_depth_relative_by_metric": best_depth_by_metric,
     }
 
 
-def _build_focus_profile(images: list[DeepScanImageInfo], current_index: int) -> dict[str, object] | None:
+def _build_focus_profile(
+    images: list[DeepScanImageInfo],
+    current_index: int,
+    focus_metric: str,
+) -> dict[str, object] | None:
+    metric_key = _normalize_focus_metric(focus_metric)
+    metric_names = _focus_profile_metric_names(metric_key)
+
     entries: list[dict[str, object]] = []
-    nvar_vals: list[float] = []
-    ten_vals: list[float] = []
+    metric_values: dict[str, list[float]] = {metric: [] for metric in metric_names}
 
     for idx, image in enumerate(images):
         tif_path = image.tif_path
@@ -284,31 +727,36 @@ def _build_focus_profile(images: list[DeepScanImageInfo], current_index: int) ->
         gray = _load_focus_gray(tif_path)
         if gray is None:
             continue
-        nvar = _focus_normalized_variance(gray)
-        ten = _focus_tenengrad(gray)
-        entries.append(
-            {
-                "index": idx,
-                "relative_path": image.relative_path,
-                "tif_name": image.tif_name,
-                "normalized_variance": nvar,
-                "tenengrad": ten,
-            }
-        )
-        nvar_vals.append(nvar)
-        ten_vals.append(ten)
+        values = _focus_metric_values(gray)
+        entry: dict[str, object] = {
+            "index": idx,
+            "relative_path": image.relative_path,
+            "tif_name": image.tif_name,
+            "tenengrad": values["ften"],
+        }
+        for metric in metric_names:
+            entry[metric] = float(values.get(metric, 0.0))
+            metric_values[metric].append(float(values.get(metric, 0.0)))
+        entries.append(entry)
 
     if not entries:
         return None
 
-    nvar_norm = _minmax(nvar_vals)
-    ten_norm = _minmax(ten_vals)
+    normalized_scores: dict[str, list[float]] = {}
+    for metric in metric_names:
+        normalized_scores[metric] = _minmax(metric_values[metric])
 
     for i, e in enumerate(entries):
-        combined = 0.5 * nvar_norm[i] + 0.5 * ten_norm[i]
-        e["combined_score"] = float(combined)
-        e["normalized_variance_norm"] = float(nvar_norm[i])
-        e["tenengrad_norm"] = float(ten_norm[i])
+        for metric in metric_names:
+            norm_key = f"{metric}_norm"
+            e[norm_key] = float(normalized_scores[metric][i])
+        e["tenengrad_norm"] = float(normalized_scores["ften"][i]) if "ften" in normalized_scores else 0.0
+        score = _select_focus_score({metric: normalized_scores[metric][i] for metric in metric_names}, focus_metric=metric_key)
+        e["combined_score"] = float(score)
+        e["selected_metric"] = metric_key
+        e["per_metric_score"] = {
+            metric: float(normalized_scores[metric][i]) for metric in metric_names
+        }
 
     peak_entry = max(entries, key=lambda e: float(e["combined_score"]))
     peak_index = int(peak_entry["index"])
@@ -325,7 +773,9 @@ def _build_focus_profile(images: list[DeepScanImageInfo], current_index: int) ->
         e["z_offset_from_peak"] = idx - peak_index
 
     return {
-        "method": "normalized_variance+tenengrad",
+        "method": f"focus_profile({metric_key})",
+        "focus_metric": metric_key,
+        "metric_names": metric_names,
         "count": len(entries),
         "current_index": int(current_entry["index"]),
         "peak_index": peak_index,
@@ -381,11 +831,18 @@ def _list_bulk_images(db_path: Path) -> list[DeepScanImageInfo]:
         raise HTTPException(status_code=500, detail=f"データベース読込中にエラー: {exc}") from exc
 
     images: list[DeepScanImageInfo] = []
+    folder_names: set[str] = set()
+    fallback_folder_name = db_path.stem.removesuffix("_bulk") if db_path.stem.endswith("_bulk") else None
+    if fallback_folder_name:
+        folder_names.add(fallback_folder_name)
+
     for row in rows:
         relative_path = str(row["image_filename"] or "").strip()
         if not relative_path:
             continue
         folder_name = str(row["folder_name"] or "").strip()
+        if folder_name:
+            folder_names.add(folder_name)
 
         sample_meta = _deserialize_roi_meta(row["sample_meta"])
         original_shape = _shape_from_meta(sample_meta, "original_shape")
@@ -401,6 +858,10 @@ def _list_bulk_images(db_path: Path) -> list[DeepScanImageInfo]:
             bulk_candidate = BULK_TIFF_DIR / folder_name / relative_path
             if bulk_candidate.is_file():
                 tif_path = bulk_candidate
+        elif fallback_folder_name:
+            bulk_candidate = BULK_TIFF_DIR / fallback_folder_name / relative_path
+            if bulk_candidate.is_file():
+                tif_path = bulk_candidate
         if tif_path is None:
             tif_path = _try_resolve_tif_by_name(relative_path)
 
@@ -412,6 +873,25 @@ def _list_bulk_images(db_path: Path) -> list[DeepScanImageInfo]:
                 original_shape=original_shape,
                 processed_shape=processed_shape,
                 tif_path=tif_path,
+            )
+        )
+
+    for folder_name in sorted(folder_names):
+        merged_candidate = BULK_TIFF_DIR / folder_name / FOCUS_MERGED_FILENAME
+        if not merged_candidate.is_file():
+            continue
+        already_exists = any(image.relative_path == FOCUS_MERGED_FILENAME for image in images)
+        if already_exists:
+            continue
+        merged_shape = _read_shape_from_tif(merged_candidate)
+        images.append(
+            DeepScanImageInfo(
+                relative_path=FOCUS_MERGED_FILENAME,
+                tif_name=FOCUS_MERGED_FILENAME,
+                roi_count=0,
+                original_shape=merged_shape,
+                processed_shape=merged_shape,
+                tif_path=merged_candidate,
             )
         )
 
@@ -529,6 +1009,178 @@ def _load_rois_for_image(db_name: str, db_path: Path, image_relative_path: str) 
         )
 
     return rois
+
+
+def _label_for_cell_count(raw_manual: object, raw_ai: object, db_name: str | None = None, record_id: int | None = None) -> int | None:
+    manual_label = _safe_class_label(raw_manual)
+    if manual_label is not None:
+        return manual_label
+
+    ai_label = _safe_class_label(raw_ai)
+    if ai_label is not None:
+        return ai_label
+
+    if db_name is None or record_id is None:
+        return None
+
+    try:
+        inferred = inference_crud.predict_label_for_record(db_name=db_name, record_id=record_id)
+    except HTTPException:
+        return None
+    return int(inferred.predicted_class)
+
+
+def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
+    db_path = databases_crud.get_database_file_path(db_name)
+    images = _list_bulk_images(db_path)
+
+    available_counts: dict[str, dict[str, int]] = {}
+    for image in images:
+        available_counts[image.relative_path] = {
+            "roi_count": 0,
+            "class0_count": 0,
+            "class1_count": 0,
+            "class2_count": 0,
+            "class3_count": 0,
+        }
+
+    totals = {"roi_count": 0, "class0": 0, "class1": 0, "class2": 0, "class3": 0}
+    unknown_images = set[str]()
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            columns = _columns_for_table(conn, "roi_records")
+            if "image_filename" not in columns:
+                image_summaries = [
+                    DeepscanCellCountImageInfo(
+                        relative_path=image.relative_path,
+                        tif_name=image.tif_name,
+                        roi_count=0,
+                        class0_count=0,
+                        class1_count=0,
+                        class2_count=0,
+                        class3_count=0,
+                    )
+                    for image in images
+                ]
+                return DeepscanCellCountSummary(
+                    db_name=db_path.name,
+                    total_roi_count=0,
+                    class0_total=0,
+                    class1_total=0,
+                    class2_total=0,
+                    class3_total=0,
+                    images=image_summaries,
+                )
+
+            rows = conn.execute(
+                """
+                SELECT id, image_filename, ai_label, manual_label
+                FROM roi_records
+                """
+            ).fetchall()
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=f"データベース読込中にエラー: {exc}") from exc
+
+    for row in rows:
+        image_filename = row["image_filename"]
+        if image_filename is None:
+            continue
+        relative_path = str(image_filename)
+        if not relative_path:
+            continue
+
+        record_id = _safe_int_or_none(row["id"])
+        label = _label_for_cell_count(
+            raw_manual=row["manual_label"],
+            raw_ai=row["ai_label"],
+            db_name=db_name,
+            record_id=record_id,
+        )
+
+        if relative_path not in available_counts:
+            available_counts[relative_path] = {
+                "roi_count": 0,
+                "class0_count": 0,
+                "class1_count": 0,
+                "class2_count": 0,
+                "class3_count": 0,
+            }
+            unknown_images.add(relative_path)
+
+        available_counts[relative_path]["roi_count"] += 1
+        totals["roi_count"] += 1
+        if label is None or label < 0 or label > 3:
+            continue
+
+        if label == 0:
+            available_counts[relative_path]["class0_count"] += 1
+            totals["class0"] += 1
+        elif label == 1:
+            available_counts[relative_path]["class1_count"] += 1
+            totals["class1"] += 1
+        elif label == 2:
+            available_counts[relative_path]["class2_count"] += 1
+            totals["class2"] += 1
+        elif label == 3:
+            available_counts[relative_path]["class3_count"] += 1
+            totals["class3"] += 1
+
+    image_summaries: list[DeepscanCellCountImageInfo] = []
+    seen_relative = set[str]()
+    for image in images:
+        counts = available_counts.get(image.relative_path, {
+            "roi_count": 0,
+            "class0_count": 0,
+            "class1_count": 0,
+            "class2_count": 0,
+            "class3_count": 0,
+        })
+        seen_relative.add(image.relative_path)
+        image_summaries.append(
+            DeepscanCellCountImageInfo(
+                relative_path=image.relative_path,
+                tif_name=image.tif_name,
+                roi_count=counts["roi_count"],
+                class0_count=counts["class0_count"],
+                class1_count=counts["class1_count"],
+                class2_count=counts["class2_count"],
+                class3_count=counts["class3_count"],
+            )
+        )
+
+    for relative_path in sorted(available_counts.keys()):
+        if relative_path in seen_relative:
+            continue
+        counts = available_counts[relative_path]
+        tif_name = Path(relative_path).name
+        image_summaries.append(
+            DeepscanCellCountImageInfo(
+                relative_path=relative_path,
+                tif_name=tif_name,
+                roi_count=counts["roi_count"],
+                class0_count=counts["class0_count"],
+                class1_count=counts["class1_count"],
+                class2_count=counts["class2_count"],
+                class3_count=counts["class3_count"],
+            )
+        )
+
+    image_summaries.sort(key=lambda item: item.relative_path)
+    if image_summaries and unknown_images:
+        # Keep unknown image records in stable order after known images for visibility.
+        image_summaries.sort(key=lambda item: (item.relative_path in unknown_images, item.relative_path))
+
+    return DeepscanCellCountSummary(
+        db_name=db_path.name,
+        total_roi_count=totals["roi_count"],
+        class0_total=totals["class0"],
+        class1_total=totals["class1"],
+        class2_total=totals["class2"],
+        class3_total=totals["class3"],
+        images=image_summaries,
+    )
 
 
 def _safe_int(value: object, default: int) -> int:
@@ -818,7 +1470,11 @@ def delete_manual_roi(db_name: str, record_id: int, *, tif_name: str | None = No
     return record_id
 
 
-async def get_deepscan_view(db_name: str, tif_name: str | None = None) -> DeepScanView:
+async def get_deepscan_view(
+    db_name: str,
+    tif_name: str | None = None,
+    focus_metric: str = "tenengrad",
+) -> DeepScanView:
     realtime_crud._ensure_storage_dir()
     db_path = databases_crud.get_database_file_path(db_name)
     tif_path, images, current_image, current_index = _resolve_tif_path(db_path, tif_name=tif_name)
@@ -848,8 +1504,15 @@ async def get_deepscan_view(db_name: str, tif_name: str | None = None) -> DeepSc
         rois=rois,
     )
 
-    focus_profile = await asyncio.to_thread(_build_focus_profile, images, current_index)
-    focus_map = await asyncio.to_thread(_build_focus_map, images, current_index)
+    roi_components_3d_payload: dict[str, object] | None
+    if len(images) > 1:
+        roi_nodes_for_3d_merge, _ = await asyncio.to_thread(_load_rois_for_3d_merge, db_name, db_path, images)
+        roi_components_3d_payload, _ = _build_roi_3d_components(roi_nodes_for_3d_merge)
+    else:
+        roi_components_3d_payload = None
+
+    focus_profile = await asyncio.to_thread(_build_focus_profile, images, current_index, focus_metric)
+    focus_map = await asyncio.to_thread(_build_focus_map, images, current_index, focus_metric)
 
     return DeepScanView(
         status=status,
@@ -858,4 +1521,5 @@ async def get_deepscan_view(db_name: str, tif_name: str | None = None) -> DeepSc
         current_index=current_index,
         focus_profile=focus_profile,
         focus_map=focus_map,
+        roi_components_3d=roi_components_3d_payload,
     )

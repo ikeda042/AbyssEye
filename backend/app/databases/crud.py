@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import base64
+import gc
 import json
+import re
 import sqlite3
 import time
-import gc
 from dataclasses import dataclass
 from datetime import datetime
 import io
@@ -34,6 +35,7 @@ class DatabaseFileInfo:
     name: str
     size_bytes: int
     updated_at: datetime
+    image_stem_count: int
 
 
 @dataclass
@@ -53,18 +55,73 @@ class DatabaseOverview:
     image_height_px: int | None = None
 
 
-def list_database_files() -> Sequence[DatabaseFileInfo]:
+def _sanitize_component(name: str, *, field: str) -> str:
+    raw = (name or "").strip()
+    cleaned = Path(raw).name.replace("#", "")
+    if not cleaned:
+        raise HTTPException(status_code=400, detail=f"{field}を指定してください。")
+    if cleaned in {".", ".."}:
+        raise HTTPException(status_code=400, detail=f"不正な{field}です。")
+    normalized = re.sub(r"[^A-Za-z0-9._()\\-]+", "_", cleaned)
+    normalized = normalized.replace("__", "_")
+    return normalized.strip("._-") or "_"
+
+
+def _project_prefix(project_name: str | None) -> str:
+    if not project_name:
+        return ""
+    safe_project = _sanitize_component(project_name, field="プロジェクト名")
+    return f"{safe_project}__"
+
+
+def _matches_project_scope(db_name: str, project_name: str) -> bool:
+    if not project_name:
+        return False
+    safe_project = _sanitize_component(project_name, field="プロジェクト名")
+    stem = Path(db_name).stem
+
+    # Legacy naming: project__....db
+    legacy_prefix = f"{safe_project}__"
+    if stem.startswith(legacy_prefix):
+        return True
+
+    # New naming: YYYYMMDD_<project>_....db
+    if len(stem) <= 9:
+        return False
+    date_part = stem[:8]
+    if not date_part.isdigit():
+        return False
+    if not stem[8] == "_":
+        return False
+    tail = stem[9:]
+    if not tail:
+        return False
+    return tail == safe_project or tail.startswith(f"{safe_project}_")
+
+
+def list_database_files(project_name: str | None = None) -> Sequence[DatabaseFileInfo]:
     """Return metadata for `.db` files located in the databases directory."""
+    prefix = _project_prefix(project_name)
     entries: list[DatabaseFileInfo] = []
     for path in DATABASE_DIR.glob("*.db"):
         if not path.is_file():
             continue
+        if prefix and not _matches_project_scope(path.name, project_name):
+            continue
         stat = path.stat()
+        image_stem_count = 0
+        try:
+            with sqlite3.connect(path) as conn:
+                conn.row_factory = sqlite3.Row
+                image_stem_count = _get_database_image_stem_count(conn)
+        except (sqlite3.DatabaseError, OSError):
+            image_stem_count = 0
         entries.append(
             DatabaseFileInfo(
                 name=path.name,
                 size_bytes=stat.st_size,
                 updated_at=datetime.fromtimestamp(stat.st_mtime),
+                image_stem_count=image_stem_count,
             )
         )
     return sorted(entries, key=lambda item: item.name.lower())
@@ -90,6 +147,29 @@ def _resolve_db_path(db_name: str) -> Path:
 def get_database_file_path(db_name: str) -> Path:
     """Return the absolute path for a given `.db` file."""
     return _resolve_db_path(db_name)
+
+
+def _get_database_image_stem_count(conn: sqlite3.Connection) -> int:
+    """Count distinct image groups in roi_records if possible."""
+    image_column = None
+    if _table_has_columns(conn, "roi_records", ["image_stem"]):
+        image_column = "image_stem"
+    elif _table_has_columns(conn, "roi_records", ["image_filename"]):
+        image_column = "image_filename"
+
+    if not image_column:
+        return 0
+
+    row = conn.execute(
+        f"SELECT COUNT(DISTINCT {image_column}) AS image_stem_count "
+        f"FROM roi_records WHERE {image_column} IS NOT NULL"
+    ).fetchone()
+    if not row:
+        return 0
+    try:
+        return int(row["image_stem_count"] or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _unlink_with_retry(db_path: Path, retries: int = 3, delay: float = 0.2) -> None:
