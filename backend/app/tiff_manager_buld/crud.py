@@ -69,6 +69,7 @@ class FolderInfo:
     file_count: int
     has_extraction_db: bool
     has_focus_merged: bool
+    has_inference_result: bool = False
     realtime_folder_mode: str | None = None
 
 
@@ -575,6 +576,7 @@ async def list_uploaded_folders(project_name: str | None = None) -> list[FolderI
         if not tiffs:
             continue
         has_db = _db_path_for_folder(path.name).exists() or _db_path_for_focus_merged(path.name).exists()
+        has_inference_result = has_db and _has_ready_inference_result(path.name)
         realtime_folder_mode = _resolve_realtime_folder_mode(path, source_tiffs)
         folders.append(
             FolderInfo(
@@ -582,6 +584,7 @@ async def list_uploaded_folders(project_name: str | None = None) -> list[FolderI
                 file_count=len(source_tiffs),
                 has_extraction_db=has_db,
                 has_focus_merged=has_focus_merged,
+                has_inference_result=has_inference_result,
                 realtime_folder_mode=realtime_folder_mode,
             )
         )
@@ -1410,6 +1413,49 @@ def _save_inference_cache(db_path: Path, model_path: str, files: dict[str, dict[
                 tmp_path.unlink()
         except Exception:
             pass
+
+
+def _has_ready_inference_result(folder_name: str) -> bool:
+    db_path = _db_path_for_folder(folder_name)
+    if not db_path.exists():
+        return False
+
+    try:
+        model_path = inference_crud.get_resolved_model_path()
+        cached_files = _load_inference_cache(db_path, model_path)
+        if not cached_files:
+            return False
+
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT image_filename, COUNT(*) AS roi_count
+                FROM roi_records
+                GROUP BY image_filename
+                ORDER BY image_filename ASC
+                """
+            ).fetchall()
+    except (HTTPException, sqlite3.DatabaseError):
+        return False
+
+    if not rows:
+        return False
+
+    for row in rows:
+        image_filename = str(row["image_filename"] or "")
+        if not image_filename:
+            return False
+        roi_count = int(row["roi_count"] or 0)
+        cached = cached_files.get(image_filename)
+        if not cached:
+            return False
+        cached_cell = _parse_cached_label(cached.get("cell_count"))
+        cached_roi = _parse_cached_label(cached.get("roi_count"))
+        if cached_cell is None or cached_roi != roi_count:
+            return False
+
+    return True
 
 
 async def focus_merge_folder(folder_name: str, project_name: str | None = None) -> FocusMergeResult:

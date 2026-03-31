@@ -165,14 +165,15 @@ const TiffManagerBulkInferencePage = () => {
           project_name: projectName || null,
         }),
       });
-      const manifestPayload: { files?: FolderFileEntry[]; detail?: string } & {
-        files?: Array<{ relative_path: string; cell_count: number }>;
+      const manifestPayload: {
+        files?: Array<FolderFileEntry & { cell_count?: number }>;
+        detail?: string;
       } = await manifestResponse.json().catch(() => ({}));
       if (!manifestResponse.ok || !manifestPayload.files) {
         throw new Error(manifestPayload.detail || labels.inferFailed);
       }
 
-      const pendingFiles = manifestPayload.files.filter((file) => (file as { cell_count?: number }).cell_count === undefined || (file as { cell_count: number }).cell_count < 0);
+      const pendingFiles = manifestPayload.files.filter((file) => file.cell_count === undefined || file.cell_count < 0);
       for (const file of pendingFiles) {
         const inferImageResponse = await fetch(endpoint("tiff-bulk/infer/image"), {
           method: "POST",

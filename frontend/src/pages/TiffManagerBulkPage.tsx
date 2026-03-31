@@ -42,6 +42,7 @@ type FolderEntry = {
   file_count: number;
   has_extraction_db?: boolean;
   has_focus_merged?: boolean;
+  has_inference_result?: boolean;
   realtime_folder_mode?: "single" | "stack" | null;
 };
 
@@ -179,15 +180,19 @@ const TiffManagerBulkPage = () => {
   const [projects, setProjects] = useState<ProjectEntry[]>(() => loadProjects());
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
-  const [extractingFolder, setExtractingFolder] = useState<string | null>(null);
-  const [batchExtractRunning, setBatchExtractRunning] = useState(false);
   const [batchInferRunning, setBatchInferRunning] = useState(false);
   const [batchCellCountRunning, setBatchCellCountRunning] = useState(false);
+  const [completedInferenceFolders, setCompletedInferenceFolders] = useState<string[]>([]);
   const [openingSingleImageFolder, setOpeningSingleImageFolder] = useState<string | null>(null);
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
   const [, setInferHintFolder] = useState<string | null>(null);
   const [mergingFolder, setMergingFolder] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState<string | null>(null);
+
+  const hasReadyInferenceResult = useCallback(
+    (folder: FolderEntry) => Boolean(folder.has_inference_result || completedInferenceFolders.includes(folder.name)),
+    [completedInferenceFolders],
+  );
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [result, setResult] = useState<ExtractionResult | null>(null);
@@ -428,34 +433,6 @@ const TiffManagerBulkPage = () => {
     [projects, syncProjects, t],
   );
 
-  const handleExtract = useCallback(
-    async (folderName: string) => {
-      setError(null);
-      setInfo(null);
-      setResult(null);
-      setExtractingFolder(folderName);
-      try {
-        const response = await fetch(endpoint("tiff-bulk/extract"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ folder_name: folderName, project_name: activeProject || null }),
-        });
-        const payload: ExtractionResult & { detail?: string } = await response.json().catch(() => ({} as ExtractionResult));
-        if (!response.ok || !payload || !payload.folder_name) {
-          throw new Error(payload.detail || t("bulk.extractError"));
-        }
-        setResult(payload);
-        setInfo(t("bulk.extractSuccess", { db: payload.db_name }));
-        await fetchFolders();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : t("bulk.extractError"));
-    } finally {
-      setExtractingFolder(null);
-    }
-    },
-    [activeProject, fetchFolders, t],
-  );
-
   const handleDelete = useCallback(
     async (folderName: string) => {
       setError(null);
@@ -614,19 +591,8 @@ const TiffManagerBulkPage = () => {
       setResult(null);
       setOpeningSingleImageFolder(folder.name);
       try {
-        if (!folder.has_extraction_db) {
-          const extractResponse = await fetch(endpoint("tiff-bulk/extract"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ folder_name: folder.name, project_name: activeProject || null }),
-          });
-          const extractPayload: ExtractionResult & { detail?: string } = await extractResponse
-            .json()
-            .catch(() => ({} as ExtractionResult));
-          if (!extractResponse.ok || !extractPayload.folder_name) {
-            throw new Error(extractPayload.detail || t("bulk.extractError"));
-          }
-          await fetchFolders();
+        if (!hasReadyInferenceResult(folder)) {
+          throw new Error(tt("先にROI抽出&推論を実行してください。", "Run ROI extraction & inference first."));
         }
         const dbName = `${folder.name}_bulk.db`;
         const params = new URLSearchParams({ db_name: dbName, source: "roi" });
@@ -643,54 +609,18 @@ const TiffManagerBulkPage = () => {
         setOpeningSingleImageFolder(null);
       }
     },
-    [activeProject, fetchFolders, navigate, t, tt],
+    [activeProject, hasReadyInferenceResult, navigate, tt],
   );
 
-  const handleBatchExtractSingleImages = useCallback(async () => {
+  const handleBatchExtractInferSingleImages = useCallback(async () => {
     if (singleImageFolders.length === 0) return;
     setError(null);
     setInfo(null);
     setResult(null);
     setInferHintFolder(null);
-    setBatchExtractRunning(true);
-    try {
-      let lastResult: ExtractionResult | null = null;
-      for (const folder of singleImageFolders) {
-        const response = await fetch(endpoint("tiff-bulk/extract"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ folder_name: folder.name, project_name: activeProject || null }),
-        });
-        const payload: ExtractionResult & { detail?: string } = await response.json().catch(() => ({} as ExtractionResult));
-        if (!response.ok || !payload.folder_name) {
-          throw new Error(payload.detail || t("bulk.extractError"));
-        }
-        lastResult = payload;
-      }
-      if (lastResult) {
-        setResult(lastResult);
-      }
-      setInfo(
-        tt(
-          `単一画像 ${singleImageFolders.length} 件のROI抽出を完了しました。`,
-          `Completed ROI extraction for ${singleImageFolders.length} single-image entries.`,
-        ),
-      );
-      await fetchFolders();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("bulk.extractError"));
-    } finally {
-      setBatchExtractRunning(false);
-    }
-  }, [activeProject, fetchFolders, singleImageFolders, t, tt]);
-
-  const handleBatchInferSingleImages = useCallback(async () => {
-    if (singleImageFolders.length === 0) return;
-    setError(null);
-    setInfo(null);
-    setInferHintFolder(null);
     setBatchInferRunning(true);
     try {
+      let lastResult: ExtractionResult | null = null;
       for (const folder of singleImageFolders) {
         if (!folder.has_extraction_db) {
           const extractResponse = await fetch(endpoint("tiff-bulk/extract"), {
@@ -704,13 +634,24 @@ const TiffManagerBulkPage = () => {
           if (!extractResponse.ok || !extractPayload.folder_name) {
             throw new Error(extractPayload.detail || t("bulk.extractError"));
           }
+          lastResult = extractPayload;
         }
         await runInferenceForFolder(folder.name);
       }
+      setCompletedInferenceFolders((prev) => {
+        const next = new Set(prev);
+        for (const folder of singleImageFolders) {
+          next.add(folder.name);
+        }
+        return Array.from(next);
+      });
+      if (lastResult) {
+        setResult(lastResult);
+      }
       setInfo(
         tt(
-          `単一画像 ${singleImageFolders.length} 件の推論を完了しました。`,
-          `Completed inference for ${singleImageFolders.length} single-image entries.`,
+          `単一画像 ${singleImageFolders.length} 件のROI抽出と推論を完了しました。`,
+          `Completed ROI extraction and inference for ${singleImageFolders.length} single-image entries.`,
         ),
       );
       await fetchFolders();
@@ -724,6 +665,10 @@ const TiffManagerBulkPage = () => {
   const handleBatchCellCountSingleImages = useCallback(async () => {
     if (singleImageFolders.length === 0) return;
     if (!activeProject) return;
+    if (!singleImageFolders.every((folder) => hasReadyInferenceResult(folder))) {
+      setError(tt("先にROI抽出&推論を実行してください。", "Run ROI extraction & inference first."));
+      return;
+    }
     setError(null);
     setInfo(null);
     setResult(null);
@@ -739,22 +684,6 @@ const TiffManagerBulkPage = () => {
       };
 
       for (const folder of singleImageFolders) {
-        if (!folder.has_extraction_db) {
-          const extractResponse = await fetch(endpoint("tiff-bulk/extract"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ folder_name: folder.name, project_name: activeProject || null }),
-          });
-          const extractPayload: ExtractionResult & { detail?: string } = await extractResponse
-            .json()
-            .catch(() => ({} as ExtractionResult));
-          if (!extractResponse.ok || !extractPayload.folder_name) {
-            throw new Error(extractPayload.detail || t("bulk.extractError"));
-          }
-        }
-
-        await runInferenceForFolder(folder.name);
-
         const dbName = `${folder.name}_bulk.db`;
         const summaryResponse = await fetch(endpoint(`deepscan/${encodeURIComponent(dbName)}/cell-count-summary`), {
           headers: { Accept: "application/json" },
@@ -787,7 +716,7 @@ const TiffManagerBulkPage = () => {
     } finally {
       setBatchCellCountRunning(false);
     }
-  }, [activeProject, fetchFolders, navigate, runInferenceForFolder, singleImageFolders, t, tt]);
+  }, [activeProject, fetchFolders, hasReadyInferenceResult, navigate, singleImageFolders, t, tt]);
 
   if (!activeProject) {
     return (
@@ -1087,29 +1016,22 @@ const TiffManagerBulkPage = () => {
                     variant="contained"
                     size="small"
                     startIcon={<ScienceIcon fontSize="small" />}
-                    onClick={() => void handleBatchExtractSingleImages()}
-                    disabled={singleImageFolders.length === 0 || batchExtractRunning || batchInferRunning || batchCellCountRunning}
+                    onClick={() => void handleBatchExtractInferSingleImages()}
+                    disabled={singleImageFolders.length === 0 || batchInferRunning || batchCellCountRunning}
                   >
-                    {batchExtractRunning ? tt("処理中...", "Processing...") : tt("ROI抽出", "ROI extraction")}
+                    {batchInferRunning ? tt("処理中...", "Processing...") : tt("ROI抽出&推論", "ROI extraction & inference")}
                   </Button>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    startIcon={<ScienceIcon fontSize="small" />}
-                    onClick={() => void handleBatchInferSingleImages()}
-                    disabled={singleImageFolders.length === 0 || batchExtractRunning || batchInferRunning || batchCellCountRunning}
-                  >
-                    {batchInferRunning ? tt("処理中...", "Processing...") : tt("推論", "Inference")}
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    startIcon={<ScienceIcon fontSize="small" />}
-                    onClick={() => void handleBatchCellCountSingleImages()}
-                    disabled={singleImageFolders.length === 0 || batchExtractRunning || batchInferRunning || batchCellCountRunning}
-                  >
-                    {batchCellCountRunning ? tt("処理中...", "Processing...") : tt("セルカウント", "Cell count")}
-                  </Button>
+                  {activeProject && singleImageFolders.length > 0 && singleImageFolders.every((folder) => hasReadyInferenceResult(folder)) ? (
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<ScienceIcon fontSize="small" />}
+                      onClick={() => void handleBatchCellCountSingleImages()}
+                      disabled={batchInferRunning || batchCellCountRunning}
+                    >
+                      {batchCellCountRunning ? tt("処理中...", "Processing...") : tt("セルカウント", "Cell count")}
+                    </Button>
+                  ) : null}
                 </Stack>
 
                 {singleImageFolders.length === 0 ? (
@@ -1132,11 +1054,9 @@ const TiffManagerBulkPage = () => {
                       <TableBody>
                         {singleImageFolders.map((folder) => {
                           const isBusy =
-                            extractingFolder === folder.name ||
                             openingSingleImageFolder === folder.name ||
                             deletingFolder === folder.name ||
                             mergingFolder === folder.name ||
-                            batchExtractRunning ||
                             batchInferRunning ||
                             batchCellCountRunning;
                           return (
@@ -1149,15 +1069,21 @@ const TiffManagerBulkPage = () => {
                                 </Tooltip>
                               </TableCell>
                               <TableCell align="center">
-                                <Button
-                                  variant="outlined"
-                                  size="small"
-                                  startIcon={<ScienceIcon fontSize="small" />}
-                                  onClick={() => void handleOpenSingleImageDeepScan(folder)}
-                                  disabled={isBusy}
-                                >
-                                  {openingSingleImageFolder === folder.name ? tt("処理中...", "Processing...") : "DeepScan"}
-                                </Button>
+                                {hasReadyInferenceResult(folder) ? (
+                                  <Button
+                                    variant="outlined"
+                                    size="small"
+                                    startIcon={<ScienceIcon fontSize="small" />}
+                                    onClick={() => void handleOpenSingleImageDeepScan(folder)}
+                                    disabled={isBusy}
+                                  >
+                                    {openingSingleImageFolder === folder.name ? tt("処理中...", "Processing...") : "DeepScan"}
+                                  </Button>
+                                ) : (
+                                  <Typography variant="body2" color="text.secondary">
+                                    -
+                                  </Typography>
+                                )}
                               </TableCell>
                               <TableCell align="center">
                                 <Button
@@ -1224,10 +1150,8 @@ const TiffManagerBulkPage = () => {
                         {multiImageFolders.map((folder) => {
                           const displayName = scopedFolderName(folder.name);
                           const isBusy =
-                            extractingFolder === folder.name ||
                             deletingFolder === folder.name ||
                             mergingFolder === folder.name ||
-                            batchExtractRunning ||
                             batchInferRunning ||
                             batchCellCountRunning;
                           return (

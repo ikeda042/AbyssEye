@@ -20,6 +20,7 @@ class FolderInfoResponse(BaseModel):
     file_count: int
     has_extraction_db: bool
     has_focus_merged: bool
+    has_inference_result: bool = False
     realtime_folder_mode: str | None = None
 
     @classmethod
@@ -29,6 +30,7 @@ class FolderInfoResponse(BaseModel):
             file_count=item.file_count,
             has_extraction_db=item.has_extraction_db,
             has_focus_merged=item.has_focus_merged,
+            has_inference_result=item.has_inference_result,
             realtime_folder_mode=item.realtime_folder_mode,
         )
 

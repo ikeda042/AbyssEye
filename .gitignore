@@ -1,17 +1,21 @@
 /data_set
 /venv
 /Test_data
+.DS_Store
 *.tif
 *.png
 !frontend/public/logo.png
 *.db
 *.pyc
+*.tsbuildinfo
 __pycache__/
 /backend/app/realtime_cache/
 docker/.env
 docker/letsencrypt/acme.json
 
 .venv311/
+frontend/node_modules/
+frontend/dist/
 
 # Runtime inference cache
 /backend/app/databases/*_inference_cache.json

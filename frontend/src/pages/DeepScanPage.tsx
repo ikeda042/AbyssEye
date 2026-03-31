@@ -932,6 +932,7 @@ const DeepScanPage = () => {
   }, [focusProfile]);
 
   const availableImages = status?.available_images ?? [];
+  const showFocusTrack = availableImages.length > 1 || (focusTrack?.total ?? 0) > 1;
   const projectSingleImagePager = useMemo(() => {
     if (!projectSingleImagePagerItems.length) return null;
     const index = projectSingleImagePagerItems.findIndex((item) => item.db_name === dbName);
@@ -1625,119 +1626,122 @@ const DeepScanPage = () => {
                   </Box>
                   <Stack spacing={1.25} sx={{ minWidth: { md: 260 }, width: { md: 300, lg: 320 }, maxWidth: 360, alignSelf: "stretch" }}>
                     <Box
+                      aria-hidden={!showFocusTrack}
                       sx={{
                         border: "1px solid rgba(14,165,233,0.35)",
                         borderRadius: 1,
                         p: 1.1,
                         backgroundColor: "rgba(14,165,233,0.04)",
+                        visibility: showFocusTrack ? "visible" : "hidden",
+                        pointerEvents: showFocusTrack ? "auto" : "none",
                       }}
                     >
-                      <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 0.5 }}>
-                        {labels.focusTrackTitle}
-                      </Typography>
-                      {focusProfile ? (
-                        <Stack spacing={0.8}>
-                          <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap">
-                            <Typography variant="caption" color="text.secondary">
-                              {labels.focusTrackMethod}: {focusMetricLabel}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {labels.focusCurrent}: {focusProfile.current_score.toFixed(3)}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {labels.focusPeak}: {focusProfile.peak_score.toFixed(3)}
-                            </Typography>
-                          </Stack>
-                          <Box
-                            sx={{
-                              position: "relative",
-                              height: 24,
-                              borderRadius: 1,
-                              border: "1px solid rgba(15,23,42,0.24)",
-                              backgroundColor: "rgba(15,23,42,0.02)",
-                              overflow: "visible",
-                            }}
-                          >
+                        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 0.5 }}>
+                          {labels.focusTrackTitle}
+                        </Typography>
+                        {focusProfile ? (
+                          <Stack spacing={0.8}>
+                            <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap">
+                              <Typography variant="caption" color="text.secondary">
+                                {labels.focusTrackMethod}: {focusMetricLabel}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {labels.focusCurrent}: {focusProfile.current_score.toFixed(3)}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {labels.focusPeak}: {focusProfile.peak_score.toFixed(3)}
+                              </Typography>
+                            </Stack>
                             <Box
                               sx={{
-                                position: "absolute",
-                                left: 0,
-                                right: 0,
-                                top: 8,
-                                height: 8,
-                                borderRadius: "999px",
-                                overflow: "hidden",
-                                display: "flex",
-                                gap: 0,
+                                position: "relative",
+                                height: 24,
+                                borderRadius: 1,
+                                border: "1px solid rgba(15,23,42,0.24)",
+                                backgroundColor: "rgba(15,23,42,0.02)",
+                                overflow: "visible",
                               }}
+                            >
+                              <Box
+                                sx={{
+                                  position: "absolute",
+                                  left: 0,
+                                  right: 0,
+                                  top: 8,
+                                  height: 8,
+                                  borderRadius: "999px",
+                                  overflow: "hidden",
+                                  display: "flex",
+                                  gap: 0,
+                                }}
                               >
-                            {focusTrack?.entries?.map((entry) => {
-                              const normalized = Number(entry.combined_normalized ?? 0);
-                              const tileColor = `hsl(${220 - 220 * normalized}, 95%, 55%)`;
-                              return (
-                                <Box
-                                  key={`focus-track-cell-${entry.index}-${entry.relative_path}`}
-                                  sx={{
-                                    flex: 1,
-                                    backgroundColor: tileColor,
-                                    cursor: "pointer",
-                                    "&:hover": {
-                                      filter: "brightness(1.12)",
-                                    },
-                                  }}
-                                  onClick={() => handleFocusTrackImageSelect(entry)}
-                                />
-                              );
-                            })}
-                          </Box>
-                            {focusTrack?.entries?.map((entry) => {
-                              const isCurrent = entry.index === focusProfile.current_index;
-                              const isPeak = entry.index === focusProfile.peak_index;
-                              if (!isCurrent && !isPeak) return null;
-                              const segmentPercent = focusTrack.total > 0 ? 100 / focusTrack.total : 0;
-                              const markerLeft = focusTrack.toPercent(entry.index) + segmentPercent / 2;
-                              return (
-                                <Tooltip
-                                  key={`focus-track-marker-${entry.index}-${entry.relative_path}`}
-                                  title={`Z${entry.index} / ${entry.combined_score.toFixed(3)}`}
-                                  arrow
-                                  placement="top"
-                                >
-                                  <Box
-                                    sx={{
-                                      position: "absolute",
-                                      left: `${Math.min(markerLeft, 100)}%`,
-                                      width: 2,
-                                      height: 16,
-                                      top: 4,
-                                      transform: "translateX(-50%)",
-                                      borderRadius: 999,
-                                      cursor: "pointer",
-                                      backgroundColor: isCurrent ? "#111827" : "#ffffff",
-                                    }}
-                                    onClick={() => handleFocusTrackImageSelect(entry)}
-                                  />
-                                </Tooltip>
-                              );
-                            })}
-                          </Box>
-                          <Stack direction="row" spacing={1} sx={{ opacity: 0.85 }}>
-                            <Typography variant="caption" color="text.secondary">
-                              {labels.focusRatio}: {focusProfile.current_to_peak_ratio.toFixed(2)}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {labels.focusDepth}: {focusProfile.z_offset_from_peak}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              Z{focusProfile.current_index} / {focusTrack?.total ?? 0}
-                            </Typography>
+                                {focusTrack?.entries?.map((entry) => {
+                                  const normalized = Number(entry.combined_normalized ?? 0);
+                                  const tileColor = `hsl(${220 - 220 * normalized}, 95%, 55%)`;
+                                  return (
+                                    <Box
+                                      key={`focus-track-cell-${entry.index}-${entry.relative_path}`}
+                                      sx={{
+                                        flex: 1,
+                                        backgroundColor: tileColor,
+                                        cursor: "pointer",
+                                        "&:hover": {
+                                          filter: "brightness(1.12)",
+                                        },
+                                      }}
+                                      onClick={() => handleFocusTrackImageSelect(entry)}
+                                    />
+                                  );
+                                })}
+                              </Box>
+                              {focusTrack?.entries?.map((entry) => {
+                                const isCurrent = entry.index === focusProfile.current_index;
+                                const isPeak = entry.index === focusProfile.peak_index;
+                                if (!isCurrent && !isPeak) return null;
+                                const segmentPercent = focusTrack.total > 0 ? 100 / focusTrack.total : 0;
+                                const markerLeft = focusTrack.toPercent(entry.index) + segmentPercent / 2;
+                                return (
+                                  <Tooltip
+                                    key={`focus-track-marker-${entry.index}-${entry.relative_path}`}
+                                    title={`Z${entry.index} / ${entry.combined_score.toFixed(3)}`}
+                                    arrow
+                                    placement="top"
+                                  >
+                                    <Box
+                                      sx={{
+                                        position: "absolute",
+                                        left: `${Math.min(markerLeft, 100)}%`,
+                                        width: 2,
+                                        height: 16,
+                                        top: 4,
+                                        transform: "translateX(-50%)",
+                                        borderRadius: 999,
+                                        cursor: "pointer",
+                                        backgroundColor: isCurrent ? "#111827" : "#ffffff",
+                                      }}
+                                      onClick={() => handleFocusTrackImageSelect(entry)}
+                                    />
+                                  </Tooltip>
+                                );
+                              })}
+                            </Box>
+                            <Stack direction="row" spacing={1} sx={{ opacity: 0.85 }}>
+                              <Typography variant="caption" color="text.secondary">
+                                {labels.focusRatio}: {focusProfile.current_to_peak_ratio.toFixed(2)}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {labels.focusDepth}: {focusProfile.z_offset_from_peak}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                Z{focusProfile.current_index} / {focusTrack?.total ?? 0}
+                              </Typography>
+                            </Stack>
                           </Stack>
-                        </Stack>
-                      ) : (
-                        <Typography variant="body2" color="text.secondary">
-                          {labels.focusNoData}
-                        </Typography>
-                      )}
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">
+                            {labels.focusNoData}
+                          </Typography>
+                        )}
                     </Box>
                     <Box
                       sx={{
