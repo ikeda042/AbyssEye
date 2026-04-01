@@ -475,6 +475,57 @@ const TiffManagerBulkPage = () => {
     [filteredFolders],
   );
 
+  useEffect(() => {
+    const sourceSingleImageFolders = folders.filter(
+      (folder) => folder.realtime_folder_mode === "single" || (!folder.realtime_folder_mode && folder.file_count === 1),
+    );
+
+    if (!activeProject || sourceSingleImageFolders.length === 0) {
+      setCompletedInferenceFolders([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const restoreCompletedInferenceFolders = async () => {
+      const ready = new Set(sourceSingleImageFolders.filter((folder) => folder.has_inference_result).map((folder) => folder.name));
+      const pendingFolders = sourceSingleImageFolders.filter((folder) => !ready.has(folder.name) && folder.has_extraction_db);
+
+      const resolved = await Promise.all(
+        pendingFolders.map(async (folder) => {
+          try {
+            const response = await fetch(endpoint("tiff-bulk/infer/manifest"), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ folder_name: folder.name, project_name: activeProject || null }),
+            });
+            const payload: { files?: Array<{ cell_count?: number }>; detail?: string } = await response.json().catch(() => ({}));
+            if (!response.ok || !payload.files) return null;
+            const isReady = payload.files.every((file) => typeof file.cell_count === "number" && file.cell_count >= 0);
+            return isReady ? folder.name : null;
+          } catch {
+            return null;
+          }
+        }),
+      );
+
+      if (cancelled) return;
+
+      resolved.forEach((folderName) => {
+        if (folderName) {
+          ready.add(folderName);
+        }
+      });
+      setCompletedInferenceFolders(Array.from(ready));
+    };
+
+    void restoreCompletedInferenceFolders();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProject, folders]);
+
   const multiImageFolders = useMemo(
     () =>
       filteredFolders.filter(
