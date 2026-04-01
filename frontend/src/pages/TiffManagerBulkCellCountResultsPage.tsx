@@ -16,6 +16,8 @@ import {
 } from "@mui/material";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import PictureAsPdfIcon from "@mui/icons-material/PictureAsPdf";
+import FileDownloadIcon from "@mui/icons-material/FileDownload";
 
 import { API_BASE_URL } from "../config";
 import { useI18n } from "../i18n";
@@ -33,6 +35,14 @@ type ResultRoi = {
   predicted_class: number;
   confidence: number;
   png_base64: string;
+  roi_start_x?: number;
+  roi_start_y?: number;
+  roi_end_x?: number;
+  roi_end_y?: number;
+  image_width_px?: number;
+  image_height_px?: number;
+  manual_label?: string | number | null;
+  manual_added?: boolean;
 };
 
 type DeepScanStatus = {
@@ -45,14 +55,33 @@ type AggregatedRoi = ResultRoi & {
   dbName: string;
   sourceName: string;
   tifName: string;
+  finalClass: number;
+  labelSource: "ai" | "manual";
 };
 
 type AggregatedResults = {
   totalRoiCount: number;
   counts: Record<number, number>;
   classBuckets: Record<number, AggregatedRoi[]>;
+  roiRows: AggregatedRoi[];
   sourceCount: number;
   skippedSources: string[];
+};
+
+const parseClassLabel = (raw: string | number | null | undefined): number | null => {
+  if (typeof raw === "number" && Number.isFinite(raw)) return Math.trunc(raw);
+  if (typeof raw === "string" && raw.trim()) {
+    const parsed = Number(raw.trim());
+    if (Number.isFinite(parsed)) return Math.trunc(parsed);
+  }
+  return null;
+};
+
+const escapeCsvValue = (value: string | number | boolean | null | undefined) => {
+  if (value === null || value === undefined) return "";
+  const text = String(value);
+  if (!/[",\n]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
 };
 
 const normalizeProjectName = (raw: string) => {
@@ -69,6 +98,11 @@ const TiffManagerBulkCellCountResultsPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<AggregatedResults | null>(null);
+  const exportedAtLabel = useMemo(() => new Date().toLocaleString(language === "ja" ? "ja-JP" : "en-US"), [language]);
+  const fileNameBase = useMemo(
+    () => (projectName || "cell_count_results").replace(/[^A-Za-z0-9._-]+/g, "_"),
+    [projectName],
+  );
 
   const backToUrl = projectName ? `/tiff-manager-bulk?project=${encodeURIComponent(projectName)}` : "/tiff-manager-bulk";
   const projectPrefix = projectName ? `${projectName}__` : "";
@@ -117,6 +151,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
 
       const counts: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0 };
       const classBuckets: Record<number, AggregatedRoi[]> = { 0: [], 1: [], 2: [], 3: [] };
+      const roiRows: AggregatedRoi[] = [];
       const skippedSources: string[] = [];
 
       await Promise.all(
@@ -132,19 +167,32 @@ const TiffManagerBulkCellCountResultsPage = () => {
           }
           const rois = payload.rois ?? [];
           rois.forEach((roi) => {
-            if (!(roi.predicted_class in classBuckets)) {
-              return;
-            }
-            counts[roi.predicted_class] += 1;
-            classBuckets[roi.predicted_class].push({
+            const manualLabel = parseClassLabel(roi.manual_label);
+            const finalClass = manualLabel ?? roi.predicted_class;
+            const labelSource: "ai" | "manual" = manualLabel !== null ? "manual" : "ai";
+            const row: AggregatedRoi = {
               ...roi,
               dbName,
               sourceName: scopedFolderName(folder.name),
               tifName: payload.tif_name,
-            });
+              finalClass,
+              labelSource,
+            };
+            roiRows.push(row);
+            if (!(roi.predicted_class in classBuckets)) {
+              return;
+            }
+            counts[roi.predicted_class] += 1;
+            classBuckets[roi.predicted_class].push(row);
           });
         }),
       );
+
+      roiRows.sort((a, b) => {
+        const sourceCompare = a.sourceName.localeCompare(b.sourceName);
+        if (sourceCompare !== 0) return sourceCompare;
+        return a.roi_id - b.roi_id;
+      });
 
       Object.values(classBuckets).forEach((bucket) => {
         bucket.sort((a, b) => {
@@ -158,6 +206,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
         totalRoiCount: Object.values(counts).reduce((sum, value) => sum + value, 0),
         counts,
         classBuckets,
+        roiRows,
         sourceCount: singleImageFolders.length,
         skippedSources,
       });
@@ -173,8 +222,81 @@ const TiffManagerBulkCellCountResultsPage = () => {
     void fetchResults();
   }, [fetchResults]);
 
+  const handlePrintPdf = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.print();
+  }, []);
+
+  const downloadCsv = useCallback((filename: string, header: string[], rows: Array<Array<string | number | boolean | null | undefined>>) => {
+    if (typeof window === "undefined") return;
+    const csv = [header.map(escapeCsvValue).join(","), ...rows.map((row) => row.map(escapeCsvValue).join(","))].join("\n");
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8;" });
+    const url = window.URL.createObjectURL(blob);
+    const link = window.document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    window.document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }, []);
+
+  const handleExportCsv = useCallback(() => {
+    if (!results) return;
+    downloadCsv(
+      `${fileNameBase}_roi_labels.csv`,
+      [
+        "project_name",
+        "source_id",
+        "db_name",
+        "image_name",
+        "roi_id",
+        "ai_label",
+        "manual_label",
+        "final_label",
+        "label_source",
+        "model_confidence",
+        "manual_added",
+        "bbox_xmin",
+        "bbox_ymin",
+        "bbox_xmax",
+        "bbox_ymax",
+        "image_width_px",
+        "image_height_px",
+      ],
+      results.roiRows.map((roi) => [
+        projectName,
+        roi.sourceName,
+        roi.dbName,
+        roi.tifName,
+        roi.roi_id,
+        roi.predicted_class,
+        roi.manual_label ?? "",
+        roi.finalClass,
+        roi.labelSource,
+        roi.confidence,
+        roi.manual_added ?? false,
+        roi.roi_start_x ?? "",
+        roi.roi_start_y ?? "",
+        roi.roi_end_x ?? "",
+        roi.roi_end_y ?? "",
+        roi.image_width_px ?? "",
+        roi.image_height_px ?? "",
+      ]),
+    );
+  }, [downloadCsv, fileNameBase, projectName, results]);
+
   return (
-    <Container maxWidth={false} sx={{ py: 3, px: { xs: 2, sm: 3, md: 4 } }}>
+    <>
+      <style>
+        {`
+          @page {
+            size: A4 portrait;
+            margin: 12mm;
+          }
+        `}
+      </style>
+      <Container maxWidth={false} sx={{ py: 3, px: { xs: 2, sm: 3, md: 4 }, "@media print": { py: 0, px: 0 } }}>
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
@@ -188,7 +310,13 @@ const TiffManagerBulkCellCountResultsPage = () => {
           </Typography>
         </Breadcrumbs>
 
-        <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ sm: "center" }} spacing={1}>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          justifyContent="space-between"
+          alignItems={{ sm: "center" }}
+          spacing={1}
+          sx={{ "@media print": { display: "none" } }}
+        >
           <Box>
             <Typography variant="h5" fontWeight={700}>
               {tt("細胞集計結果", "Cell count results")}
@@ -211,8 +339,48 @@ const TiffManagerBulkCellCountResultsPage = () => {
             <Button variant="contained" size="small" startIcon={<RefreshIcon fontSize="small" />} onClick={() => void fetchResults()}>
               {tt("再読み込み", "Reload")}
             </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<FileDownloadIcon fontSize="small" />}
+              onClick={handleExportCsv}
+              disabled={!results || loading}
+            >
+              {tt("CSV出力", "Export CSV")}
+            </Button>
+            <Button variant="contained" color="error" size="small" startIcon={<PictureAsPdfIcon fontSize="small" />} onClick={handlePrintPdf}>
+              {tt("A4 PDF出力", "Export A4 PDF")}
+            </Button>
           </Stack>
         </Stack>
+
+        <Paper
+          variant="outlined"
+          sx={{
+            display: "none",
+            "@media print": {
+              display: "block",
+              p: 2,
+              borderColor: "rgba(15,23,42,0.18)",
+              boxShadow: "none",
+              breakAfter: "page",
+            },
+          }}
+        >
+          <Stack spacing={0.5}>
+            <Typography variant="h5" fontWeight={700}>
+              {tt("細胞集計結果", "Cell count results")}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {projectName
+                ? tt(`プロジェクト: ${projectName}`, `Project: ${projectName}`)
+                : tt("プロジェクト未選択", "No project selected")}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {tt(`出力日時: ${exportedAtLabel}`, `Exported at: ${exportedAtLabel}`)}
+            </Typography>
+          </Stack>
+        </Paper>
 
         {error && <Alert severity="error">{error}</Alert>}
 
@@ -227,12 +395,25 @@ const TiffManagerBulkCellCountResultsPage = () => {
           </Paper>
         ) : results ? (
           <Stack spacing={2}>
-            <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2 } }}>
+            <Paper
+              variant="outlined"
+              sx={{
+                p: { xs: 1.5, md: 2 },
+                "@media print": {
+                  boxShadow: "none",
+                  breakInside: "avoid",
+                },
+              }}
+            >
               <Stack spacing={2}>
                 <Typography variant="h6" fontWeight={600}>
                   {tt("集計サマリ", "Summary")}
                 </Typography>
-                <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
+                <Stack
+                  direction={{ xs: "column", md: "row" }}
+                  spacing={1.5}
+                  sx={{ "@media print": { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))" } }}
+                >
                   <Card variant="outlined" sx={{ flex: 1 }}>
                     <CardContent>
                       <Typography variant="body2" color="text.secondary">
@@ -279,7 +460,17 @@ const TiffManagerBulkCellCountResultsPage = () => {
             {[0, 1, 2, 3].map((classIndex) => {
               const items = results.classBuckets[classIndex];
               return (
-                <Paper key={classIndex} variant="outlined" sx={{ p: { xs: 1.5, md: 2 } }}>
+                <Paper
+                  key={classIndex}
+                  variant="outlined"
+                  sx={{
+                    p: { xs: 1.5, md: 2 },
+                    "@media print": {
+                      boxShadow: "none",
+                      breakBefore: classIndex === 0 ? "auto" : "page",
+                    },
+                  }}
+                >
                   <Stack spacing={1.5}>
                     <Box>
                       <Typography variant="h6" fontWeight={600}>
@@ -299,10 +490,24 @@ const TiffManagerBulkCellCountResultsPage = () => {
                           display: "grid",
                           gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))",
                           gap: 1.5,
+                          "@media print": {
+                            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                            gap: 1,
+                          },
                         }}
                       >
                         {items.map((roi) => (
-                          <Paper key={`${roi.dbName}-${roi.roi_id}`} variant="outlined" sx={{ p: 1 }}>
+                          <Paper
+                            key={`${roi.dbName}-${roi.roi_id}`}
+                            variant="outlined"
+                            sx={{
+                              p: 1,
+                              "@media print": {
+                                breakInside: "avoid",
+                                boxShadow: "none",
+                              },
+                            }}
+                          >
                             <Stack spacing={0.75}>
                               <Box
                                 component="img"
@@ -338,7 +543,8 @@ const TiffManagerBulkCellCountResultsPage = () => {
           </Stack>
         ) : null}
       </Stack>
-    </Container>
+      </Container>
+    </>
   );
 };
 
