@@ -9,7 +9,26 @@ git clone -b AbyssEye-Neo https://github.com/Gashu884/AbyssEye.git
 cd AbyssEye
 ```
 
-## 2. 前提
+## 2. 元リポジトリの更新を取り込む
+
+元リポジトリに新しい commit が入ったときに追従したい場合は、最初に 1 回だけ `upstream` を追加してください。
+
+```bash
+git remote add upstream https://github.com/ikeda042/AbyssEye.git
+```
+
+その後は、元リポジトリの `main` の更新を `AbyssEye-Neo` に取り込めます。
+
+```bash
+git fetch upstream
+git checkout AbyssEye-Neo
+git merge upstream/main
+git push origin AbyssEye-Neo
+```
+
+競合が出た場合は修正してから `git add <file>` を行い、最後に `git commit` してください。
+
+## 3. 前提
 
 - バックエンドは `Python 3.11` を推奨します。
 - `Python 3.12` でも動く可能性はありますが、`Python 3.13` / `3.14` では TensorFlow がインストールできないため、推論機能は利用できません。
@@ -17,7 +36,7 @@ cd AbyssEye
 
 `python3.11` が手元にない場合は、`docker/backend.Dockerfile` と同じく Python 3.11 系の環境を用意してください。
 
-## 3. 自動でセットアップして起動する方法
+## 4. 自動でセットアップして起動する方法
 
 いちばん楽なのはこの方法です。セットアップを 1 回実行したあと、起動は 1 コマンドで済みます。
 
@@ -41,7 +60,7 @@ cd AbyssEye
 - `8000` や `3000` が埋まっているときは空いているポートを使う
 - backend の `matplotlib` 初回警告を避ける
 
-## 4. 手動でセットアップして起動する方法
+## 5. 手動でセットアップして起動する方法
 
 ### バックエンドのセットアップ
 
@@ -84,7 +103,7 @@ cd frontend
 VITE_BACKEND_PORT=8001 npm run dev
 ```
 
-## 5. 補足
+## 6. 補足
 
 - `./scripts/dev-up.sh` は backend の自動リロードをデフォルトで無効にして、終了時にプロセスが残りにくいようにしています。
 - backend の自動リロードも欲しい場合は `APP_RELOAD=true ./scripts/dev-up.sh` を使ってください。
