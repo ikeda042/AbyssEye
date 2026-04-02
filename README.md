@@ -1,5 +1,13 @@
 # AbyssEye
 
+
+1. リポジトリを clone します:
+   ```bash
+   git clone -b AbyssEye-Neo https://github.com/Gashu884/AbyssEye.git
+   cd AbyssEye
+   ```
+2. 以下の手順でバックエンドとフロントエンドをセットアップしてください。
+
 ## バックエンドのセットアップ
 
 1. 仮想環境を作成して有効化します（未作成の場合）:
