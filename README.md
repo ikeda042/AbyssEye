@@ -9,24 +9,28 @@ git clone -b AbyssEye-Neo https://github.com/Gashu884/AbyssEye.git
 cd AbyssEye
 ```
 
-## 2. 元リポジトリの更新を取り込む
+## 2. 開発者の更新を取り込む
 
-元リポジトリに新しい commit が入ったときに追従したい場合は、最初に 1 回だけ `upstream` を追加してください。
-
-```bash
-git remote add upstream https://github.com/ikeda042/AbyssEye.git
-```
-
-その後は、元リポジトリの `main` の更新を `AbyssEye-Neo` に取り込めます。
+すでに clone 済みの利用者が、開発者の新しい commit を取り込むときは次を実行してください。
 
 ```bash
-git fetch upstream
 git checkout AbyssEye-Neo
-git merge upstream/main
-git push origin AbyssEye-Neo
+git pull --ff-only origin AbyssEye-Neo
 ```
 
-競合が出た場合は修正してから `git add <file>` を行い、最後に `git commit` してください。
+依存関係も更新されている可能性があるので、pull のあとにセットアップをもう一度実行してください。
+
+```bash
+./scripts/setup-dev.sh
+```
+
+そのあと、いつもどおり起動できます。
+
+```bash
+./scripts/dev-up.sh
+```
+
+`git pull --ff-only` で止まった場合は、ローカルに未コミット変更や独自の commit がある可能性があります。その場合はいったん変更を退避するか commit してから実行してください。
 
 ## 3. 前提
 
