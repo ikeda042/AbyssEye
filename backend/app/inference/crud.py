@@ -680,9 +680,22 @@ def predict_label(image_base64: str, model_path: str | None = None) -> Inference
     return _predict_from_bytes(image_bytes, model_path=model_path)
 
 
+def predict_image_bytes(image_bytes: bytes, model_path: str | None = None) -> InferenceResult:
+    """Run inference directly from image bytes."""
+    return _predict_from_bytes(image_bytes, model_path=model_path)
+
+
 def predict_labels_batch(images_base64: list[str], model_path: str | None = None) -> list[InferenceResult]:
     image_bytes_list = [_decode_image_bytes(item) for item in images_base64 if item]
     return _predict_from_bytes_multi(image_bytes_list, model_path=model_path)
+
+
+def predict_image_bytes_batch(image_bytes_list: list[bytes], model_path: str | None = None) -> list[InferenceResult]:
+    """Run inference directly from a batch of image bytes."""
+    valid_items = [item for item in image_bytes_list if item]
+    if not valid_items:
+        raise HTTPException(status_code=400, detail="画像データを1件以上指定してください。")
+    return _predict_from_bytes_multi(valid_items, model_path=model_path)
 
 
 def _fetch_roi_png_blob(db_name: str, record_id: int) -> bytes:

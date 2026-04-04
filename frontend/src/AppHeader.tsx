@@ -36,18 +36,29 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
         borderBottom: `1px solid ${headerBorder}`,
       }}
     >
-      <Toolbar sx={{ px: { xs: 1, sm: 2, md: 3, lg: 4 }, gap: 1.5, transition: "background-color 160ms ease" }}>
+      <Toolbar
+        sx={{
+          px: { xs: 1, sm: 2, md: 3, lg: 4 },
+          py: 0.75,
+          minHeight: { xs: "auto", sm: 64 },
+          gap: 1.25,
+          alignItems: "stretch",
+          transition: "background-color 160ms ease",
+        }}
+      >
         <Box
           sx={{
             width: "min(100%, 1720px)",
             margin: "0 auto",
             display: "flex",
             alignItems: "center",
-            gap: 1.5,
+            justifyContent: "space-between",
+            gap: 1.25,
             flex: 1,
+            flexWrap: { xs: "wrap", md: "nowrap" },
           }}
         >
-          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexGrow: 1 }}>
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexGrow: 1, minWidth: 0 }}>
             <Box
               component="img"
               src={logoSrc}
@@ -65,7 +76,7 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
               variant="h5"
               onClick={handleHomeClick}
               sx={{
-                fontWeight: 700,
+                fontWeight: 600,
                 fontSize: { xs: "1.35rem", sm: "1.5rem" },
                 fontFamily: '"Bricolage Grotesque", "Noto Sans JP", "Inter", system-ui, -apple-system, sans-serif',
                 letterSpacing: "0.04em",
@@ -77,46 +88,64 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
               AbyssEye
             </Typography>
           </Stack>
-          <Divider flexItem orientation="vertical" sx={{ borderColor: headerBorder }} />
-          <Typography
-            variant="caption"
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            justifyContent={{ xs: "space-between", md: "flex-end" }}
+            useFlexGap
             sx={{
-              color: "text.secondary",
-              display: { xs: "none", md: "block" },
+              width: { xs: "100%", md: "auto" },
+              minWidth: 0,
+              flexWrap: "wrap",
             }}
           >
-            {t("header.apiBase", { url: API_BASE_URL })}
-          </Typography>
-          <ToggleButtonGroup
-            value={language}
-            exclusive
-            size="small"
-            aria-label={t("header.languageToggle")}
-            onChange={(_event, value) => {
-              if (value === "ja" || value === "en") {
-                setLanguage(value);
-              }
-            }}
-            sx={{
-              ml: 1,
-              "& .MuiToggleButton-root": {
-                py: 0.5,
-                px: 1.25,
-              },
-            }}
-          >
-            <ToggleButton value="ja">{t("header.languageJa")}</ToggleButton>
-            <ToggleButton value="en">{t("header.languageEn")}</ToggleButton>
-          </ToggleButtonGroup>
-          <IconButton
-            color="inherit"
-            onClick={onToggleMode}
-            size="small"
-            sx={{ ml: 1, bgcolor: "transparent" }}
-            aria-label={t("header.toggleTheme")}
-          >
-            {mode === "dark" ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
-          </IconButton>
+            <Divider
+              flexItem
+              orientation="vertical"
+              sx={{ borderColor: headerBorder, display: { xs: "none", md: "block" } }}
+            />
+            <Typography
+              variant="caption"
+              noWrap
+              sx={{
+                color: "text.secondary",
+                display: { xs: "none", lg: "block" },
+                maxWidth: 360,
+              }}
+            >
+              {t("header.apiBase", { url: API_BASE_URL })}
+            </Typography>
+            <ToggleButtonGroup
+              value={language}
+              exclusive
+              size="small"
+              aria-label={t("header.languageToggle")}
+              onChange={(_event, value) => {
+                if (value === "ja" || value === "en") {
+                  setLanguage(value);
+                }
+              }}
+              sx={{
+                "& .MuiToggleButton-root": {
+                  py: 0.5,
+                  px: 1.25,
+                },
+              }}
+            >
+              <ToggleButton value="ja">{t("header.languageJa")}</ToggleButton>
+              <ToggleButton value="en">{t("header.languageEn")}</ToggleButton>
+            </ToggleButtonGroup>
+            <IconButton
+              color="inherit"
+              onClick={onToggleMode}
+              size="small"
+              sx={{ bgcolor: "transparent", flexShrink: 0 }}
+              aria-label={t("header.toggleTheme")}
+            >
+              {mode === "dark" ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
+            </IconButton>
+          </Stack>
         </Box>
       </Toolbar>
     </AppBar>

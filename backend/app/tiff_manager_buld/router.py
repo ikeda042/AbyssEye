@@ -22,6 +22,9 @@ class FolderInfoResponse(BaseModel):
     has_focus_merged: bool
     has_inference_result: bool = False
     realtime_folder_mode: str | None = None
+    source_origin: str | None = None
+    manual_labeled_roi_count: int = 0
+    manual_added_roi_count: int = 0
 
     @classmethod
     def from_dataclass(cls, item: crud.FolderInfo) -> "FolderInfoResponse":
@@ -32,6 +35,9 @@ class FolderInfoResponse(BaseModel):
             has_focus_merged=item.has_focus_merged,
             has_inference_result=item.has_inference_result,
             realtime_folder_mode=item.realtime_folder_mode,
+            source_origin=item.source_origin,
+            manual_labeled_roi_count=item.manual_labeled_roi_count,
+            manual_added_roi_count=item.manual_added_roi_count,
         )
 
 

@@ -25,6 +25,7 @@ import ScienceIcon from "@mui/icons-material/Science";
 
 import { API_BASE_URL } from "../config";
 import { useI18n } from "../i18n";
+import { buildDataTableSx, ELLIPSIS_TEXT_SX, PAGE_CONTAINER_SX, TABLE_CONTAINER_SX } from "../ui/layout";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 
@@ -49,6 +50,7 @@ const TiffManagerBulkInferencePage = () => {
   const dbName = searchParams.get("db_name")?.trim() ?? "";
   const projectName = searchParams.get("project")?.trim() ?? "";
   const initialHasExtractionDb = searchParams.get("has_extraction_db")?.trim() === "1";
+  const initialHasInferenceResult = searchParams.get("has_inference_result")?.trim() === "1";
   const bulkBackToUrl = projectName ? `/tiff-manager-bulk?project=${encodeURIComponent(projectName)}` : "/tiff-manager-bulk";
 
   const [files, setFiles] = useState<FolderFileEntry[]>([]);
@@ -56,9 +58,9 @@ const TiffManagerBulkInferencePage = () => {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [openingFile, setOpeningFile] = useState<string | null>(null);
-  const [extracting, setExtracting] = useState(false);
-  const [inferring, setInferring] = useState(false);
+  const [processingInference, setProcessingInference] = useState(false);
   const [hasExtractionDb, setHasExtractionDb] = useState(initialHasExtractionDb);
+  const [hasInferenceResult, setHasInferenceResult] = useState(initialHasInferenceResult);
 
   const labels = useMemo(
     () => ({
@@ -73,9 +75,14 @@ const TiffManagerBulkInferencePage = () => {
       open: "DeepScan",
       save: tt("保存", "Save"),
       openError: tt("DeepScan を開けませんでした。", "Failed to open DeepScan."),
-      extractDone: tt("このフォルダのROI抽出が完了しました。", "ROI extraction for this folder has completed."),
-      inferDone: tt("このフォルダの推論が完了しました。", "Inference for this folder has completed."),
-      extractFirst: tt("先に上の ROI抽出 または 推論 を実行してください。", "Run ROI extraction or inference first."),
+      extractInferDone: tt(
+        "このフォルダの ROI抽出&推論 が完了しました。",
+        "ROI extraction and inference for this folder have completed.",
+      ),
+      extractFirst: tt(
+        "先に上の ROI抽出&推論 を実行してください。",
+        "Run ROI extraction and inference first.",
+      ),
       extractFailed: tt("ROI抽出に失敗しました。", "Failed to run ROI extraction."),
       inferFailed: tt("推論に失敗しました。", "Failed to run inference."),
     }),
@@ -94,6 +101,7 @@ const TiffManagerBulkInferencePage = () => {
       throw new Error(extractPayload.detail || labels.extractFailed);
     }
     setHasExtractionDb(true);
+    setHasInferenceResult(false);
   }, [folderName, hasExtractionDb, labels.extractFailed, projectName]);
 
   const fetchFiles = useCallback(async () => {
@@ -134,26 +142,11 @@ const TiffManagerBulkInferencePage = () => {
     void fetchFiles();
   }, [fetchFiles]);
 
-  const handleBatchExtract = useCallback(async () => {
+  const handleBatchExtractInfer = useCallback(async () => {
     if (!folderName) return;
     setError(null);
     setInfo(null);
-    setExtracting(true);
-    try {
-      await ensureExtractionDb();
-      setInfo(labels.extractDone);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : labels.extractFailed);
-    } finally {
-      setExtracting(false);
-    }
-  }, [ensureExtractionDb, folderName, labels.extractDone, labels.extractFailed]);
-
-  const handleBatchInfer = useCallback(async () => {
-    if (!folderName) return;
-    setError(null);
-    setInfo(null);
-    setInferring(true);
+    setProcessingInference(true);
     try {
       await ensureExtractionDb();
 
@@ -190,17 +183,18 @@ const TiffManagerBulkInferencePage = () => {
         }
       }
 
-      setInfo(labels.inferDone);
+      setHasInferenceResult(true);
+      setInfo(labels.extractInferDone);
     } catch (err) {
       setError(err instanceof Error ? err.message : labels.inferFailed);
     } finally {
-      setInferring(false);
+      setProcessingInference(false);
     }
-  }, [ensureExtractionDb, folderName, labels.inferDone, labels.inferFailed, projectName]);
+  }, [ensureExtractionDb, folderName, labels.extractInferDone, labels.inferFailed, projectName]);
 
   const openDeepScan = useCallback(
     async (file: FolderFileEntry) => {
-      if (!hasExtractionDb) {
+      if (!hasInferenceResult) {
         setError(labels.extractFirst);
         return;
       }
@@ -213,7 +207,7 @@ const TiffManagerBulkInferencePage = () => {
         const params = new URLSearchParams({
           db_name: dbName,
           tif_name: file.relative_path,
-          source: "roi",
+          source: "db",
           return_to: returnTo,
         });
         if (projectName) {
@@ -226,7 +220,7 @@ const TiffManagerBulkInferencePage = () => {
         setOpeningFile(null);
       }
     },
-    [dbName, folderName, hasExtractionDb, labels.extractFirst, labels.openError, navigate, projectName],
+    [dbName, folderName, hasInferenceResult, labels.extractFirst, labels.openError, navigate, projectName],
   );
 
   const downloadFile = useCallback(
@@ -241,38 +235,40 @@ const TiffManagerBulkInferencePage = () => {
   );
 
   return (
-    <Container maxWidth={false} sx={{ py: 3, px: { xs: 2, sm: 3, md: 4 } }}>
+    <Container maxWidth={false} sx={PAGE_CONTAINER_SX}>
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
             Home
           </Link>
           <Link underline="hover" color="inherit" component={RouterLink} to={bulkBackToUrl}>
-            ROI抽出
+            {tt("データベース", "Database")}
           </Link>
           <Typography color="text.primary" fontSize={14}>
             {labels.breadcrumb}
           </Typography>
         </Breadcrumbs>
 
+        <Button
+          component={RouterLink}
+          to={bulkBackToUrl}
+          variant="outlined"
+          size="small"
+          startIcon={<ArrowBackIosNewIcon fontSize="small" />}
+          sx={{ alignSelf: "flex-start" }}
+        >
+          {labels.backToBulk}
+        </Button>
+
         <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ sm: "center" }} spacing={1}>
           <Box>
-            <Typography variant="h5" fontWeight={700}>
+            <Typography variant="h5" fontWeight={600}>
               {labels.title}
             </Typography>
             <Typography variant="body2" color="text.secondary">
               {labels.folder}: {folderName}
             </Typography>
           </Box>
-          <Button
-            component={RouterLink}
-            to={bulkBackToUrl}
-            variant="outlined"
-            size="small"
-            startIcon={<ArrowBackIosNewIcon fontSize="small" />}
-          >
-            {labels.backToBulk}
-          </Button>
         </Stack>
 
         {error && <Alert severity="error">{error}</Alert>}
@@ -290,27 +286,18 @@ const TiffManagerBulkInferencePage = () => {
                   variant="contained"
                   size="small"
                   startIcon={<ScienceIcon fontSize="small" />}
-                  onClick={() => void handleBatchExtract()}
-                  disabled={extracting || inferring || openingFile !== null}
+                  onClick={() => void handleBatchExtractInfer()}
+                  disabled={processingInference || openingFile !== null}
                 >
-                  {extracting ? tt("処理中...", "Processing...") : tt("ROI抽出", "ROI extraction")}
-                </Button>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<ScienceIcon fontSize="small" />}
-                  onClick={() => void handleBatchInfer()}
-                  disabled={extracting || inferring || openingFile !== null}
-                >
-                  {inferring ? tt("処理中...", "Processing...") : tt("推論", "Inference")}
+                  {processingInference ? tt("処理中...", "Processing...") : tt("ROI抽出&推論", "ROI extraction & inference")}
                 </Button>
               </Stack>
 
               {files.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">{labels.noFiles}</Typography>
               ) : (
-                <TableContainer>
-                  <Table size="small">
+                <TableContainer sx={TABLE_CONTAINER_SX}>
+                  <Table size="small" sx={buildDataTableSx(720)}>
                     <TableHead>
                       <TableRow>
                         <TableCell>{labels.file}</TableCell>
@@ -323,19 +310,27 @@ const TiffManagerBulkInferencePage = () => {
                         <TableRow hover key={file.relative_path}>
                           <TableCell sx={{ maxWidth: 420 }}>
                             <Tooltip title={file.relative_path}>
-                              <Typography noWrap>{file.relative_path}</Typography>
+                              <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
+                                {file.relative_path}
+                              </Typography>
                             </Tooltip>
                           </TableCell>
                           <TableCell align="center">
-                            <Button
-                              variant="outlined"
-                              size="small"
-                              startIcon={<ScienceIcon fontSize="small" />}
-                              onClick={() => void openDeepScan(file)}
-                              disabled={openingFile !== null || extracting || inferring}
-                            >
-                              {openingFile === file.relative_path ? tt("処理中...", "Processing...") : labels.open}
-                            </Button>
+                            {hasInferenceResult ? (
+                              <Button
+                                variant="outlined"
+                                size="small"
+                                startIcon={<ScienceIcon fontSize="small" />}
+                                onClick={() => void openDeepScan(file)}
+                                disabled={openingFile !== null || processingInference}
+                              >
+                                {openingFile === file.relative_path ? tt("処理中...", "Processing...") : labels.open}
+                              </Button>
+                            ) : (
+                              <Typography variant="body2" color="text.secondary">
+                                -
+                              </Typography>
+                            )}
                           </TableCell>
                           <TableCell align="center">
                             <Button
@@ -343,7 +338,7 @@ const TiffManagerBulkInferencePage = () => {
                               size="small"
                               startIcon={<FileDownloadIcon fontSize="small" />}
                               onClick={() => downloadFile(file)}
-                              disabled={openingFile !== null || extracting || inferring}
+                              disabled={openingFile !== null || processingInference}
                             >
                               {labels.save}
                             </Button>

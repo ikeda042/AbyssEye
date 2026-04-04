@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Box, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 import type { PaletteMode } from "@mui/material";
 import TopPage from "./TopPage";
-import RoiEntryPage from "./pages/RoiEntryPage";
 import TiffManagerBulkPage from "./pages/TiffManagerBulkPage";
 import TiffManagerBulkInferencePage from "./pages/TiffManagerBulkInferencePage";
 import TiffManagerBulkCellCountResultsPage from "./pages/TiffManagerBulkCellCountResultsPage";
@@ -11,7 +10,6 @@ import InferencePage from "./pages/InferencePage";
 import AnnotationPage from "./pages/AnnotationPage";
 import ModelManagerPage from "./pages/ModelManagerPage";
 import RealtimePage from "./pages/RealtimePage";
-import RealtimeProjectsPage from "./pages/RealtimeProjectsPage";
 import DeepScanPage from "./pages/DeepScanPage";
 import DevPage from "./pages/DevPage";
 import AppHeader from "./AppHeader";
@@ -21,6 +19,30 @@ const storageKey = "abyssEye:colorMode";
 const darkBg = "#0b1120";
 const darkPrimary = "#e5e7eb";
 const darkSecondary = "#cbd5e1";
+
+const TITLE_TEXT = {
+  fontSize: "clamp(1.55rem, 1.42rem + 0.55vw, 1.9rem)",
+  lineHeight: 1.18,
+  letterSpacing: "-0.02em",
+};
+
+const SECTION_TEXT = {
+  fontSize: "clamp(1.02rem, 0.98rem + 0.22vw, 1.16rem)",
+  lineHeight: 1.35,
+  letterSpacing: "-0.01em",
+};
+
+const BODY_TEXT = {
+  fontSize: "0.95rem",
+  lineHeight: 1.6,
+  letterSpacing: "0.004em",
+};
+
+const META_TEXT = {
+  fontSize: "0.8rem",
+  lineHeight: 1.5,
+  letterSpacing: "0.02em",
+};
 
 const createAppTheme = (mode: PaletteMode) =>
   createTheme({
@@ -42,12 +64,102 @@ const createAppTheme = (mode: PaletteMode) =>
     typography: {
       fontFamily:
         '"Manrope", "Inter", "Bricolage Grotesque", "Noto Sans JP", system-ui, -apple-system, "Segoe UI", sans-serif',
+      h4: {
+        ...TITLE_TEXT,
+        fontWeight: 600,
+      },
+      h5: {
+        ...TITLE_TEXT,
+        fontWeight: 500,
+      },
+      h6: {
+        ...SECTION_TEXT,
+        fontWeight: 500,
+      },
+      subtitle1: {
+        ...SECTION_TEXT,
+        fontWeight: 500,
+      },
+      body1: {
+        ...BODY_TEXT,
+        fontWeight: 500,
+      },
+      body2: {
+        ...BODY_TEXT,
+      },
+      subtitle2: {
+        ...META_TEXT,
+        fontWeight: 500,
+      },
+      caption: {
+        ...META_TEXT,
+      },
+      button: {
+        ...BODY_TEXT,
+        fontWeight: 500,
+        lineHeight: 1.3,
+      },
     },
     components: {
       MuiCssBaseline: {
         styleOverrides: {
           body: {
             backgroundColor: mode === "dark" ? "#0b1120" : "#f8fafc",
+          },
+        },
+      },
+      MuiPaper: {
+        styleOverrides: {
+          root: {
+            backgroundImage: "none",
+          },
+        },
+      },
+      MuiCard: {
+        styleOverrides: {
+          root: {
+            overflow: "hidden",
+          },
+        },
+      },
+      MuiButton: {
+        styleOverrides: {
+          root: {
+            textTransform: "none",
+            fontSize: BODY_TEXT.fontSize,
+            lineHeight: 1.3,
+          },
+        },
+      },
+      MuiToggleButton: {
+        styleOverrides: {
+          root: {
+            whiteSpace: "nowrap",
+          },
+        },
+      },
+      MuiTableContainer: {
+        styleOverrides: {
+          root: {
+            width: "100%",
+            overflowX: "auto",
+            overflowY: "hidden",
+          },
+        },
+      },
+      MuiTableCell: {
+        styleOverrides: {
+          root: {
+            verticalAlign: "middle",
+            overflowWrap: "anywhere",
+            fontSize: BODY_TEXT.fontSize,
+            lineHeight: BODY_TEXT.lineHeight,
+          },
+          head: {
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+            fontSize: META_TEXT.fontSize,
+            lineHeight: META_TEXT.lineHeight,
           },
         },
       },
@@ -86,6 +198,7 @@ const App = () => {
             justifyContent: "center",
             alignItems: "stretch",
             width: "100%",
+            overflowX: "hidden",
           }}
         >
           <Box
@@ -93,14 +206,14 @@ const App = () => {
               width: "min(100%, 1720px)",
               maxWidth: "100%",
               marginInline: "auto",
-              overflowX: "auto",
-              px: { xs: 1, sm: 1.5, md: 2 },
+              overflowX: "hidden",
+              px: { xs: 1.25, sm: 1.5, md: 2 },
               boxSizing: "border-box",
             }}
           >
             <Routes>
               <Route path="/" element={<TopPage />} />
-              <Route path="/roi" element={<RoiEntryPage />} />
+              <Route path="/roi" element={<Navigate to="/databases" replace />} />
               <Route path="/tiff-manager-bulk" element={<TiffManagerBulkPage />} />
               <Route path="/tiff-manager-bulk/inference" element={<TiffManagerBulkInferencePage />} />
               <Route path="/tiff-manager-bulk/cell-count-results" element={<TiffManagerBulkCellCountResultsPage />} />
@@ -108,7 +221,7 @@ const App = () => {
               <Route path="/inference" element={<InferencePage />} />
               <Route path="/annotation" element={<AnnotationPage />} />
               <Route path="/model-manager" element={<ModelManagerPage />} />
-              <Route path="/realtime/projects" element={<RealtimeProjectsPage />} />
+              <Route path="/realtime/projects" element={<Navigate to="/databases" replace />} />
               <Route path="/realtime" element={<RealtimePage />} />
               <Route path="/deepscan" element={<DeepScanPage />} />
               <Route path="/dev" element={<DevPage />} />

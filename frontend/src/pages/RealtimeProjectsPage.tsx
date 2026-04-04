@@ -7,9 +7,11 @@ import {
   Button,
   CircularProgress,
   Container,
+  FormControlLabel,
   Link,
   Paper,
   Stack,
+  Switch,
   Table,
   TableBody,
   TableCell,
@@ -27,11 +29,23 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import ScienceIcon from "@mui/icons-material/Science";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import SearchIcon from "@mui/icons-material/Search";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import DownloadIcon from "@mui/icons-material/Download";
 
 import { API_BASE_URL } from "../config";
 import { useI18n } from "../i18n";
+import { buildDataTableSx, ELLIPSIS_TEXT_SX, PAGE_CONTAINER_SX, TABLE_CONTAINER_SX } from "../ui/layout";
+import {
+  buildRealtimeWatchPowerShellFileName,
+  deleteRealtimeWatchProject,
+  getRealtimeWatchPowerShellScript,
+  listRealtimeWatchProjects,
+  saveRealtimeWatchProject,
+  type RealtimeWatchProject,
+} from "../realtimeWatch";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
+const defaultRealtimeTiffUploadEndpoint = new URL("realtime/tiff", API_BASE_URL).toString();
 const buildDeepscanStatusEndpoint = (dbName: string, tifName?: string) => {
   const url = new URL(`deepscan/status?db_name=${encodeURIComponent(dbName)}`, API_BASE_URL);
   if (tifName) {
@@ -142,6 +156,40 @@ const loadProjects = (): ProjectEntry[] => {
   }
 };
 
+const mergeProjectEntries = (
+  existingProjects: ProjectEntry[],
+  watchProjects: RealtimeWatchProject[],
+): ProjectEntry[] => {
+  const byName = new Map<string, ProjectEntry>();
+  existingProjects.forEach((project) => {
+    const normalizedName = normalizeProjectName(project.name);
+    if (!normalizedName) return;
+    byName.set(normalizedName.toLowerCase(), {
+      name: normalizedName,
+      createdAt: project.createdAt,
+    });
+  });
+
+  watchProjects.forEach((project) => {
+    const normalizedName = normalizeProjectName(project.project_name);
+    if (!normalizedName) return;
+    const createdAt =
+      Date.parse(project.created_at || "") ||
+      Date.parse(project.updated_at || "") ||
+      Date.now();
+    const key = normalizedName.toLowerCase();
+    const current = byName.get(key);
+    if (!current || createdAt < current.createdAt) {
+      byName.set(key, { name: normalizedName, createdAt });
+    }
+  });
+
+  return Array.from(byName.values()).sort((a, b) => a.createdAt - b.createdAt);
+};
+
+const watchProjectKey = (projectName: string) => normalizeProjectName(projectName).toLowerCase();
+const looksLikeWindowsPath = (value: string) => /^[a-zA-Z]:(\\|\/)/.test((value || "").trim());
+
 const cellCountKey = (dbName: string, relativePath: string) => `${dbName}||${relativePath}`;
 
 const RealtimeProjectsPage = () => {
@@ -153,10 +201,22 @@ const RealtimeProjectsPage = () => {
   const selectedProject = normalizeProjectName(searchParams.get("project") || "");
   const projectNameParam = selectedProject ? selectedProject : "";
   const [projects, setProjects] = useState<ProjectEntry[]>(() => loadProjects());
+  const [watchProjects, setWatchProjects] = useState<Record<string, RealtimeWatchProject>>({});
   const [folders, setFolders] = useState<FolderEntry[]>([]);
   const [search, setSearch] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [projectName, setProjectName] = useState("");
+  const [createWatchPath, setCreateWatchPath] = useState("");
+  const [createWatchApiUrl, setCreateWatchApiUrl] = useState(defaultRealtimeTiffUploadEndpoint);
+  const [createWatchEnabled, setCreateWatchEnabled] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [selectedWatchPath, setSelectedWatchPath] = useState("");
+  const [selectedWatchApiUrl, setSelectedWatchApiUrl] = useState(defaultRealtimeTiffUploadEndpoint);
+  const [selectedWatchEnabled, setSelectedWatchEnabled] = useState(false);
+  const [selectedWatchCommand, setSelectedWatchCommand] = useState("");
+  const [watchSaving, setWatchSaving] = useState(false);
+  const [watchError, setWatchError] = useState<string | null>(null);
+  const [watchInfo, setWatchInfo] = useState<string | null>(null);
   const [projectFiles, setProjectFiles] = useState<Record<string, string[]>>({});
   const [projectFilesLoading, setProjectFilesLoading] = useState<Record<string, boolean>>({});
   const [projectFilesError, setProjectFilesError] = useState<Record<string, string | null>>({});
@@ -211,8 +271,64 @@ const RealtimeProjectsPage = () => {
       projectClear: t("projects.clear"),
       back: t("projects.back"),
       breadcrumbHome: t("common.home"),
+      watchTitle: tt("リアルタイム監視", "Realtime watcher"),
+      watchDescription: tt(
+        "CCD 画像の転送先フォルダをここで設定すると、バックエンドが新着 TIFF を直接取り込みます。",
+        "Set the CCD transfer folder here to let the backend ingest new TIFF files directly.",
+      ),
+      watchPathLabel: tt("監視フォルダのパス", "Watch folder path"),
+      watchPathPlaceholder: tt(
+        "例: C:\\Users\\evident\\Desktop\\ABY\\aaaa",
+        "Example: C:\\Users\\evident\\Desktop\\ABY\\aaaa",
+      ),
+      watchApiUrlLabel: tt("アップロード先 API URL", "Upload API URL"),
+      watchApiUrlPlaceholder: tt(
+        "例: http://10.32.17.16:8000/api/v1/realtime/tiff",
+        "Example: http://10.32.17.16:8000/api/v1/realtime/tiff",
+      ),
+      watchEnabled: tt("このプロジェクトのリアルタイム監視を有効化", "Enable realtime watching for this project"),
+      watchSave: tt("監視設定を保存", "Save watcher settings"),
+      watchSaving: tt("保存中...", "Saving..."),
+      watchSaved: tt("監視設定を保存しました。", "Saved watcher settings."),
+      watchCreated: tt("監視設定付きでプロジェクトを作成しました。", "Created project with watcher settings."),
+      watchStatus: tt("監視状態", "Watcher status"),
+      watchStatusDisabled: tt("停止中", "Stopped"),
+      watchStatusNeedsPath: tt("監視パス待ち", "Waiting for a path"),
+      watchStatusWatching: tt("監視中", "Watching"),
+      watchStatusUploading: tt("取込中", "Importing"),
+      watchStatusWaiting: tt("書込待ち", "Waiting for write completion"),
+      watchStatusMissing: tt("パス未接続", "Path unavailable"),
+      watchStatusWindowsPath: tt("Windows側 watcher が必要", "Windows watcher required"),
+      watchStatusError: tt("エラー", "Error"),
+      watchBackendHint: tt(
+        "注意: ここで指定したパスはバックエンドから見える必要があります。Docker運用では対象フォルダをコンテナへマウントしてください。",
+        "Note: the backend must be able to access this path. In Docker deployments, mount the target folder into the container.",
+      ),
+      watchWindowsHint: tt(
+        "Windows ローカルパスを使う場合は、下の PowerShell スクリプトを確認したうえで、PowerShell ファイル (.ps1) をダウンロードして実行してください。",
+        "For a Windows local path, review the PowerShell script below, then download and run the PowerShell file (.ps1).",
+      ),
+      watchCommandTitle: tt("Windows PowerShell スクリプト", "Windows PowerShell script"),
+      watchCommandDownload: tt("PowerShell ファイルをダウンロード", "Download PowerShell file"),
+      watchCommandDownloaded: tt("PowerShell ファイルをダウンロードしました。", "Downloaded the PowerShell file."),
+      watchCommandCopy: tt("PowerShell スクリプトをコピー", "Copy PowerShell script"),
+      watchCommandCopied: tt("PowerShell スクリプトをコピーしました。", "Copied the PowerShell script."),
+      watchCommandCopyError: tt("PowerShell スクリプトのコピーに失敗しました。", "Failed to copy the PowerShell script."),
+      watchCommandDownloadError: tt("PowerShell ファイルのダウンロードに失敗しました。", "Failed to download the PowerShell file."),
+      watchCommandRunHint: tt(
+        "保存した .ps1 を PowerShell から実行してください。",
+        "Run the saved .ps1 from PowerShell.",
+      ),
+      watchCommandLocalhostHint: tt(
+        "このスクリプトに localhost が含まれている場合は、カメラ PC から到達できるバックエンドの IP またはホスト名に置き換えてください。",
+        "If this script contains localhost, replace it with a backend IP or hostname reachable from the camera PC.",
+      ),
+      watchLastUploaded: tt("最後に取り込んだファイル", "Last imported file"),
+      watchLastSeen: tt("最後に検知したファイル", "Last detected file"),
+      watchLastError: tt("最後のエラー", "Last error"),
+      watchMissingPathError: tt("監視を有効にする場合はパスを入力してください。", "Enter a path before enabling the watcher."),
       singleSplit: tt("単一画像リスト", "Single-image list"),
-      stackSplit: tt("同一視野 Z スタック", "Same-field Z-stack list"),
+      stackSplit: tt("同視野画像ファイル", "Same-field image files"),
       single: tt("単一", "Single"),
       merged: tt("マージ", "Merged"),
       type: tt("区分", "Type"),
@@ -245,7 +361,7 @@ const RealtimeProjectsPage = () => {
       class1PreviewEmpty: tt("class1 ROIはありません。", "No class1 ROI previews."),
       resultHint: tt("class1を手入力して「結果」を押してください。", "Edit class1 manually and press result."),
       total: tt("総細胞数", "Total cells"),
-      hideMergedTip: tt("マージ画像は同視野Zスタック完了後に生成されます。", "Merged image is generated after Z-stack processing."),
+      hideMergedTip: tt("マージ画像は同視野画像ファイルの処理完了後に生成されます。", "Merged image is generated after same-field image processing."),
       projectNoProjectError: t("projects.selectProjectFirst"),
       noCellCountTargets: tt("単一画像リストに対象画像がありません。", "No images available in the single-image list."),
       backToProjects: t("projects.back"),
@@ -253,6 +369,197 @@ const RealtimeProjectsPage = () => {
     }),
     [t, tt, language],
   );
+
+  const refreshWatchProjects = useCallback(async () => {
+    const remoteProjects = await listRealtimeWatchProjects();
+    const nextWatchProjects = remoteProjects.reduce<Record<string, RealtimeWatchProject>>((acc, project) => {
+      const key = watchProjectKey(project.project_name);
+      if (key) {
+        acc[key] = project;
+      }
+      return acc;
+    }, {});
+    setWatchProjects(nextWatchProjects);
+    syncProjects(mergeProjectEntries(loadProjects(), remoteProjects));
+    return nextWatchProjects;
+  }, [syncProjects]);
+
+  useEffect(() => {
+    void refreshWatchProjects().catch(() => {
+      // Watch-project loading should not block the rest of the page.
+    });
+  }, [refreshWatchProjects]);
+
+  const selectedWatchProject = useMemo(
+    () => (projectNameParam ? watchProjects[watchProjectKey(projectNameParam)] ?? null : null),
+    [projectNameParam, watchProjects],
+  );
+  const selectedWatchPathValue = selectedWatchPath || selectedWatchProject?.watch_path || "";
+  const selectedWatchUsesWindowsAgent = useMemo(
+    () => looksLikeWindowsPath(selectedWatchPathValue),
+    [selectedWatchPathValue],
+  );
+  const selectedWatchHasPath = useMemo(
+    () => Boolean(selectedWatchPathValue.trim()),
+    [selectedWatchPathValue],
+  );
+  const selectedWatchCommandHasLocalhost = useMemo(
+    () => /localhost|127\.0\.0\.1/i.test(selectedWatchCommand),
+    [selectedWatchCommand],
+  );
+
+  useEffect(() => {
+    if (!projectNameParam) {
+      setSelectedWatchPath("");
+      setSelectedWatchApiUrl(defaultRealtimeTiffUploadEndpoint);
+      setSelectedWatchEnabled(false);
+      setSelectedWatchCommand("");
+      setWatchError(null);
+      setWatchInfo(null);
+      return;
+    }
+    setWatchError(null);
+    setWatchInfo(null);
+  }, [projectNameParam]);
+
+  useEffect(() => {
+    if (!projectNameParam) return;
+    setSelectedWatchPath(selectedWatchProject?.watch_path ?? "");
+    setSelectedWatchApiUrl(selectedWatchProject?.api_url ?? defaultRealtimeTiffUploadEndpoint);
+    setSelectedWatchEnabled(Boolean(selectedWatchProject?.enabled));
+  }, [projectNameParam, selectedWatchProject?.api_url, selectedWatchProject?.enabled, selectedWatchProject?.watch_path]);
+
+  useEffect(() => {
+    if (!projectNameParam || !selectedWatchProject?.watch_path) {
+      setSelectedWatchCommand("");
+      return;
+    }
+    let cancelled = false;
+    void getRealtimeWatchPowerShellScript(projectNameParam)
+      .then((script) => {
+        if (!cancelled) {
+          setSelectedWatchCommand(script);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSelectedWatchCommand("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectNameParam, selectedWatchProject?.watch_path, selectedWatchProject?.updated_at]);
+
+  const formatWatchTimestamp = useCallback(
+    (value: string | null | undefined) => {
+      if (!value) return "-";
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) return value;
+      return parsed.toLocaleString(language === "ja" ? "ja-JP" : "en-US", { hour12: false });
+    },
+    [language],
+  );
+
+  const describeWatchStatus = useCallback(
+    (project: RealtimeWatchProject | null) => {
+      if (!project) return labels.watchStatusNeedsPath;
+      switch (project.status) {
+        case "disabled":
+          return labels.watchStatusDisabled;
+        case "needs_path":
+          return labels.watchStatusNeedsPath;
+        case "watching":
+          return labels.watchStatusWatching;
+        case "uploading":
+          return labels.watchStatusUploading;
+        case "waiting_for_file":
+          return labels.watchStatusWaiting;
+        case "path_missing":
+          return labels.watchStatusMissing;
+        case "windows_path_unavailable":
+          return labels.watchStatusWindowsPath;
+        case "error":
+          return labels.watchStatusError;
+        default:
+          return project.status || labels.watchStatusDisabled;
+      }
+    },
+    [
+      labels.watchStatusDisabled,
+      labels.watchStatusError,
+      labels.watchStatusMissing,
+      labels.watchStatusNeedsPath,
+      labels.watchStatusUploading,
+      labels.watchStatusWaiting,
+      labels.watchStatusWindowsPath,
+      labels.watchStatusWatching,
+    ],
+  );
+
+  const copyText = useCallback(async (value: string) => {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    if (!copied) {
+      throw new Error("copy_failed");
+    }
+  }, []);
+
+  const downloadTextFile = useCallback((filename: string, content: string) => {
+    const bomPrefixed = `\uFEFF${content}`;
+    const blob = new Blob([bomPrefixed], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleDownloadWatchScript = useCallback(async () => {
+    if (!projectNameParam) return;
+    try {
+      const script = await getRealtimeWatchPowerShellScript(projectNameParam);
+      downloadTextFile(buildRealtimeWatchPowerShellFileName(projectNameParam), script);
+      setSelectedWatchCommand(script);
+      setWatchError(null);
+      setWatchInfo(labels.watchCommandDownloaded);
+    } catch {
+      setWatchInfo(null);
+      setWatchError(labels.watchCommandDownloadError);
+    }
+  }, [
+    downloadTextFile,
+    labels.watchCommandDownloadError,
+    labels.watchCommandDownloaded,
+    projectNameParam,
+  ]);
+
+  const handleCopyWatchCommand = useCallback(async () => {
+    if (!projectNameParam) return;
+    try {
+      const script = await getRealtimeWatchPowerShellScript(projectNameParam);
+      await copyText(script);
+      setSelectedWatchCommand(script);
+      setWatchError(null);
+      setWatchInfo(labels.watchCommandCopied);
+    } catch {
+      setWatchInfo(null);
+      setWatchError(labels.watchCommandCopyError);
+    }
+  }, [copyText, labels.watchCommandCopied, labels.watchCommandCopyError, projectNameParam]);
 
   const scopedFolderName = useCallback(
     (folderName: string) => {
@@ -298,24 +605,83 @@ const RealtimeProjectsPage = () => {
     setCellCountDone(false);
   };
 
-  const createProject = () => {
+  const createProject = async () => {
     const name = normalizeProjectName(projectName);
     if (!name) {
       setError(labels.projectCreateError);
+      return;
+    }
+    if (createWatchEnabled && !createWatchPath.trim()) {
+      setError(labels.watchMissingPathError);
       return;
     }
     if (projects.some((project) => project.name.toLowerCase() === name.toLowerCase())) {
       setError(labels.projectAlreadyExists);
       return;
     }
-    const next = [...projects, { name, createdAt: Date.now() }];
-    syncProjects(next);
-    setProjectName("");
-    setProjectSearch("");
-    setError(null);
-    setInfo(labels.projectCreated.replace("{name}", name));
-    handleOpenProject(name);
+    setCreatingProject(true);
+    try {
+      const next = [...projects, { name, createdAt: Date.now() }];
+      syncProjects(next);
+      const savedWatchProject = await saveRealtimeWatchProject(name, {
+        watch_path: createWatchPath.trim() || null,
+        api_url: createWatchApiUrl.trim() || null,
+        enabled: createWatchEnabled,
+        poll_interval_seconds: 1,
+      });
+      setWatchProjects((prev) => ({
+        ...prev,
+        [watchProjectKey(savedWatchProject.project_name)]: savedWatchProject,
+      }));
+      setProjectName("");
+      setProjectSearch("");
+      setCreateWatchPath("");
+      setCreateWatchApiUrl(defaultRealtimeTiffUploadEndpoint);
+      setCreateWatchEnabled(false);
+      setError(null);
+      setInfo(
+        `${labels.projectCreated.replace("{name}", name)}${
+          savedWatchProject.watch_path ? ` / ${labels.watchCreated}` : ""
+        }`,
+      );
+      handleOpenProject(name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : labels.projectCreateError);
+    } finally {
+      setCreatingProject(false);
+    }
   };
+
+  const handleSaveWatchSettings = useCallback(
+    async (name: string, watchPath: string, enabled: boolean) => {
+      if (enabled && !watchPath.trim()) {
+        setWatchError(labels.watchMissingPathError);
+        return;
+      }
+      setWatchSaving(true);
+      setWatchError(null);
+      setWatchInfo(null);
+      try {
+        const saved = await saveRealtimeWatchProject(name, {
+          watch_path: watchPath.trim() || null,
+          api_url: selectedWatchApiUrl.trim() || null,
+          enabled,
+          poll_interval_seconds: 1,
+        });
+        setWatchProjects((prev) => ({
+          ...prev,
+          [watchProjectKey(saved.project_name)]: saved,
+        }));
+        syncProjects(mergeProjectEntries(loadProjects(), [saved]));
+        setWatchInfo(labels.watchSaved);
+      } catch (err) {
+        setWatchError(err instanceof Error ? err.message : labels.watchMissingPathError);
+      } finally {
+        setWatchSaving(false);
+      }
+    },
+    [labels.watchMissingPathError, labels.watchSaved, selectedWatchApiUrl, syncProjects],
+  );
 
   const handleDeleteProject = useCallback(
     async (rawName: string) => {
@@ -337,8 +703,17 @@ const RealtimeProjectsPage = () => {
         if (!response.ok || !payload.deleted_project) {
           throw new Error(payload.detail || t("projects.deleteError"));
         }
-        syncProjects(projects.filter((project) => project.name !== payload.deleted_project));
-        if (projectNameParam === payload.deleted_project) {
+        const deletedProject = payload.deleted_project;
+        await deleteRealtimeWatchProject(deletedProject).catch(() => {
+          // Realtime watcher settings are best-effort to delete.
+        });
+        setWatchProjects((prev) => {
+          const next = { ...prev };
+          delete next[watchProjectKey(deletedProject)];
+          return next;
+        });
+        syncProjects(projects.filter((project) => project.name !== deletedProject));
+        if (projectNameParam === deletedProject) {
           setSearchParams({});
           setFolders([]);
           setProjectFiles({});
@@ -350,7 +725,7 @@ const RealtimeProjectsPage = () => {
           setFinalCellCount(null);
           setCellCountDone(false);
         }
-        setInfo(labels.projectDeleteSuccess.replace("{name}", payload.deleted_project));
+        setInfo(labels.projectDeleteSuccess.replace("{name}", deletedProject));
       } catch (err) {
         setError(err instanceof Error ? err.message : t("projects.deleteError"));
       } finally {
@@ -793,7 +1168,7 @@ const RealtimeProjectsPage = () => {
 
   if (!projectNameParam) {
     return (
-      <Container maxWidth={false} sx={{ py: 3, px: { xs: 2, sm: 3, md: 4 } }}>
+      <Container maxWidth={false} sx={PAGE_CONTAINER_SX}>
         <Stack spacing={2}>
           <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
             <Link underline="hover" color="inherit" href="/">
@@ -805,7 +1180,7 @@ const RealtimeProjectsPage = () => {
           </Breadcrumbs>
 
           <Box>
-            <Typography variant="h5" fontWeight={600}>
+            <Typography variant="h5" fontWeight={500}>
               {labels.projectTitle}
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -823,17 +1198,52 @@ const RealtimeProjectsPage = () => {
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     event.preventDefault();
-                    createProject();
+                    void createProject();
                   }
                 }}
                 sx={{ maxWidth: 520 }}
               />
+              <TextField
+                size="small"
+                label={labels.watchPathLabel}
+                placeholder={labels.watchPathPlaceholder}
+                value={createWatchPath}
+                onChange={(event) => setCreateWatchPath(event.target.value)}
+                sx={{ maxWidth: 760 }}
+              />
+              <TextField
+                size="small"
+                label={labels.watchApiUrlLabel}
+                placeholder={labels.watchApiUrlPlaceholder}
+                value={createWatchApiUrl}
+                onChange={(event) => setCreateWatchApiUrl(event.target.value)}
+                sx={{ maxWidth: 760 }}
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={createWatchEnabled}
+                    onChange={(_event, checked) => setCreateWatchEnabled(checked)}
+                  />
+                }
+                label={labels.watchEnabled}
+              />
+              <Typography variant="body2" color="text.secondary">
+                {labels.watchDescription}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {labels.watchBackendHint}
+              </Typography>
               <Button
                 variant="contained"
-                onClick={createProject}
-                disabled={!normalizeProjectName(projectName)}
+                onClick={() => void createProject()}
+                disabled={
+                  creatingProject ||
+                  !normalizeProjectName(projectName) ||
+                  (createWatchEnabled && !createWatchPath.trim())
+                }
               >
-                {labels.createProject}
+                {creatingProject ? labels.watchSaving : labels.createProject}
               </Button>
             </Stack>
           </Paper>
@@ -872,7 +1282,7 @@ const RealtimeProjectsPage = () => {
 
             {filteredProjects.length === 0 ? (
               <Box textAlign="center" py={6}>
-                <Typography variant="h6" fontWeight={600}>
+                <Typography variant="h6" fontWeight={500}>
                   {projectSearch.trim() ? t("projects.emptySearch") : labels.projectEmpty}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
@@ -880,8 +1290,8 @@ const RealtimeProjectsPage = () => {
                 </Typography>
               </Box>
             ) : (
-              <TableContainer>
-                <Table size="small">
+              <TableContainer sx={TABLE_CONTAINER_SX}>
+                <Table size="small" sx={buildDataTableSx(820)}>
                   <TableHead>
                     <TableRow>
                       <TableCell>{t("projects.table.name")}</TableCell>
@@ -895,7 +1305,9 @@ const RealtimeProjectsPage = () => {
                       <TableRow key={project.name} hover>
                         <TableCell>
                           <Tooltip title={project.name}>
-                            <Typography noWrap>{project.name}</Typography>
+                            <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
+                              {project.name}
+                            </Typography>
                           </Tooltip>
                         </TableCell>
                         <TableCell align="right">
@@ -933,7 +1345,7 @@ const RealtimeProjectsPage = () => {
   }
 
   return (
-    <Container maxWidth={false} sx={{ py: 3, px: { xs: 2, sm: 3, md: 4 } }}>
+    <Container maxWidth={false} sx={PAGE_CONTAINER_SX}>
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
@@ -949,7 +1361,7 @@ const RealtimeProjectsPage = () => {
 
         <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" alignItems={{ xs: "flex-start", md: "center" }} spacing={1}>
           <Box>
-            <Typography variant="h5" fontWeight={700}>
+            <Typography variant="h5" fontWeight={600}>
               {labels.breadcrumb}
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -965,6 +1377,127 @@ const RealtimeProjectsPage = () => {
             {labels.backToProjects}
           </Button>
         </Stack>
+
+        <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 } }}>
+          <Stack spacing={1.5}>
+            <Typography variant="h6" fontWeight={600}>
+              {labels.watchTitle}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {labels.watchDescription}
+            </Typography>
+            {watchError && <Alert severity="error">{watchError}</Alert>}
+            {watchInfo && <Alert severity="success">{watchInfo}</Alert>}
+            <TextField
+              size="small"
+              label={labels.watchPathLabel}
+              placeholder={labels.watchPathPlaceholder}
+              value={selectedWatchPath}
+              onChange={(event) => setSelectedWatchPath(event.target.value)}
+              fullWidth
+            />
+            <TextField
+              size="small"
+              label={labels.watchApiUrlLabel}
+              placeholder={labels.watchApiUrlPlaceholder}
+              value={selectedWatchApiUrl}
+              onChange={(event) => setSelectedWatchApiUrl(event.target.value)}
+              fullWidth
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={selectedWatchEnabled}
+                  onChange={(_event, checked) => setSelectedWatchEnabled(checked)}
+                />
+              }
+              label={labels.watchEnabled}
+            />
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} alignItems={{ xs: "stretch", sm: "center" }}>
+              <Button
+                variant="contained"
+                onClick={() => void handleSaveWatchSettings(projectNameParam, selectedWatchPath, selectedWatchEnabled)}
+                disabled={watchSaving || (selectedWatchEnabled && !selectedWatchPath.trim())}
+              >
+                {watchSaving ? labels.watchSaving : labels.watchSave}
+              </Button>
+              <Typography variant="body2" color="text.secondary">
+                {labels.watchStatus}: {describeWatchStatus(selectedWatchProject)}
+              </Typography>
+            </Stack>
+            {selectedWatchProject?.note ? (
+              <Typography variant="body2" color="text.secondary">
+                {selectedWatchProject.note}
+              </Typography>
+            ) : null}
+            {selectedWatchUsesWindowsAgent ? (
+              <Alert severity="info">
+                {labels.watchWindowsHint}
+              </Alert>
+            ) : null}
+            <Typography variant="caption" color="text.secondary">
+              {labels.watchBackendHint}
+            </Typography>
+            {selectedWatchHasPath && selectedWatchCommand ? (
+              <Stack spacing={1}>
+                <Typography variant="subtitle2" fontWeight={500}>
+                  {labels.watchCommandTitle}
+                </Typography>
+                <TextField
+                  value={selectedWatchCommand}
+                  size="small"
+                  fullWidth
+                  multiline
+                  minRows={16}
+                  slotProps={{ input: { readOnly: true } }}
+                />
+                {selectedWatchCommandHasLocalhost ? (
+                  <Alert severity="warning">
+                    {labels.watchCommandLocalhostHint}
+                  </Alert>
+                ) : null}
+                <Typography variant="caption" color="text.secondary">
+                  {labels.watchCommandRunHint}
+                </Typography>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ alignSelf: "flex-start" }}>
+                  <Button
+                    variant="contained"
+                    startIcon={<DownloadIcon />}
+                    onClick={() => void handleDownloadWatchScript()}
+                  >
+                    {labels.watchCommandDownload}
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    startIcon={<ContentCopyIcon />}
+                    onClick={() => void handleCopyWatchCommand()}
+                  >
+                    {labels.watchCommandCopy}
+                  </Button>
+                </Stack>
+              </Stack>
+            ) : null}
+            {(selectedWatchProject?.last_uploaded_file || selectedWatchProject?.last_seen_file || selectedWatchProject?.last_error) ? (
+              <Stack spacing={0.5}>
+                {selectedWatchProject.last_uploaded_file ? (
+                  <Typography variant="body2">
+                    {labels.watchLastUploaded}: {selectedWatchProject.last_uploaded_file} ({formatWatchTimestamp(selectedWatchProject.last_uploaded_at)})
+                  </Typography>
+                ) : null}
+                {selectedWatchProject.last_seen_file ? (
+                  <Typography variant="body2" color="text.secondary">
+                    {labels.watchLastSeen}: {selectedWatchProject.last_seen_file}
+                  </Typography>
+                ) : null}
+                {selectedWatchProject.last_error ? (
+                  <Typography variant="body2" color="error.main">
+                    {labels.watchLastError}: {selectedWatchProject.last_error}
+                  </Typography>
+                ) : null}
+              </Stack>
+            ) : null}
+          </Stack>
+        </Paper>
 
         <TextField
           size="small"
@@ -988,7 +1521,7 @@ const RealtimeProjectsPage = () => {
           <Paper variant="outlined" sx={{ p: 2 }}>
             <Stack spacing={2}>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} justifyContent="space-between" alignItems={{ xs: "flex-start", sm: "center" }}>
-                <Typography variant="h6" fontWeight={700}>
+                <Typography variant="h6" fontWeight={600}>
                   {labels.singleSplit}
                 </Typography>
                 <Button variant="contained" size="small" onClick={() => void runCellCount()} disabled={cellCountRunning || filteredSingleItems.length === 0}>
@@ -1004,8 +1537,8 @@ const RealtimeProjectsPage = () => {
                 </Stack>
               )}
 
-              <TableContainer>
-                <Table size="small">
+              <TableContainer sx={TABLE_CONTAINER_SX}>
+                <Table size="small" sx={buildDataTableSx(920)}>
                   <TableHead>
                     <TableRow>
                       <TableCell>{labels.folder}</TableCell>
@@ -1030,7 +1563,9 @@ const RealtimeProjectsPage = () => {
                           <TableRow key={item.key} hover>
                             <TableCell>
                               <Tooltip title={item.folderName}>
-                                <Typography noWrap>{item.scopedFolderName}</Typography>
+                                <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
+                                  {item.scopedFolderName}
+                                </Typography>
                               </Tooltip>
                             </TableCell>
                             <TableCell>{item.isMerged ? labels.merged : labels.single}</TableCell>
@@ -1066,7 +1601,7 @@ const RealtimeProjectsPage = () => {
               </TableContainer>
 
               <Box>
-                <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
+                <Typography variant="subtitle2" fontWeight={500} sx={{ mb: 1 }}>
                   {labels.result}
                 </Typography>
                 {!cellCountDone ? (
@@ -1075,8 +1610,8 @@ const RealtimeProjectsPage = () => {
                   </Typography>
                 ) : (
                   <Stack spacing={2}>
-                    <TableContainer>
-                      <Table size="small">
+                    <TableContainer sx={TABLE_CONTAINER_SX}>
+                      <Table size="small" sx={buildDataTableSx(760)}>
                         <TableHead>
                           <TableRow>
                             <TableCell>{labels.files}</TableCell>
@@ -1093,7 +1628,9 @@ const RealtimeProjectsPage = () => {
                             return (
                               <TableRow key={key}>
                                 <TableCell>
-                                  <Typography noWrap>{row.item.scopedFolderName}</Typography>
+                                  <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
+                                    {row.item.scopedFolderName}
+                                  </Typography>
                                   <Typography variant="caption" color="text.secondary">
                                     {row.item.displayName}
                                   </Typography>
@@ -1119,7 +1656,7 @@ const RealtimeProjectsPage = () => {
                     </TableContainer>
 
                     <Box>
-                      <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
+                      <Typography variant="subtitle2" fontWeight={500} sx={{ mb: 1 }}>
                         {labels.class1Previews}
                       </Typography>
                       {class1PreviewGroups.length === 0 ? (
@@ -1146,7 +1683,7 @@ const RealtimeProjectsPage = () => {
                                 sx={{ mb: 1 }}
                               >
                                 <Box>
-                                  <Typography variant="body2" fontWeight={600}>
+                                  <Typography variant="body2" fontWeight={500}>
                                     {group.folderName}
                                   </Typography>
                                   <Typography variant="caption" color="text.secondary">
@@ -1191,7 +1728,7 @@ const RealtimeProjectsPage = () => {
                       <Button variant="contained" size="small" onClick={calculateFinal}>
                         {labels.result}
                       </Button>
-                      {finalCellCount === null ? null : <Typography fontWeight={700}>{labels.total}: {finalCellCount}</Typography>}
+                      {finalCellCount === null ? null : <Typography fontWeight={600}>{labels.total}: {finalCellCount}</Typography>}
                     </Stack>
                   </Stack>
                 )}
@@ -1201,7 +1738,7 @@ const RealtimeProjectsPage = () => {
 
           <Paper variant="outlined" sx={{ p: 2 }}>
             <Stack spacing={2}>
-              <Typography variant="h6" fontWeight={700}>
+              <Typography variant="h6" fontWeight={600}>
                 {labels.stackSplit}
               </Typography>
               <Typography variant="body2" color="text.secondary">
@@ -1216,8 +1753,8 @@ const RealtimeProjectsPage = () => {
                   {labels.noItems}
                 </Typography>
               ) : (
-                <TableContainer>
-                  <Table size="small">
+                <TableContainer sx={TABLE_CONTAINER_SX}>
+                  <Table size="small" sx={buildDataTableSx(980)}>
                     <TableHead>
                       <TableRow>
                         <TableCell>{labels.folder}</TableCell>
@@ -1237,7 +1774,9 @@ const RealtimeProjectsPage = () => {
                           <TableRow key={folder.name} hover>
                             <TableCell sx={{ verticalAlign: "top", maxWidth: 220 }}>
                               <Tooltip title={folder.name}>
-                                <Typography noWrap>{scopedFolderName(folder.name)}</Typography>
+                                <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
+                                  {scopedFolderName(folder.name)}
+                                </Typography>
                               </Tooltip>
                               <Typography variant="caption" color="text.secondary">
                                 {folder.has_focus_merged ? tt("単一画像リストへ追加済み", "Added to single-image list") : labels.noFileInfo}
@@ -1275,7 +1814,9 @@ const RealtimeProjectsPage = () => {
                                           onClick={() => openDeepScan(`${folder.name}_bulk.db`, file)}
                                           sx={{ justifyContent: "flex-start", flex: 1, minWidth: 0 }}
                                         >
-                                          <Typography noWrap>{file}</Typography>
+                                          <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
+                                            {file}
+                                          </Typography>
                                         </Button>
                                         <IconButton
                                           size="small"

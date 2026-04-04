@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import type React from "react";
 import { keyframes } from "@emotion/react";
-import { useSearchParams } from "react-router-dom";
+import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -10,6 +10,11 @@ import {
   CardContent,
   CircularProgress,
   Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Link,
   Button,
   ToggleButton,
@@ -22,10 +27,19 @@ import {
   ThemeProvider,
   createTheme,
 } from "@mui/material";
+import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
+import DownloadIcon from "@mui/icons-material/Download";
 import { useTheme } from "@mui/material/styles";
 import { API_BASE_URL } from "../config";
 import { getInferenceClassDescription } from "../constants/inference";
 import { useI18n } from "../i18n";
+import { PAGE_CONTAINER_SX } from "../ui/layout";
+import {
+  buildRealtimeWatchPowerShellFileName,
+  getRealtimeWatchProject,
+  getRealtimeWatchPowerShellScript,
+  saveRealtimeWatchProject,
+} from "../realtimeWatch";
 
 type Inference = {
   predicted_class: number;
@@ -58,6 +72,9 @@ type RealtimeStatus = {
   tif_url: string;
   tif_png_url?: string;
   db_name?: string;
+  queue_position?: number;
+  queue_total?: number;
+  pending_count?: number;
   inference: Inference;
   rois?: RealtimeROI[];
 };
@@ -72,6 +89,7 @@ const formatSequenceNumber = (value: number) => String(Math.max(1, value)).padSt
 const statusEndpoint = new URL("realtime/latest", API_BASE_URL).toString();
 const statusStreamEndpoint = new URL("realtime/stream", API_BASE_URL).toString();
 const useCurrentEndpoint = new URL("realtime/use-current", API_BASE_URL).toString();
+const discardCurrentEndpoint = new URL("realtime/discard-current", API_BASE_URL).toString();
 const buildManualLabelEndpoint = (dbName: string, recordId: number) =>
   new URL(`databases/${encodeURIComponent(dbName)}/records/${recordId}/manual-label`, API_BASE_URL).toString();
 const buildManualRoiAddEndpoint = (dbName: string) =>
@@ -312,7 +330,7 @@ const RealtimePage = () => {
     [outerTheme],
   );
   const { t, language } = useI18n();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const selectedProject = normalizeProjectName(searchParams.get("project") || "");
   const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
   const labels = useMemo(
@@ -322,6 +340,13 @@ const RealtimePage = () => {
       copyFailed: tt("保存に失敗しました。", "Failed to save."),
       copyDone: (tif: string, db: string) =>
         tt(`保存完了: TIFF ${tif} / DB ${db}`, `Saved: TIFF ${tif} / DB ${db}`),
+      discardFailed: tt("破棄に失敗しました。", "Failed to discard."),
+      discardDone: tt("破棄しました。次の画像を表示します。", "Discarded. Showing the next image."),
+      discardDoneLast: tt("破棄しました。待機中の画像はありません。", "Discarded. No queued images remain."),
+      discardConfirm: tt("この画像を破棄しますか？", "Discard this image?"),
+      discardConfirmTitle: tt("画像を破棄", "Discard image"),
+      discardConfirmCancel: tt("キャンセル", "Cancel"),
+      discardConfirmAccept: tt("はい", "Yes"),
       tiffDisplayMode: tt("TIFF表示モード", "TIFF display mode"),
       frameBasis: tt("フレーム基準", "Frame label"),
       frameLabelManual: tt("Manual優先（無ければAI）", "Manual first (fallback to AI)"),
@@ -338,18 +363,19 @@ const RealtimePage = () => {
       deepScan: "Deep Scan",
       saveData: tt("保存", "Save"),
       saveInProgress: tt("保存中...", "Saving..."),
-      stackMode: tt("同視野 Z スタック保存", "Save as same-view Z stack"),
+      stackMode: tt("同視野画像ファイルとして保存", "Save as same-field image files"),
       stackModeHint: tt(
-        "同視野Zスタックでは同じ視野のZ軸ずらし画像を同一フォルダ/同一DBに保存します。",
-        "Same-view Z stack mode stores all images from one field in the same folder/DB.",
+        "同視野画像ファイルでは、同じ視野の複数画像を同一フォルダ/同一DBに保存します。",
+        "Same-field image file mode stores images from one field in the same folder/DB.",
       ),
       restoredImage: tt(
         "保存に失敗したため、1つ前の画像に戻しました。",
         "Save failed. Restored to the previous image.",
       ),
-      latestTiff: tt("最新 TIFF", "Latest TIFF"),
+      latestTiff: tt("現在の TIFF", "Current TIFF"),
       savedAt: tt("保存時刻", "Saved at"),
       size: tt("サイズ", "Size"),
+      waitingCount: tt("待機中", "Queued"),
       deepScanSummary: tt("Deep Scan 概要", "Deep Scan summary"),
       others: tt("その他", "Others"),
       selectedRoi: tt("選択 ROI", "Selected ROI"),
@@ -376,6 +402,40 @@ const RealtimePage = () => {
       sampleName: tt("サンプル名", "Sample name"),
       projectName: tt("プロジェクト", "Project"),
       projectSelectFirst: t("projects.selectProjectFirst"),
+      watchPathLabel: tt("監視フォルダのパス", "Watch folder path"),
+      watchPathPlaceholder: tt(
+        "例: C:\\Users\\evident\\Desktop\\ABY\\aaaa",
+        "Example: C:\\Users\\evident\\Desktop\\ABY\\aaaa",
+      ),
+      watchApiUrlLabel: tt("アップロード先 API URL", "Upload API URL"),
+      watchApiUrlPlaceholder: tt(
+        "例: http://10.32.17.16:8000/api/v1/realtime/tiff",
+        "Example: http://10.32.17.16:8000/api/v1/realtime/tiff",
+      ),
+      watchEnabled: tt("このプロジェクトのリアルタイム監視を有効化", "Enable realtime watching for this project"),
+      watchHint: tt(
+        "ここで設定したフォルダをバックエンドが直接監視します。Docker運用では対象フォルダのマウントが必要です。",
+        "The backend watches this folder directly. In Docker deployments, mount the target folder into the container.",
+      ),
+      watchMissingPathError: tt("監視を有効にする場合はパスを入力してください。", "Enter a path before enabling the watcher."),
+      watchCommandReadyHint: tt(
+        "監視フォルダのパスを入力して、PowerShell ファイル (.ps1) をダウンロードしてください。",
+        "Enter the watch folder path, then download the PowerShell script file (.ps1).",
+      ),
+      watchCreateAndCopy: tt(
+        "PowerShell ファイルをダウンロード",
+        "Download PowerShell file",
+      ),
+      watchCommandCopied: tt(
+        "PowerShell ファイル (.ps1) をダウンロードしました。PowerShell で実行してください。",
+        "Downloaded the PowerShell file (.ps1). Run it from PowerShell.",
+      ),
+      watchCreateFailed: tt(
+        "プロジェクト作成または PowerShell ファイルの準備に失敗しました。",
+        "Failed to create the project or prepare the PowerShell file.",
+      ),
+      discardData: tt("破棄", "Discard"),
+      discardInProgress: tt("破棄中...", "Discarding..."),
     }),
     [language, t, tt],
   );
@@ -414,6 +474,8 @@ const RealtimePage = () => {
   const [selectedOverlayRoiSrc, setSelectedOverlayRoiSrc] = useState<string | null>(null);
   const [selectedOverlayRoiMeta, setSelectedOverlayRoiMeta] = useState<RealtimeROI | null>(null);
   const [usingCurrent, setUsingCurrent] = useState(false);
+  const [discardingCurrent, setDiscardingCurrent] = useState(false);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [useCurrentMessage, setUseCurrentMessage] = useState<string | null>(null);
   const [useCurrentError, setUseCurrentError] = useState<string | null>(null);
   const [manualLabelSaving, setManualLabelSaving] = useState(false);
@@ -425,7 +487,10 @@ const RealtimePage = () => {
   const [draggingRoiId, setDraggingRoiId] = useState<number | null>(null);
   const [dragOverClass, setDragOverClass] = useState<number | null>(null);
   const [sampleName, setSampleName] = useState("");
-  const [projectName, setProjectName] = useState("");
+  const [projectWatchPath, setProjectWatchPath] = useState("");
+  const [projectSetupPending, setProjectSetupPending] = useState(false);
+  const [projectSetupMessage, setProjectSetupMessage] = useState<string | null>(null);
+  const [projectSetupError, setProjectSetupError] = useState<string | null>(null);
   const [stackMode, setStackMode] = useState(false);
   const [sampleNameEdited, setSampleNameEdited] = useState(false);
   const [counters, setCounters] = useState<RealtimeCounters>(getDefaultRealtimeCounters());
@@ -571,6 +636,11 @@ const RealtimePage = () => {
         const response = await fetch(statusEndpoint, { headers: { Accept: "application/json" }, cache: "no-store" });
         if (!response.ok) {
           const detail = (await response.json().catch(() => null))?.detail;
+          if (response.status === 404) {
+            setStatus(null);
+            setError(null);
+            return;
+          }
           throw new Error(detail || labels.fetchFailed);
         }
         const json = (await response.json()) as RealtimeStatus;
@@ -584,8 +654,11 @@ const RealtimePage = () => {
           .map((roi) => `${roi.roi_id}:${roi.predicted_class}:${roi.manual_label ?? ""}:${Number(Boolean(roi.manual_added))}`)
           .join("|");
         const roisChanged = prevSignature !== nextSignature;
+        const queueChanged =
+          (prev?.pending_count ?? 0) !== (json.pending_count ?? 0) ||
+          (prev?.queue_total ?? 1) !== (json.queue_total ?? 1);
 
-        if (isNewTif || roisChanged) {
+        if (isNewTif || roisChanged || queueChanged) {
           setStatus(json);
           setError(null);
         }
@@ -604,6 +677,19 @@ const RealtimePage = () => {
     latestStatusRef.current = status;
   }, [status]);
 
+  const downloadTextFile = useCallback((filename: string, content: string) => {
+    const bomPrefixed = `\uFEFF${content}`;
+    const blob = new Blob([bomPrefixed], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }, []);
+
   useEffect(() => {
     recomputeImageLayout();
   }, [recomputeImageLayout, imageNaturalSize, renderedTifSrc, status, tifDisplayMode]);
@@ -612,6 +698,30 @@ const RealtimePage = () => {
     const handleResize = () => recomputeImageLayout();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
+  }, [recomputeImageLayout]);
+
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    const container = imageContainerRef.current;
+    if (!container) return;
+
+    let frameId = 0;
+    const observer = new ResizeObserver(() => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      frameId = window.requestAnimationFrame(() => {
+        recomputeImageLayout();
+      });
+    });
+
+    observer.observe(container);
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      observer.disconnect();
+    };
   }, [recomputeImageLayout]);
 
   useEffect(() => {
@@ -777,22 +887,72 @@ const RealtimePage = () => {
     };
   }, [fetchStatus]);
 
-  const createProject = useCallback(() => {
-    const normalizedProject = normalizeProjectName(projectName);
-    if (!normalizedProject) {
-      setError(t("projects.createError"));
-      return;
-    }
-    upsertProject(normalizedProject);
-    setError(null);
-    setSearchParams({ project: normalizedProject }, { replace: false });
-    setProjectName("");
-  }, [projectName, setSearchParams, t]);
-
   useEffect(() => {
     if (!activeProject) return;
     upsertProject(activeProject);
   }, [activeProject]);
+
+  useEffect(() => {
+    if (!activeProject) {
+      setProjectWatchPath("");
+      setProjectSetupError(null);
+      setProjectSetupMessage(null);
+      return;
+    }
+    setProjectSetupError(null);
+    let cancelled = false;
+    void getRealtimeWatchProject(activeProject)
+      .then((project) => {
+        if (!cancelled) {
+          setProjectWatchPath(project?.watch_path ?? "");
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setProjectSetupError(err instanceof Error ? err.message : labels.watchCreateFailed);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProject, labels.watchCreateFailed]);
+
+  const handleDownloadWatchScript = useCallback(async () => {
+    if (!activeProject) {
+      setProjectSetupError(labels.projectSelectFirst);
+      return;
+    }
+    if (!projectWatchPath.trim()) {
+      setProjectSetupError(labels.watchMissingPathError);
+      return;
+    }
+    setProjectSetupPending(true);
+    setProjectSetupError(null);
+    setProjectSetupMessage(null);
+    try {
+      await saveRealtimeWatchProject(activeProject, {
+        watch_path: projectWatchPath.trim(),
+        api_url: null,
+        enabled: true,
+        poll_interval_seconds: 1,
+      });
+      const script = await getRealtimeWatchPowerShellScript(activeProject);
+      downloadTextFile(buildRealtimeWatchPowerShellFileName(activeProject), script);
+      setProjectSetupMessage(labels.watchCommandCopied);
+    } catch (err) {
+      setProjectSetupError(err instanceof Error ? err.message : labels.watchCreateFailed);
+    } finally {
+      setProjectSetupPending(false);
+    }
+  }, [
+    activeProject,
+    downloadTextFile,
+    labels.projectSelectFirst,
+    labels.watchCommandCopied,
+    labels.watchCreateFailed,
+    labels.watchMissingPathError,
+    projectWatchPath,
+  ]);
 
   const handleUseCurrent = useCallback(async () => {
     if (!status) return;
@@ -872,6 +1032,7 @@ const RealtimePage = () => {
         };
       });
       previousStatusRef.current = null;
+      await fetchStatus({ silent: true });
     } catch (err) {
       if (previousStatusRef.current) {
         setStatus(previousStatusRef.current);
@@ -886,6 +1047,7 @@ const RealtimePage = () => {
     }
   }, [
     activeProject,
+    fetchStatus,
     labels.copyDone,
     labels.copyFailed,
     labels.projectSelectFirst,
@@ -896,6 +1058,39 @@ const RealtimePage = () => {
     sampleName,
     status,
   ]);
+
+  const handleDiscardCurrentRequest = useCallback(() => {
+    if (!status || discardingCurrent) return;
+    setDiscardConfirmOpen(true);
+  }, [discardingCurrent, status]);
+
+  const handleDiscardCurrent = useCallback(async () => {
+    if (!status || discardingCurrent) return;
+    setDiscardConfirmOpen(false);
+    setDiscardingCurrent(true);
+    saveInProgressRef.current = true;
+    setUseCurrentMessage(null);
+    setUseCurrentError(null);
+    try {
+      const response = await fetch(discardCurrentEndpoint, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+      const payload = (await response.json().catch(() => null)) as { next_tif_name?: string; detail?: string } | null;
+      if (!response.ok) {
+        throw new Error(payload?.detail || labels.discardFailed);
+      }
+      setUseCurrentMessage(payload?.next_tif_name ? labels.discardDone : labels.discardDoneLast);
+      await fetchStatus({ silent: true });
+    } catch (err) {
+      setUseCurrentError(err instanceof Error ? err.message : labels.discardFailed);
+    } finally {
+      setDiscardingCurrent(false);
+      saveInProgressRef.current = false;
+    }
+  }, [discardingCurrent, fetchStatus, labels.discardDone, labels.discardDoneLast, labels.discardFailed, status]);
 
   const handleImageClickForManualRoi = useCallback(
     async (event: React.MouseEvent<HTMLDivElement>) => {
@@ -1148,60 +1343,101 @@ const RealtimePage = () => {
     setDraggingRoiId(null);
   };
 
+  const realtimeBackTarget = activeProject ? `/tiff-manager-bulk?project=${encodeURIComponent(activeProject)}` : "/databases";
+  const realtimeBackLabel = activeProject ? tt("一覧へ戻る", "Back to list") : tt("データベースへ戻る", "Back to database");
+
   return (
     <ThemeProvider theme={realtimeTheme}>
-      <Container maxWidth="xl" sx={{ py: 4.25, px: { xs: 0.65, sm: 1, md: 1.35, lg: 1.7, xl: 1.9 } }}>
-      <Stack spacing={2.5}>
+      <Container maxWidth={false} sx={PAGE_CONTAINER_SX}>
+      <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
-          <Link underline="hover" color="inherit" href="/">
+          <Link underline="hover" color="inherit" component={RouterLink} to="/">
             Home
           </Link>
-          <Link underline="hover" color="inherit" href="/roi">
-            {tt("ROI抽出", "ROI extraction")}
+          <Link underline="hover" color="inherit" component={RouterLink} to="/databases">
+            {tt("データベース", "Database")}
           </Link>
+          {activeProject ? (
+            <Link underline="hover" color="inherit" component={RouterLink} to={`/tiff-manager-bulk?project=${encodeURIComponent(activeProject)}`}>
+              {activeProject}
+            </Link>
+          ) : null}
           <Typography color="text.primary" fontSize={14}>
             {tt("リアルタイムエンジン", "Realtime engine")}
           </Typography>
         </Breadcrumbs>
 
+        <Button
+          component={RouterLink}
+          to={realtimeBackTarget}
+          variant="outlined"
+          size="small"
+          startIcon={<ArrowBackIosNewIcon fontSize="small" />}
+          sx={{ alignSelf: "flex-start" }}
+        >
+          {realtimeBackLabel}
+        </Button>
+
         {error && <Alert severity="error">{error}</Alert>}
         {useCurrentError && <Alert severity="error">{useCurrentError}</Alert>}
         {useCurrentMessage && <Alert severity="success">{useCurrentMessage}</Alert>}
+        {projectSetupError && <Alert severity="error">{projectSetupError}</Alert>}
+        {projectSetupMessage && <Alert severity="success">{projectSetupMessage}</Alert>}
 
         <Box>
-          <Typography variant="h5" fontWeight={700}>
+          <Typography variant="h5" fontWeight={600}>
             DeepScan
           </Typography>
         </Box>
 
-        {!activeProject ? (
-          <Card variant="outlined">
-            <CardContent>
+        <Card variant="outlined">
+          <CardContent>
+            {!activeProject ? (
               <Stack spacing={1.25}>
-                <Typography variant="subtitle1" fontWeight={600}>
+                <Typography variant="subtitle1" fontWeight={500}>
                   {labels.projectSelectFirst}
                 </Typography>
-                <TextField
-                  label={t("projects.placeholder")}
-                  value={projectName}
-                  onChange={(event) => setProjectName(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      createProject();
-                    }
-                  }}
-                  size="small"
-                  placeholder={t("projects.placeholder")}
-                  fullWidth
-                />
-                <Button variant="contained" onClick={createProject} disabled={!normalizeProjectName(projectName)} sx={{ alignSelf: "flex-start" }}>
-                  {t("projects.create")}
+                <Typography variant="body2" color="text.secondary">
+                  {tt("先にデータベース画面でプロジェクトを選択してください。", "Select a project on the database page first.")}
+                </Typography>
+                <Button
+                  variant="contained"
+                  component={RouterLink}
+                  to="/databases"
+                  sx={{ alignSelf: "flex-start" }}
+                >
+                  {tt("データベースへ", "Open database")}
                 </Button>
               </Stack>
-            </CardContent>
-          </Card>
-        ) : null}
+            ) : (
+              <Stack spacing={1.25}>
+                <Typography variant="subtitle1" fontWeight={500}>
+                  {activeProject}
+                </Typography>
+                <TextField
+                  label={labels.watchPathLabel}
+                  value={projectWatchPath}
+                  onChange={(event) => setProjectWatchPath(event.target.value)}
+                  size="small"
+                  placeholder={labels.watchPathPlaceholder}
+                  fullWidth
+                />
+                <Typography variant="body2" color="text.secondary">
+                  {labels.watchCommandReadyHint}
+                </Typography>
+                <Button
+                  variant="outlined"
+                  startIcon={<DownloadIcon />}
+                  onClick={() => void handleDownloadWatchScript()}
+                  disabled={projectSetupPending || !projectWatchPath.trim()}
+                  sx={{ alignSelf: "flex-start" }}
+                >
+                  {projectSetupPending ? labels.saveInProgress : labels.watchCreateAndCopy}
+                </Button>
+              </Stack>
+            )}
+          </CardContent>
+        </Card>
 
         {loading ? (
           <Box display="flex" justifyContent="center" py={6}>
@@ -1212,14 +1448,15 @@ const RealtimePage = () => {
             <Card variant="outlined">
               <CardContent>
                 <Stack
-                  direction={{ xs: "column", md: "row" }}
+                  direction={{ xs: "column", lg: "row" }}
                   spacing={2.5}
-                  alignItems="stretch"
+                  alignItems={{ xs: "stretch", lg: "flex-start" }}
                 >
                   <Box
                     sx={{
                       flex: 1,
                       minWidth: 0,
+                      alignSelf: { lg: "flex-start" },
                       borderRadius: 1,
                       overflow: "hidden",
                       border: "1px solid rgba(15,23,42,0.1)",
@@ -1240,7 +1477,7 @@ const RealtimePage = () => {
                         backgroundColor: "rgba(15,23,42,0.02)",
                       }}
                     >
-                      <Typography variant="subtitle2" fontWeight={600}>
+                      <Typography variant="subtitle2" fontWeight={500}>
                         {labels.tiffDisplayMode}
                       </Typography>
                       <Stack spacing={0.5} alignItems={{ xs: "flex-start", sm: "flex-end" }} sx={{ minWidth: 0 }}>
@@ -1257,7 +1494,7 @@ const RealtimePage = () => {
                             <ToggleButton value="opticalBoost">Optical Boost</ToggleButton>
                           </ToggleButtonGroup>
                           <Stack direction="row" spacing={0.75} alignItems="center">
-                            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
                               {labels.frameBasis}
                             </Typography>
                             <ToggleButtonGroup
@@ -1284,7 +1521,7 @@ const RealtimePage = () => {
                               ml: 1,
                               mr: 0,
                               "& .MuiFormControlLabel-label": {
-                                fontWeight: 700,
+                                fontWeight: 600,
                                 fontSize: 14,
                                 color: deepVisionOverlayEnabled ? deepScanAccentColor : "text.secondary",
                                 letterSpacing: "0.01em",
@@ -1436,7 +1673,17 @@ const RealtimePage = () => {
                       )}
                     </Box>
                   </Box>
-                  <Stack spacing={1.25} sx={{ minWidth: { md: 360 }, width: { md: 420 }, maxWidth: 520, alignSelf: "stretch" }}>
+                  <Stack
+                    spacing={1.25}
+                    sx={{
+                      width: "100%",
+                      minWidth: 0,
+                      maxWidth: { lg: 520 },
+                      flexBasis: { lg: 420 },
+                      flexShrink: 0,
+                      alignSelf: "stretch",
+                    }}
+                  >
                     <Box
                       sx={{
                         border: "1px solid rgba(34,197,94,0.28)",
@@ -1446,7 +1693,7 @@ const RealtimePage = () => {
                       }}
                     >
                       <Stack spacing={0.8}>
-                        <Typography variant="subtitle2" fontWeight={600}>
+                        <Typography variant="subtitle2" fontWeight={500}>
                           {labels.latestTiff}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
@@ -1460,6 +1707,9 @@ const RealtimePage = () => {
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
                           {labels.size}: {formatBytes(status.size_bytes)}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {labels.waitingCount}: {status.pending_count ?? 0}
                         </Typography>
                         <TextField
                           label={labels.sampleName}
@@ -1486,7 +1736,7 @@ const RealtimePage = () => {
                             width: "fit-content",
                             ml: 0,
                             "& .MuiFormControlLabel-label": {
-                              fontWeight: 700,
+                              fontWeight: 600,
                               fontSize: 14,
                               letterSpacing: "0.01em",
                               color: stackMode ? "secondary.main" : "text.secondary",
@@ -1497,10 +1747,19 @@ const RealtimePage = () => {
                         <Button
                           variant="contained"
                           onClick={handleUseCurrent}
-                          disabled={!status || usingCurrent || !activeProject}
+                          disabled={!status || usingCurrent || discardingCurrent || !activeProject}
                           sx={{ width: "100%" }}
                         >
                           {usingCurrent ? labels.saveInProgress : labels.saveData}
+                        </Button>
+                        <Button
+                          variant="outlined"
+                          color="inherit"
+                          onClick={handleDiscardCurrentRequest}
+                          disabled={!status || usingCurrent || discardingCurrent}
+                          sx={{ width: "100%" }}
+                        >
+                          {discardingCurrent ? labels.discardInProgress : labels.discardData}
                         </Button>
                       </Stack>
                     </Box>
@@ -1512,7 +1771,7 @@ const RealtimePage = () => {
                         backgroundColor: "rgba(15,23,42,0.02)",
                       }}
                     >
-                      <Typography variant="subtitle2" fontWeight={600} gutterBottom>
+                      <Typography variant="subtitle2" fontWeight={500} gutterBottom>
                         {labels.deepScanSummary}
                       </Typography>
                       <Stack spacing={0.5}>
@@ -1582,7 +1841,7 @@ const RealtimePage = () => {
                         )}
                       </Stack>
                       <Stack direction="row" alignItems="center" justifyContent="space-between" mb={0.5}>
-                        <Typography variant="subtitle2" fontWeight={600}>
+                        <Typography variant="subtitle2" fontWeight={500}>
                           {labels.manualLabelTitle}
                         </Typography>
                         {(manualLabelSaving || manualRoiSaving) && (
@@ -1640,7 +1899,7 @@ const RealtimePage = () => {
                     >
                       <Box sx={{ mt: "auto" }}>
                         <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" mb={0.5}>
-                          <Typography variant="subtitle2" fontWeight={600}>
+                          <Typography variant="subtitle2" fontWeight={500}>
                             {labels.selectedRoi}
                           </Typography>
                           {selectedOverlayRoiMeta ? (
@@ -1654,7 +1913,7 @@ const RealtimePage = () => {
                                 }}
                               />
                               <Box>
-                                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
                                   Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
                                   {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}) / {labels.confidence}(AI):{" "}
                                   {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
@@ -1711,7 +1970,7 @@ const RealtimePage = () => {
               <Card variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, gridColumn: { xs: "1", lg: "1 / span 2" } }}>
                 <Stack spacing={0.5}>
                   <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "flex-start", sm: "center" }} spacing={1} justifyContent="space-between">
-                    <Typography variant="subtitle1" fontWeight={600}>
+                    <Typography variant="subtitle1" fontWeight={500}>
                       {labels.inferencePreview}
                     </Typography>
                     <Stack
@@ -1722,7 +1981,7 @@ const RealtimePage = () => {
                       flexWrap="wrap"
                     >
                       <Stack direction="row" spacing={0.75} alignItems="center">
-                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
                           {labels.previewLabelMode}
                         </Typography>
                         <ToggleButtonGroup
@@ -1780,7 +2039,7 @@ const RealtimePage = () => {
                     onDrop={(event) => handleBucketDrop(event, classIndex)}
                   >
                     <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
-                      <Typography variant="subtitle1" fontWeight={600}>
+                      <Typography variant="subtitle1" fontWeight={500}>
                         {label} ({bucket.length})
                       </Typography>
                     </Stack>
@@ -1863,6 +2122,20 @@ const RealtimePage = () => {
         ) : (
           <Alert severity="info">{labels.noRealtime}</Alert>
         )}
+        <Dialog open={discardConfirmOpen} onClose={() => !discardingCurrent && setDiscardConfirmOpen(false)} maxWidth="xs" fullWidth>
+          <DialogTitle>{labels.discardConfirmTitle}</DialogTitle>
+          <DialogContent>
+            <DialogContentText>{labels.discardConfirm}</DialogContentText>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setDiscardConfirmOpen(false)} disabled={discardingCurrent} color="inherit">
+              {labels.discardConfirmCancel}
+            </Button>
+            <Button onClick={() => void handleDiscardCurrent()} disabled={discardingCurrent} color="error" variant="contained">
+              {labels.discardConfirmAccept}
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Stack>
       </Container>
     </ThemeProvider>

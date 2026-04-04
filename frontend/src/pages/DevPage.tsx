@@ -369,7 +369,7 @@ const DevPage = () => {
         </Breadcrumbs>
 
         <Box>
-          <Typography variant="h5" fontWeight={700}>
+          <Typography variant="h5" fontWeight={600}>
             Developer Utilities
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
@@ -381,7 +381,7 @@ const DevPage = () => {
           <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 } }}>
             <Stack spacing={1.5}>
               <Stack direction="row" alignItems="center" spacing={1}>
-              <Typography variant="subtitle1" fontWeight={700}>
+              <Typography variant="subtitle1" fontWeight={600}>
                 make ps1 (TIFF watcher)
               </Typography>
             </Stack>
@@ -421,7 +421,7 @@ const DevPage = () => {
             <Stack spacing={1.5}>
               <Stack direction="row" alignItems="center" spacing={1}>
                 <GitHubIcon fontSize="small" color="action" />
-                <Typography variant="subtitle1" fontWeight={700}>
+                <Typography variant="subtitle1" fontWeight={600}>
                   Git pull
                 </Typography>
               </Stack>
@@ -454,7 +454,7 @@ const DevPage = () => {
             <Stack spacing={1.5}>
               <Stack direction="row" alignItems="center" spacing={1}>
                 <NotesIcon fontSize="small" color="action" />
-                <Typography variant="subtitle1" fontWeight={700}>
+                <Typography variant="subtitle1" fontWeight={600}>
                   Temp text (in-memory)
                 </Typography>
               </Stack>

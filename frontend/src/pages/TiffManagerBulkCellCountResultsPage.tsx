@@ -7,11 +7,22 @@ import {
   Button,
   Card,
   CardContent,
+  Chip,
   CircularProgress,
   Container,
+  FormControl,
+  InputLabel,
   Link,
+  MenuItem,
   Paper,
+  Select,
   Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Typography,
 } from "@mui/material";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
@@ -21,6 +32,7 @@ import FileDownloadIcon from "@mui/icons-material/FileDownload";
 
 import { API_BASE_URL } from "../config";
 import { useI18n } from "../i18n";
+import { PAGE_CONTAINER_SX } from "../ui/layout";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 
@@ -68,6 +80,9 @@ type AggregatedResults = {
   skippedSources: string[];
 };
 
+type RoiSortKey = "image" | "confidence" | "roi";
+type SortOrder = "asc" | "desc";
+
 const parseClassLabel = (raw: string | number | null | undefined): number | null => {
   if (typeof raw === "number" && Number.isFinite(raw)) return Math.trunc(raw);
   if (typeof raw === "string" && raw.trim()) {
@@ -89,6 +104,12 @@ const normalizeProjectName = (raw: string) => {
   return trimmed ? trimmed.split(/[\\/]/).at(-1)!.trim().replace("#", "").replace("__", "_") : "";
 };
 
+const compareText = (left: string, right: string) =>
+  left.localeCompare(right, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+
 const TiffManagerBulkCellCountResultsPage = () => {
   const { language } = useI18n();
   const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
@@ -98,6 +119,9 @@ const TiffManagerBulkCellCountResultsPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<AggregatedResults | null>(null);
+  const [selectedClass, setSelectedClass] = useState<0 | 1 | 2 | 3>(0);
+  const [sortKey, setSortKey] = useState<RoiSortKey>("image");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const exportedAtLabel = useMemo(() => new Date().toLocaleString(language === "ja" ? "ja-JP" : "en-US"), [language]);
   const fileNameBase = useMemo(
     () => (projectName || "cell_count_results").replace(/[^A-Za-z0-9._-]+/g, "_"),
@@ -117,12 +141,12 @@ const TiffManagerBulkCellCountResultsPage = () => {
 
   const classLabels = useMemo(
     () => ({
-      0: "Class 0",
-      1: "Class 1",
-      2: "Class 2",
-      3: "Class 3",
+      0: tt("Class 0 / 単一細胞", "Class 0 / Single cell"),
+      1: tt("Class 1 / 複数細胞", "Class 1 / Multiple cells"),
+      2: tt("Class 2 / ピンぼけ", "Class 2 / Blurred"),
+      3: tt("Class 3 / 非細胞粒子", "Class 3 / Non-cell particle"),
     }),
-    [],
+    [tt],
   );
 
   const fetchResults = useCallback(async () => {
@@ -179,24 +203,28 @@ const TiffManagerBulkCellCountResultsPage = () => {
               labelSource,
             };
             roiRows.push(row);
-            if (!(roi.predicted_class in classBuckets)) {
+            if (!(finalClass in classBuckets)) {
               return;
             }
-            counts[roi.predicted_class] += 1;
-            classBuckets[roi.predicted_class].push(row);
+            counts[finalClass] += 1;
+            classBuckets[finalClass].push(row);
           });
         }),
       );
 
       roiRows.sort((a, b) => {
-        const sourceCompare = a.sourceName.localeCompare(b.sourceName);
+        const imageCompare = compareText(a.tifName, b.tifName);
+        if (imageCompare !== 0) return imageCompare;
+        const sourceCompare = compareText(a.sourceName, b.sourceName);
         if (sourceCompare !== 0) return sourceCompare;
         return a.roi_id - b.roi_id;
       });
 
       Object.values(classBuckets).forEach((bucket) => {
         bucket.sort((a, b) => {
-          const sourceCompare = a.sourceName.localeCompare(b.sourceName);
+          const imageCompare = compareText(a.tifName, b.tifName);
+          if (imageCompare !== 0) return imageCompare;
+          const sourceCompare = compareText(a.sourceName, b.sourceName);
           if (sourceCompare !== 0) return sourceCompare;
           return a.roi_id - b.roi_id;
         });
@@ -222,41 +250,91 @@ const TiffManagerBulkCellCountResultsPage = () => {
     void fetchResults();
   }, [fetchResults]);
 
+  useEffect(() => {
+    if (!results) return;
+    const availableClass = ([0, 1, 2, 3] as const).find((classIndex) => results.counts[classIndex] > 0) ?? 0;
+    setSelectedClass((currentClass) => (results.counts[currentClass] > 0 ? currentClass : availableClass));
+  }, [results]);
+
   const handlePrintPdf = useCallback(() => {
     if (typeof window === "undefined") return;
+    const originalTitle = window.document.title;
+    const pdfTitle = `${fileNameBase}_cell_count_report`;
+    const restoreTitle = () => {
+      window.document.title = originalTitle;
+      window.removeEventListener("afterprint", restoreTitle);
+    };
+    window.document.title = pdfTitle;
+    window.addEventListener("afterprint", restoreTitle);
     window.print();
-  }, []);
+    window.setTimeout(restoreTitle, 1200);
+  }, [fileNameBase]);
 
-  const downloadCsv = useCallback((filename: string, header: string[], rows: Array<Array<string | number | boolean | null | undefined>>) => {
-    if (typeof window === "undefined") return;
-    const csv = [header.map(escapeCsvValue).join(","), ...rows.map((row) => row.map(escapeCsvValue).join(","))].join("\n");
-    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8;" });
-    const url = window.URL.createObjectURL(blob);
-    const link = window.document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    window.document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(url);
-  }, []);
+  const downloadCsv = useCallback(
+    (
+      filename: string,
+      header: string[],
+      rows: Array<Array<string | number | boolean | null | undefined>>,
+      metadataRows: Array<Array<string | number | boolean | null | undefined>> = [],
+    ) => {
+      if (typeof window === "undefined") return;
+      const csvRows = [
+        ...metadataRows.map((row) => row.map(escapeCsvValue).join(",")),
+        ...(metadataRows.length > 0 ? [""] : []),
+        header.map(escapeCsvValue).join(","),
+        ...rows.map((row) => row.map(escapeCsvValue).join(",")),
+      ].join("\n");
+      const blob = new Blob([`\uFEFF${csvRows}`], { type: "text/csv;charset=utf-8;" });
+      const url = window.URL.createObjectURL(blob);
+      const link = window.document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      window.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    },
+    [],
+  );
+
+  const visibleRois = useMemo(() => {
+    if (!results) return [];
+    const items = [...results.classBuckets[selectedClass]];
+    items.sort((left, right) => {
+      let comparison = 0;
+      if (sortKey === "confidence") {
+        comparison = left.confidence - right.confidence;
+      } else if (sortKey === "roi") {
+        comparison = left.roi_id - right.roi_id;
+      } else {
+        comparison = compareText(left.tifName, right.tifName);
+      }
+
+      if (comparison === 0) {
+        comparison = compareText(left.tifName, right.tifName);
+      }
+      if (comparison === 0) {
+        comparison = compareText(left.sourceName, right.sourceName);
+      }
+      if (comparison === 0) {
+        comparison = left.roi_id - right.roi_id;
+      }
+      return sortOrder === "asc" ? comparison : comparison * -1;
+    });
+    return items;
+  }, [results, selectedClass, sortKey, sortOrder]);
 
   const handleExportCsv = useCallback(() => {
     if (!results) return;
     downloadCsv(
       `${fileNameBase}_roi_labels.csv`,
       [
-        "project_name",
-        "source_id",
-        "db_name",
         "image_name",
         "roi_id",
         "ai_label",
         "manual_label",
         "final_label",
-        "label_source",
         "model_confidence",
-        "manual_added",
         "bbox_xmin",
         "bbox_ymin",
         "bbox_xmax",
@@ -265,17 +343,12 @@ const TiffManagerBulkCellCountResultsPage = () => {
         "image_height_px",
       ],
       results.roiRows.map((roi) => [
-        projectName,
-        roi.sourceName,
-        roi.dbName,
         roi.tifName,
         roi.roi_id,
         roi.predicted_class,
-        roi.manual_label ?? "",
+        parseClassLabel(roi.manual_label) ?? "False",
         roi.finalClass,
-        roi.labelSource,
         roi.confidence,
-        roi.manual_added ?? false,
         roi.roi_start_x ?? "",
         roi.roi_start_y ?? "",
         roi.roi_end_x ?? "",
@@ -283,6 +356,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
         roi.image_width_px ?? "",
         roi.image_height_px ?? "",
       ]),
+      [["project_name", projectName || ""]],
     );
   }, [downloadCsv, fileNameBase, projectName, results]);
 
@@ -294,21 +368,52 @@ const TiffManagerBulkCellCountResultsPage = () => {
             size: A4 portrait;
             margin: 12mm;
           }
+
+          @media print {
+            .cell-count-print-table {
+              width: 100%;
+              border-collapse: collapse;
+            }
+
+            .cell-count-print-table th,
+            .cell-count-print-table td {
+              border: 1px solid rgba(15, 23, 42, 0.16);
+              padding: 4px 6px;
+              font-size: 10px;
+              line-height: 1.35;
+              vertical-align: middle;
+            }
+
+            .cell-count-print-table th {
+              background: #f8fafc;
+              font-weight: 700;
+            }
+          }
         `}
       </style>
-      <Container maxWidth={false} sx={{ py: 3, px: { xs: 2, sm: 3, md: 4 }, "@media print": { py: 0, px: 0 } }}>
+      <Container maxWidth={false} sx={{ ...PAGE_CONTAINER_SX, "@media print": { py: 0, px: 0 } }}>
       <Stack spacing={2}>
-        <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
+        <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14, "@media print": { display: "none" } }}>
           <Link underline="hover" color="inherit" href="/">
             Home
           </Link>
           <Link underline="hover" color="inherit" component={RouterLink} to={backToUrl}>
-            ROI抽出
+            {tt("データベース", "Database")}
           </Link>
           <Typography color="text.primary" fontSize={14}>
             {tt("細胞集計結果", "Cell count results")}
           </Typography>
         </Breadcrumbs>
+
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<ArrowBackIosNewIcon fontSize="small" />}
+          onClick={() => navigate(backToUrl)}
+          sx={{ alignSelf: "flex-start", "@media print": { display: "none" } }}
+        >
+          {tt("一覧に戻る", "Back to list")}
+        </Button>
 
         <Stack
           direction={{ xs: "column", sm: "row" }}
@@ -318,7 +423,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
           sx={{ "@media print": { display: "none" } }}
         >
           <Box>
-            <Typography variant="h5" fontWeight={700}>
+            <Typography variant="h5" fontWeight={600}>
               {tt("細胞集計結果", "Cell count results")}
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -328,14 +433,6 @@ const TiffManagerBulkCellCountResultsPage = () => {
             </Typography>
           </Box>
           <Stack direction="row" spacing={1}>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<ArrowBackIosNewIcon fontSize="small" />}
-              onClick={() => navigate(backToUrl)}
-            >
-              {tt("一覧に戻る", "Back to list")}
-            </Button>
             <Button variant="contained" size="small" startIcon={<RefreshIcon fontSize="small" />} onClick={() => void fetchResults()}>
               {tt("再読み込み", "Reload")}
             </Button>
@@ -349,7 +446,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
               {tt("CSV出力", "Export CSV")}
             </Button>
             <Button variant="contained" color="error" size="small" startIcon={<PictureAsPdfIcon fontSize="small" />} onClick={handlePrintPdf}>
-              {tt("A4 PDF出力", "Export A4 PDF")}
+              {tt("PDF出力", "Export PDF")}
             </Button>
           </Stack>
         </Stack>
@@ -363,12 +460,12 @@ const TiffManagerBulkCellCountResultsPage = () => {
               p: 2,
               borderColor: "rgba(15,23,42,0.18)",
               boxShadow: "none",
-              breakAfter: "page",
+              mb: 1.5,
             },
           }}
         >
           <Stack spacing={0.5}>
-            <Typography variant="h5" fontWeight={700}>
+            <Typography variant="h5" fontWeight={600}>
               {tt("細胞集計結果", "Cell count results")}
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -406,20 +503,20 @@ const TiffManagerBulkCellCountResultsPage = () => {
               }}
             >
               <Stack spacing={2}>
-                <Typography variant="h6" fontWeight={600}>
+                <Typography variant="h6" fontWeight={500}>
                   {tt("集計サマリ", "Summary")}
                 </Typography>
                 <Stack
                   direction={{ xs: "column", md: "row" }}
                   spacing={1.5}
-                  sx={{ "@media print": { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))" } }}
+                  sx={{ "@media print": { display: "none" } }}
                 >
                   <Card variant="outlined" sx={{ flex: 1 }}>
                     <CardContent>
                       <Typography variant="body2" color="text.secondary">
                         {tt("対象単一画像数", "Single-image sources")}
                       </Typography>
-                      <Typography variant="h5" fontWeight={700}>
+                      <Typography variant="h5" fontWeight={600}>
                         {results.sourceCount.toLocaleString()}
                       </Typography>
                     </CardContent>
@@ -429,7 +526,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
                       <Typography variant="body2" color="text.secondary">
                         {tt("総ROI数", "Total ROI")}
                       </Typography>
-                      <Typography variant="h5" fontWeight={700}>
+                      <Typography variant="h5" fontWeight={600}>
                         {results.totalRoiCount.toLocaleString()}
                       </Typography>
                     </CardContent>
@@ -440,19 +537,194 @@ const TiffManagerBulkCellCountResultsPage = () => {
                         <Typography variant="body2" color="text.secondary">
                           {classLabels[classIndex as 0 | 1 | 2 | 3]}
                         </Typography>
-                        <Typography variant="h5" fontWeight={700}>
+                        <Typography variant="h5" fontWeight={600}>
                           {results.counts[classIndex].toLocaleString()}
                         </Typography>
                       </CardContent>
                     </Card>
                   ))}
                 </Stack>
+                <Box sx={{ display: "none", "@media print": { display: "block" } }}>
+                  <TableContainer component={Paper} variant="outlined" sx={{ boxShadow: "none" }}>
+                    <Table size="small" className="cell-count-print-table">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>{tt("項目", "Item")}</TableCell>
+                          <TableCell align="right">{tt("値", "Value")}</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        <TableRow>
+                          <TableCell>{tt("対象単一画像数", "Single-image sources")}</TableCell>
+                          <TableCell align="right">{results.sourceCount.toLocaleString()}</TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell>{tt("総ROI数", "Total ROI")}</TableCell>
+                          <TableCell align="right">{results.totalRoiCount.toLocaleString()}</TableCell>
+                        </TableRow>
+                        {[0, 1, 2, 3].map((classIndex) => (
+                          <TableRow key={`summary-${classIndex}`}>
+                            <TableCell>{classLabels[classIndex as 0 | 1 | 2 | 3]}</TableCell>
+                            <TableCell align="right">{results.counts[classIndex].toLocaleString()}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
                 {results.skippedSources.length > 0 && (
                   <Alert severity="warning">
                     {tt("一部の単一画像はROI抽出または推論結果が無いため結果表示から除外しました。", "Some single-image entries were skipped because ROI extraction or inference results were not available.")}
                     {" "}
                     {results.skippedSources.join(", ")}
                   </Alert>
+                )}
+              </Stack>
+            </Paper>
+
+            <Paper
+              variant="outlined"
+              sx={{
+                p: { xs: 1.5, md: 2 },
+                "@media print": { display: "none" },
+              }}
+            >
+              <Stack spacing={1.5}>
+                <Stack
+                  direction={{ xs: "column", lg: "row" }}
+                  justifyContent="space-between"
+                  alignItems={{ lg: "flex-start" }}
+                  spacing={1.5}
+                >
+                  <Stack spacing={1}>
+                    <Box>
+                      <Typography variant="h6" fontWeight={500}>
+                        {tt("ROI一覧", "ROI list")}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {tt("クラスを切り替えると、そのクラスのROIだけを表示します。", "Switch classes to show only the ROI in that class.")}
+                      </Typography>
+                    </Box>
+                    <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                      {([0, 1, 2, 3] as const).map((classIndex) => {
+                        const active = selectedClass === classIndex;
+                        return (
+                          <Button
+                            key={`class-filter-${classIndex}`}
+                            variant={active ? "contained" : "outlined"}
+                            color={active ? "primary" : "inherit"}
+                            onClick={() => setSelectedClass(classIndex)}
+                            sx={{ minWidth: 110 }}
+                          >
+                            {`Class ${classIndex}`}
+                          </Button>
+                        );
+                      })}
+                    </Stack>
+                  </Stack>
+
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }}>
+                    <FormControl size="small" sx={{ minWidth: 168 }}>
+                      <InputLabel id="roi-sort-key-label">{tt("並び順", "Sort by")}</InputLabel>
+                      <Select
+                        labelId="roi-sort-key-label"
+                        value={sortKey}
+                        label={tt("並び順", "Sort by")}
+                        onChange={(event) => setSortKey(event.target.value as RoiSortKey)}
+                      >
+                        <MenuItem value="image">{tt("画像順", "Image name")}</MenuItem>
+                        <MenuItem value="confidence">{tt("信頼度順", "Confidence")}</MenuItem>
+                        <MenuItem value="roi">{tt("ROI番号順", "ROI id")}</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <Stack direction="row" spacing={1}>
+                      <Button
+                        variant={sortOrder === "asc" ? "contained" : "outlined"}
+                        onClick={() => setSortOrder("asc")}
+                      >
+                        {tt("昇順", "Asc")}
+                      </Button>
+                      <Button
+                        variant={sortOrder === "desc" ? "contained" : "outlined"}
+                        onClick={() => setSortOrder("desc")}
+                      >
+                        {tt("降順", "Desc")}
+                      </Button>
+                    </Stack>
+                  </Stack>
+                </Stack>
+
+                <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">
+                  <Chip
+                    color="primary"
+                    variant="outlined"
+                    label={`${classLabels[selectedClass]}: ${results.counts[selectedClass].toLocaleString()}`}
+                  />
+                  <Typography variant="body2" color="text.secondary">
+                    {tt(
+                      `${visibleRois.length.toLocaleString()} 件を表示中`,
+                      `Showing ${visibleRois.length.toLocaleString()} items`,
+                    )}
+                  </Typography>
+                </Stack>
+
+                {visibleRois.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    {tt("このクラスのROIはありません。", "No ROI found for this class.")}
+                  </Typography>
+                ) : (
+                  <TableContainer component={Paper} variant="outlined">
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell align="center" sx={{ width: 92 }}>
+                            {tt("ROI画像", "ROI image")}
+                          </TableCell>
+                          <TableCell>{tt("画像名", "Image name")}</TableCell>
+                          <TableCell align="right">{tt("ROI番号", "ROI id")}</TableCell>
+                          <TableCell>{tt("ラベル", "Label")}</TableCell>
+                          <TableCell align="right">{tt("信頼度(%)", "Confidence (%)")}</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {visibleRois.map((roi) => (
+                          <TableRow key={`screen-${roi.dbName}-${roi.roi_id}`} hover>
+                            <TableCell align="center">
+                              <Box
+                                component="img"
+                                src={`data:image/png;base64,${roi.png_base64}`}
+                                alt={`${roi.tifName} roi ${roi.roi_id}`}
+                                loading="lazy"
+                                sx={{
+                                  width: 56,
+                                  height: 56,
+                                  objectFit: "contain",
+                                  bgcolor: "#000",
+                                  border: "1px solid rgba(15,23,42,0.12)",
+                                  display: "block",
+                                  mx: "auto",
+                                }}
+                              />
+                            </TableCell>
+                            <TableCell sx={{ minWidth: 220 }}>
+                              <Typography variant="body2" fontWeight={500}>
+                                {roi.tifName}
+                              </Typography>
+                            </TableCell>
+                            <TableCell align="right">{roi.roi_id}</TableCell>
+                            <TableCell>
+                              <Typography variant="body2">
+                                {roi.labelSource === "manual"
+                                  ? tt(`Manual (${roi.finalClass})`, `Manual (${roi.finalClass})`)
+                                  : tt(`AI (${roi.finalClass})`, `AI (${roi.finalClass})`)}
+                              </Typography>
+                            </TableCell>
+                            <TableCell align="right">{(roi.confidence * 100).toFixed(1)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
                 )}
               </Stack>
             </Paper>
@@ -464,8 +736,10 @@ const TiffManagerBulkCellCountResultsPage = () => {
                   key={classIndex}
                   variant="outlined"
                   sx={{
+                    display: "none",
                     p: { xs: 1.5, md: 2 },
                     "@media print": {
+                      display: "block",
                       boxShadow: "none",
                       breakBefore: classIndex === 0 ? "auto" : "page",
                     },
@@ -473,7 +747,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
                 >
                   <Stack spacing={1.5}>
                     <Box>
-                      <Typography variant="h6" fontWeight={600}>
+                      <Typography variant="h6" fontWeight={500}>
                         {classLabels[classIndex as 0 | 1 | 2 | 3]}
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
@@ -485,56 +759,79 @@ const TiffManagerBulkCellCountResultsPage = () => {
                         {tt("このクラスのROIはありません。", "No ROI found for this class.")}
                       </Typography>
                     ) : (
-                      <Box
-                        sx={{
-                          display: "grid",
-                          gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))",
-                          gap: 1.5,
-                          "@media print": {
-                            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-                            gap: 1,
-                          },
-                        }}
-                      >
-                        {items.map((roi) => (
-                          <Paper
-                            key={`${roi.dbName}-${roi.roi_id}`}
-                            variant="outlined"
-                            sx={{
-                              p: 1,
-                              "@media print": {
-                                breakInside: "avoid",
-                                boxShadow: "none",
-                              },
-                            }}
-                          >
-                            <Stack spacing={0.75}>
-                              <Box
-                                component="img"
-                                src={`data:image/png;base64,${roi.png_base64}`}
-                                alt={`${roi.sourceName} roi ${roi.roi_id}`}
-                                loading="lazy"
-                                sx={{
-                                  width: "100%",
-                                  aspectRatio: "1 / 1",
-                                  objectFit: "contain",
-                                  bgcolor: "#000",
-                                  border: "1px solid rgba(15,23,42,0.1)",
-                                }}
-                              />
-                              <Typography variant="caption" fontWeight={600} noWrap title={roi.sourceName}>
-                                {roi.sourceName}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                ROI {roi.roi_id}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                {tt("信頼度", "Confidence")}: {(roi.confidence * 100).toFixed(1)}%
-                              </Typography>
-                            </Stack>
-                          </Paper>
-                        ))}
-                      </Box>
+                      <Box sx={{ display: "block" }}>
+                          <TableContainer component={Paper} variant="outlined" sx={{ boxShadow: "none" }}>
+                            <Table size="small" className="cell-count-print-table">
+                              <TableHead>
+                                <TableRow>
+                                  <TableCell align="right" sx={{ width: 40 }}>#</TableCell>
+                                  <TableCell>{tt("画像ID", "Source")}</TableCell>
+                                  <TableCell>{tt("ROI", "ROI")}</TableCell>
+                                  <TableCell>{tt("ラベル根拠", "Label source")}</TableCell>
+                                  <TableCell align="right">{tt("信頼度(%)", "Confidence (%)")}</TableCell>
+                                  <TableCell align="center" sx={{ width: 68 }}>{tt("ROI画像", "ROI image")}</TableCell>
+                                </TableRow>
+                              </TableHead>
+                              <TableBody>
+                                {items.map((roi, index) => (
+                                  <TableRow
+                                    key={`print-${roi.dbName}-${roi.roi_id}`}
+                                    sx={{
+                                      breakInside: "avoid",
+                                      pageBreakInside: "avoid",
+                                    }}
+                                  >
+                                    <TableCell align="right">{index + 1}</TableCell>
+                                    <TableCell>
+                                      <Stack spacing={0.25}>
+                                        <Typography variant="caption" fontWeight={500}>
+                                          {roi.sourceName}
+                                        </Typography>
+                                        <Typography variant="caption" color="text.secondary">
+                                          {roi.tifName}
+                                        </Typography>
+                                      </Stack>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Stack spacing={0.25}>
+                                        <Typography variant="caption">ROI {roi.roi_id}</Typography>
+                                        <Typography variant="caption" color="text.secondary">
+                                          {tt("最終クラス", "Final class")}: {roi.finalClass}
+                                        </Typography>
+                                      </Stack>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Typography variant="caption">
+                                        {roi.labelSource === "manual" ? tt("手動", "Manual") : tt("AI", "AI")}
+                                      </Typography>
+                                    </TableCell>
+                                    <TableCell align="right">
+                                      <Typography variant="caption">
+                                        {(roi.confidence * 100).toFixed(1)}
+                                      </Typography>
+                                    </TableCell>
+                                    <TableCell align="center">
+                                      <Box
+                                        component="img"
+                                        src={`data:image/png;base64,${roi.png_base64}`}
+                                        alt={`${roi.sourceName} roi ${roi.roi_id}`}
+                                        sx={{
+                                          width: 42,
+                                          height: 42,
+                                          objectFit: "contain",
+                                          bgcolor: "#000",
+                                          border: "1px solid rgba(15,23,42,0.12)",
+                                          display: "block",
+                                          mx: "auto",
+                                        }}
+                                      />
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </TableContainer>
+                        </Box>
                     )}
                   </Stack>
                 </Paper>

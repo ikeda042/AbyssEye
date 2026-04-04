@@ -5,11 +5,12 @@ import asyncio
 import base64
 import json
 import hashlib
+import logging
 import sqlite3
 import shutil
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -37,6 +38,8 @@ ALLOWED_EXTENSIONS = {".tif", ".tiff"}
 ROI_CACHE_VERSION = 1
 REALTIME_STACK_DB_SUFFIX = "_bulk.db"
 # fmt: on
+
+logger = logging.getLogger(__name__)
 
 FOCUS_METRIC_ALIASES: dict[str, str] = {
     "ten": "ften",
@@ -85,12 +88,21 @@ class RealtimeStatus:
     rois: list[RealtimeROI]
     focus_profile: dict[str, object] | None = None
     focus_map: dict[str, object] | None = None
+    focus_metric: str = "ften"
     source_filename: str | None = None
     source_is_uploaded: bool = False
+    queue_position: int = 1
+    queue_total: int = 1
+    pending_count: int = 0
 
 
 _latest_status: Optional[RealtimeStatus] = None
+_latest_status_revision = 0
 _status_lock = asyncio.Lock()
+_pending_finalize_tasks: set[asyncio.Task[None]] = set()
+_current_tif_name: str | None = None
+_queued_tif_names: list[str] = []
+_status_cache: dict[str, RealtimeStatus] = {}
 
 
 def _deserialize_roi_meta(raw_meta: object) -> object:
@@ -781,6 +793,207 @@ def _mock_inference(tif_name: str) -> InferenceResult:
     )
 
 
+def _expected_realtime_db_path(tif_path: Path) -> Path:
+    existing = _find_existing_db(tif_path)
+    if existing is not None:
+        return existing
+    return _resolve_db_path(_sanitize_stem(tif_path.stem))
+
+
+def _attach_queue_meta(status: RealtimeStatus, *, pending_count: int) -> RealtimeStatus:
+    return replace(
+        status,
+        queue_position=1,
+        queue_total=1 + max(0, pending_count),
+        pending_count=max(0, pending_count),
+    )
+
+
+def _list_runtime_tiff_paths() -> list[Path]:
+    seen_names: set[str] = set()
+    candidates: list[Path] = []
+    for directory in _candidate_tiff_dirs():
+        if not directory.exists():
+            continue
+        for tif_path in directory.iterdir():
+            if not tif_path.is_file() or tif_path.suffix.lower() not in ALLOWED_EXTENSIONS:
+                continue
+            local_path = _ensure_local_copy(tif_path)
+            if local_path.name in seen_names:
+                continue
+            seen_names.add(local_path.name)
+            candidates.append(local_path)
+
+    def _sort_key(path: Path) -> tuple[float, str]:
+        try:
+            return (path.stat().st_mtime, path.name.lower())
+        except OSError:
+            return (0.0, path.name.lower())
+
+    return sorted(candidates, key=_sort_key)
+
+
+def _resolve_runtime_tif_path_unlocked(tif_name: str) -> Path:
+    safe_name = _sanitize_filename(tif_name)
+    _validate_extension(safe_name)
+    for directory in _candidate_tiff_dirs():
+        tif_path = directory / safe_name
+        if tif_path.is_file():
+            return _ensure_local_copy(tif_path)
+    raise HTTPException(status_code=404, detail=f"{safe_name} が見つかりませんでした。")
+
+
+def _enqueue_runtime_status_unlocked(status: RealtimeStatus) -> None:
+    global _current_tif_name
+    global _latest_status
+
+    tif_name = status.tif_path.name
+    _status_cache[tif_name] = status
+    if _current_tif_name is None:
+        _current_tif_name = tif_name
+        _latest_status = status
+        return
+    if tif_name != _current_tif_name and tif_name not in _queued_tif_names:
+        _queued_tif_names.append(tif_name)
+
+
+def _sync_runtime_queue_unlocked() -> None:
+    global _current_tif_name
+    global _latest_status
+
+    _normalize_on_disk_tif_names()
+    disk_paths = _list_runtime_tiff_paths()
+    disk_names = [path.name for path in disk_paths]
+    disk_name_set = set(disk_names)
+
+    for tif_name in list(_status_cache.keys()):
+        if tif_name not in disk_name_set:
+            _status_cache.pop(tif_name, None)
+
+    if _current_tif_name not in disk_name_set:
+        _current_tif_name = None
+
+    kept_queue: list[str] = []
+    for tif_name in _queued_tif_names:
+        if tif_name in disk_name_set and tif_name != _current_tif_name and tif_name not in kept_queue:
+            kept_queue.append(tif_name)
+    _queued_tif_names[:] = kept_queue
+
+    if _current_tif_name is None and disk_names:
+        _current_tif_name = disk_names[0]
+        _queued_tif_names[:] = [name for name in disk_names[1:] if name != _current_tif_name]
+    else:
+        for tif_name in disk_names:
+            if tif_name == _current_tif_name or tif_name in _queued_tif_names:
+                continue
+            _queued_tif_names.append(tif_name)
+
+    for path in disk_paths:
+        _status_cache.setdefault(
+            path.name,
+            _build_pending_realtime_status(
+                path,
+                source_filename=path.name,
+                source_is_uploaded=False,
+            ),
+        )
+
+    _latest_status = _status_cache.get(_current_tif_name) if _current_tif_name else None
+
+
+def _advance_runtime_queue_unlocked(consumed_tif_name: str) -> None:
+    global _current_tif_name
+    global _latest_status
+
+    _status_cache.pop(consumed_tif_name, None)
+    _queued_tif_names[:] = [name for name in _queued_tif_names if name != consumed_tif_name]
+    if _current_tif_name == consumed_tif_name:
+        _current_tif_name = _queued_tif_names.pop(0) if _queued_tif_names else None
+    _latest_status = _status_cache.get(_current_tif_name) if _current_tif_name else None
+
+
+def _delete_runtime_artifacts(tif_path: Path) -> None:
+    for directory in _candidate_tiff_dirs():
+        candidate = directory / tif_path.name
+        candidate.unlink(missing_ok=True)
+    for candidate in _expected_db_locations(_sanitize_stem(tif_path.stem)):
+        candidate.unlink(missing_ok=True)
+    _roi_cache_path(tif_path).unlink(missing_ok=True)
+
+
+def _write_bytes_with_dedup(data: bytes, dest_dir: Path, filename: str) -> Path:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target_name = _sanitize_filename(filename)
+    target_path = _deduplicate_target(dest_dir, target_name)
+    target_path.write_bytes(data)
+    return target_path
+
+
+def _build_pending_realtime_status(
+    target_path: Path,
+    *,
+    source_filename: str,
+    source_is_uploaded: bool,
+) -> RealtimeStatus:
+    try:
+        saved_at = datetime.fromtimestamp(target_path.stat().st_mtime)
+        size_bytes = target_path.stat().st_size
+    except OSError:
+        saved_at = datetime.now()
+        size_bytes = 0
+
+    return RealtimeStatus(
+        tif_path=target_path,
+        saved_at=saved_at,
+        size_bytes=size_bytes,
+        db_path=_expected_realtime_db_path(target_path),
+        inference=_mock_inference(target_path.name),
+        rois=[],
+        focus_profile=None,
+        focus_map=None,
+        focus_metric=_normalize_focus_metric("tenengrad"),
+        source_filename=source_filename,
+        source_is_uploaded=source_is_uploaded,
+    )
+
+
+async def _finalize_saved_realtime_tif_background(
+    target_path: Path,
+    *,
+    source_filename: str,
+    source_is_uploaded: bool,
+    status_revision: int,
+) -> None:
+    try:
+        await _finalize_saved_realtime_tif(
+            target_path,
+            source_filename=source_filename,
+            source_is_uploaded=source_is_uploaded,
+            status_revision=status_revision,
+        )
+    except Exception:
+        logger.exception("Realtime TIFF finalization failed for %s", target_path.name)
+
+
+def _schedule_realtime_finalize(
+    target_path: Path,
+    *,
+    source_filename: str,
+    source_is_uploaded: bool,
+    status_revision: int,
+) -> None:
+    task = asyncio.create_task(
+        _finalize_saved_realtime_tif_background(
+            target_path,
+            source_filename=source_filename,
+            source_is_uploaded=source_is_uploaded,
+            status_revision=status_revision,
+        )
+    )
+    _pending_finalize_tasks.add(task)
+    task.add_done_callback(_pending_finalize_tasks.discard)
+
+
 def _create_db_from_tif(tif_path: Path) -> Path:
     """Run ROI extraction against a TIFF and persist under realtime_databases."""
     _ensure_storage_dir()
@@ -885,6 +1098,34 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
             """
         ).fetchall()
 
+    uncached_inputs: list[bytes] = []
+    uncached_payloads: list[tuple[sqlite3.Row, str, bool]] = []
+    for row in rows:
+        blob: bytes = row["png_blob"]
+        if not blob:
+            continue
+        roi_id = int(row["id"])
+        base64_png = base64.b64encode(blob).decode("ascii")
+        raw_meta = row["roi_meta"] if "roi_meta" in row.keys() else None
+        meta_obj = _deserialize_roi_meta(raw_meta)
+        manual_added = bool(meta_obj.get("manual_added")) if isinstance(meta_obj, dict) else False
+        cached_result = cached.get(roi_id) if cached else None
+        if cached_result:
+            continue
+        uncached_inputs.append(blob)
+        uncached_payloads.append((row, base64_png, manual_added))
+
+    batch_results_by_roi_id: dict[int, InferenceResult] = {}
+    if uncached_inputs:
+        try:
+            batch_results = inference_crud.predict_image_bytes_batch(uncached_inputs)
+            if len(batch_results) != len(uncached_payloads):
+                raise HTTPException(status_code=500, detail="ROI推論の件数が一致しませんでした。")
+            for (row, _, _), result in zip(uncached_payloads, batch_results):
+                batch_results_by_roi_id[int(row["id"])] = result
+        except HTTPException:
+            batch_results_by_roi_id = {}
+
     for row in rows:
         blob: bytes = row["png_blob"]
         if not blob:
@@ -925,9 +1166,10 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                 updates.append((predicted_class_str, model_name, roi_id))
             continue
 
-        data_url = f"data:image/png;base64,{base64_png}"
+        result = batch_results_by_roi_id.get(roi_id)
         try:
-            result = inference_crud.predict_label(data_url)
+            if result is None:
+                result = inference_crud.predict_image_bytes(blob)
         except HTTPException as exc:
             if first_error is None:
                 first_error = exc
@@ -992,39 +1234,30 @@ def _build_inference_summary(rois: list[RealtimeROI], tif_name: str) -> Inferenc
     )
 
 
-async def save_realtime_tif(upload_file: UploadFile) -> Path:
-    """Save uploaded TIFF data, run ROI extraction -> DB under realtime_databases, then infer ROIs."""
+async def _finalize_saved_realtime_tif(
+    target_path: Path,
+    *,
+    source_filename: str,
+    source_is_uploaded: bool,
+    status_revision: int | None = None,
+) -> Path:
+    """Run extraction/inference for a saved realtime TIFF and refresh the latest status."""
     global _latest_status
-    _ensure_storage_dir()
-    safe_name = _sanitize_filename(upload_file.filename)
-    _validate_extension(safe_name)
-
-    data = await upload_file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="空のファイルは保存できません。")
-
-    target_path = REALTIME_TIFF_DIR / safe_name
-
-    def _write() -> None:
-        target_path.write_bytes(data)
-
-    await asyncio.to_thread(_write)
 
     # Run ROI extraction -> DB and inference on ROIs (off main thread)
     db_path = await asyncio.to_thread(_create_db_from_tif, target_path)
-    rois = await asyncio.to_thread(_load_rois_with_inference, db_path, target_path)
-    inference = _build_inference_summary(rois, target_path.name)
-    focus_profile, focus_map = await asyncio.to_thread(
-        _build_focus_snapshot,
-        target_path,
-        "tenengrad",
+    focus_metric = _normalize_focus_metric("tenengrad")
+    rois, (focus_profile, focus_map) = await asyncio.gather(
+        asyncio.to_thread(_load_rois_with_inference, db_path, target_path),
+        asyncio.to_thread(_build_focus_snapshot, target_path, focus_metric),
     )
+    inference = _build_inference_summary(rois, target_path.name)
     try:
         saved_ts = max(target_path.stat().st_mtime, db_path.stat().st_mtime)
     except OSError:
         saved_ts = target_path.stat().st_mtime
 
-    _latest_status = RealtimeStatus(
+    next_status = RealtimeStatus(
         tif_path=target_path,
         saved_at=datetime.fromtimestamp(saved_ts),
         size_bytes=target_path.stat().st_size,
@@ -1033,8 +1266,79 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
         rois=rois,
         focus_profile=focus_profile,
         focus_map=focus_map,
-        source_filename=safe_name,
+        focus_metric=focus_metric,
+        source_filename=source_filename,
+        source_is_uploaded=source_is_uploaded,
+    )
+    async with _status_lock:
+        _status_cache[target_path.name] = next_status
+        if _current_tif_name == target_path.name:
+            _latest_status = next_status
+    return target_path
+
+
+async def save_realtime_tif(upload_file: UploadFile) -> Path:
+    """Save uploaded TIFF data, run ROI extraction -> DB under realtime_databases, then infer ROIs."""
+    global _latest_status
+    global _latest_status_revision
+    _ensure_storage_dir()
+    safe_name = _sanitize_filename(upload_file.filename)
+    _validate_extension(safe_name)
+
+    data = await upload_file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="空のファイルは保存できません。")
+
+    target_path = await asyncio.to_thread(_write_bytes_with_dedup, data, REALTIME_TIFF_DIR, safe_name)
+    async with _status_lock:
+        _latest_status_revision += 1
+        revision = _latest_status_revision
+        pending_status = _build_pending_realtime_status(
+            target_path,
+            source_filename=upload_file.filename or safe_name,
+            source_is_uploaded=True,
+        )
+        _enqueue_runtime_status_unlocked(pending_status)
+    _schedule_realtime_finalize(
+        target_path,
+        source_filename=upload_file.filename or safe_name,
         source_is_uploaded=True,
+        status_revision=revision,
+    )
+    return target_path
+
+
+async def save_realtime_tif_from_path(source_path: Path) -> Path:
+    """Copy a TIFF from a watched folder into realtime storage, then refresh status."""
+    global _latest_status
+    global _latest_status_revision
+    _ensure_storage_dir()
+    if not source_path.is_file():
+        raise HTTPException(status_code=404, detail=f"{source_path.name} が見つかりませんでした。")
+
+    safe_name = _sanitize_filename(source_path.name)
+    _validate_extension(safe_name)
+
+    target_path = await asyncio.to_thread(
+        _copy_with_dedup,
+        source_path,
+        REALTIME_TIFF_DIR,
+        dest_name=safe_name,
+    )
+    async with _status_lock:
+        _latest_status_revision += 1
+        revision = _latest_status_revision
+        pending_status = _build_pending_realtime_status(
+            target_path,
+            source_filename=safe_name,
+            source_is_uploaded=False,
+        )
+        _enqueue_runtime_status_unlocked(pending_status)
+    _schedule_realtime_finalize(
+        target_path,
+        source_filename=safe_name,
+        source_is_uploaded=False,
+        status_revision=revision,
     )
     return target_path
 
@@ -1056,24 +1360,15 @@ async def get_latest_status(
 ) -> RealtimeStatus:
     global _latest_status
     _ensure_storage_dir()
+    normalized_focus_metric = _normalize_focus_metric(focus_metric)
     async with _status_lock:
-        _normalize_on_disk_tif_names()
-        tif_files = []
-        for directory in _candidate_tiff_dirs():
-            if not directory.exists():
-                continue
-            for p in directory.iterdir():
-                if p.is_file() and p.suffix.lower() in ALLOWED_EXTENSIONS:
-                    tif_files.append(p)
-
-        candidates = sorted(tif_files, key=lambda p: p.stat().st_mtime, reverse=True)
-        if not candidates:
+        _sync_runtime_queue_unlocked()
+        if not _current_tif_name:
             raise HTTPException(status_code=404, detail="まだRealtime TIFFがアップロードされていません。")
 
-        latest = candidates[0]
-        latest_mtime = latest.stat().st_mtime
-        latest_size = latest.stat().st_size
-        latest_local = _ensure_local_copy(latest)
+        latest_local = _resolve_runtime_tif_path_unlocked(_current_tif_name)
+        latest_mtime = latest_local.stat().st_mtime
+        latest_size = latest_local.stat().st_size
         existing_db = _find_existing_db(latest_local)
         latest_db_mtime = 0.0
         if existing_db is not None:
@@ -1082,37 +1377,43 @@ async def get_latest_status(
             except OSError:
                 latest_db_mtime = 0.0
         latest_status_mtime = max(latest_mtime, latest_db_mtime)
+        cached_status = _status_cache.get(_current_tif_name)
         if (
-            _latest_status
-            and _latest_status.tif_path == latest_local
-            and _latest_status.size_bytes == latest_size
-            and _latest_status.saved_at.timestamp() >= latest_status_mtime
-        ):
-            focus_profile, focus_map = await asyncio.to_thread(
-                _build_focus_snapshot,
-                latest_local,
-                focus_metric,
+            cached_status
+            and cached_status.tif_path == latest_local
+            and cached_status.size_bytes == latest_size
+            and (
+                existing_db is None
+                or cached_status.saved_at.timestamp() >= latest_status_mtime
             )
-            _latest_status.focus_profile = focus_profile
-            _latest_status.focus_map = focus_map
-            return _latest_status
+        ):
+            if cached_status.focus_metric != normalized_focus_metric:
+                focus_profile, focus_map = await asyncio.to_thread(
+                    _build_focus_snapshot,
+                    latest_local,
+                    normalized_focus_metric,
+                )
+                cached_status.focus_profile = focus_profile
+                cached_status.focus_map = focus_map
+                cached_status.focus_metric = normalized_focus_metric
+                _status_cache[_current_tif_name] = cached_status
+            _latest_status = cached_status
+            return _attach_queue_meta(cached_status, pending_count=len(_queued_tif_names))
 
         if existing_db and existing_db.stat().st_mtime >= latest_mtime:
             db_path = existing_db
         else:
             db_path = await asyncio.to_thread(_create_db_from_tif, latest_local)
 
-        rois = await asyncio.to_thread(_load_rois_with_inference, db_path, latest_local)
+        rois, (focus_profile, focus_map) = await asyncio.gather(
+            asyncio.to_thread(_load_rois_with_inference, db_path, latest_local),
+            asyncio.to_thread(_build_focus_snapshot, latest_local, normalized_focus_metric),
+        )
         try:
             status_saved_ts = max(latest_mtime, db_path.stat().st_mtime)
         except OSError:
             status_saved_ts = latest_mtime
-        focus_profile, focus_map = await asyncio.to_thread(
-            _build_focus_snapshot,
-            latest_local,
-            focus_metric,
-        )
-        _latest_status = RealtimeStatus(
+        next_status = RealtimeStatus(
             tif_path=latest_local,
             saved_at=datetime.fromtimestamp(status_saved_ts),
             size_bytes=latest_local.stat().st_size,
@@ -1121,10 +1422,13 @@ async def get_latest_status(
             rois=rois,
             focus_profile=focus_profile,
             focus_map=focus_map,
+            focus_metric=normalized_focus_metric,
             source_filename=latest_local.name,
             source_is_uploaded=False,
         )
-        return _latest_status
+        _status_cache[_current_tif_name] = next_status
+        _latest_status = next_status
+        return _attach_queue_meta(next_status, pending_count=len(_queued_tif_names))
 
 
 def get_realtime_tif_path(tif_name: str) -> Path:
@@ -1145,10 +1449,11 @@ async def copy_latest_to_primary_locations(
     field_name: str | None = None,
     project_name: str | None = None,
     stack_mode: bool = False,
+    status: RealtimeStatus | None = None,
 ) -> tuple[Path, Path]:
     """Save latest realtime TIFF as a bulk-style folder, then run ROI抽出+推論."""
     _ensure_storage_dir()
-    status = await get_latest_status()
+    current_status = status or await get_latest_status()
 
     requested_sample_stem = _safe_stem(sample_name)
     requested_field_stem = _safe_stem(field_name)
@@ -1158,7 +1463,7 @@ async def copy_latest_to_primary_locations(
         if not folder_name:
             raise HTTPException(status_code=400, detail="同視野保存時はサンプル名またはフィールド名を指定してください。")
     else:
-        folder_name = requested_sample_stem or _safe_stem(status.source_filename) or _safe_stem(status.tif_path.stem)
+        folder_name = requested_sample_stem or _safe_stem(current_status.source_filename) or _safe_stem(current_status.tif_path.stem)
         if not folder_name:
             raise HTTPException(status_code=400, detail="保存時に有効なファイル名を決定できませんでした。")
 
@@ -1173,15 +1478,16 @@ async def copy_latest_to_primary_locations(
         tiff_bulk_crud.write_realtime_folder_mode,
         folder,
         tiff_bulk_crud.REALTIME_FOLDER_MODE_STACK if stack_mode else tiff_bulk_crud.REALTIME_FOLDER_MODE_SINGLE,
+        source_origin=tiff_bulk_crud.FOLDER_SOURCE_REALTIME,
     )
 
-    target_suffix = status.tif_path.suffix.lower() if status.tif_path.suffix.lower() in ALLOWED_EXTENSIONS else ".tif"
-    target_stem = requested_sample_stem or _safe_stem(status.source_filename) or _safe_stem(status.tif_path.stem)
-    target_filename = f"{target_stem}{target_suffix}" if target_stem else status.tif_path.name
+    target_suffix = current_status.tif_path.suffix.lower() if current_status.tif_path.suffix.lower() in ALLOWED_EXTENSIONS else ".tif"
+    target_stem = requested_sample_stem or _safe_stem(current_status.source_filename) or _safe_stem(current_status.tif_path.stem)
+    target_filename = f"{target_stem}{target_suffix}" if target_stem else current_status.tif_path.name
 
     tif_target = await asyncio.to_thread(
         _copy_with_dedup,
-        status.tif_path,
+        current_status.tif_path,
         folder,
         dest_name=target_filename,
     )
@@ -1201,6 +1507,38 @@ async def copy_latest_to_primary_locations(
         db_target = extract_result.db_path
 
     return tif_target, db_target
+
+
+async def use_current_realtime_assets(
+    *,
+    sample_name: str | None = None,
+    field_name: str | None = None,
+    project_name: str | None = None,
+    stack_mode: bool = False,
+) -> tuple[Path, Path, str]:
+    status = await get_latest_status()
+    tif_path, db_path = await copy_latest_to_primary_locations(
+        sample_name=sample_name,
+        field_name=field_name,
+        project_name=project_name,
+        stack_mode=stack_mode,
+        status=status,
+    )
+    consumed_name = status.tif_path.name
+    async with _status_lock:
+        _advance_runtime_queue_unlocked(consumed_name)
+    await asyncio.to_thread(_delete_runtime_artifacts, status.tif_path)
+    return tif_path, db_path, consumed_name
+
+
+async def discard_current_realtime_asset() -> tuple[str, str | None]:
+    status = await get_latest_status()
+    consumed_name = status.tif_path.name
+    async with _status_lock:
+        _advance_runtime_queue_unlocked(consumed_name)
+        next_name = _current_tif_name
+    await asyncio.to_thread(_delete_runtime_artifacts, status.tif_path)
+    return consumed_name, next_name
 
 
 async def render_tif_as_png_bytes(tif_path: Path, max_edge: int = 1400) -> bytes:

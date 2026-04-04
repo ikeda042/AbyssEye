@@ -6,6 +6,7 @@ import {
   Box,
   Breadcrumbs,
   Button,
+  Checkbox,
   CircularProgress,
   Collapse,
   Container,
@@ -31,9 +32,11 @@ import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import SearchIcon from "@mui/icons-material/Search";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
+import AutoGraphIcon from "@mui/icons-material/AutoGraph";
 
 import { API_BASE_URL } from "../config";
 import { type Language, useI18n } from "../i18n";
+import { buildDataTableSx, ELLIPSIS_TEXT_SX, PAGE_CONTAINER_SX, TABLE_CONTAINER_SX } from "../ui/layout";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 
@@ -44,6 +47,9 @@ type FolderEntry = {
   has_focus_merged?: boolean;
   has_inference_result?: boolean;
   realtime_folder_mode?: "single" | "stack" | null;
+  source_origin?: "realtime" | "upload" | null;
+  manual_labeled_roi_count?: number;
+  manual_added_roi_count?: number;
 };
 
 type Dimensions = {
@@ -174,7 +180,6 @@ const TiffManagerBulkPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedProject = normalizeProjectName(searchParams.get("project") || "");
   const [folders, setFolders] = useState<FolderEntry[]>([]);
-  const [search, setSearch] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [projectName, setProjectName] = useState("");
   const [projects, setProjects] = useState<ProjectEntry[]>(() => loadProjects());
@@ -185,6 +190,12 @@ const TiffManagerBulkPage = () => {
   const [completedInferenceFolders, setCompletedInferenceFolders] = useState<string[]>([]);
   const [openingSingleImageFolder, setOpeningSingleImageFolder] = useState<string | null>(null);
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
+  const [singleImageDeleteMode, setSingleImageDeleteMode] = useState(false);
+  const [selectedSingleImageFolders, setSelectedSingleImageFolders] = useState<string[]>([]);
+  const [deletingSelectedSingleImages, setDeletingSelectedSingleImages] = useState(false);
+  const [multiImageDeleteMode, setMultiImageDeleteMode] = useState(false);
+  const [selectedMultiImageFolders, setSelectedMultiImageFolders] = useState<string[]>([]);
+  const [deletingSelectedMultiImages, setDeletingSelectedMultiImages] = useState(false);
   const [, setInferHintFolder] = useState<string | null>(null);
   const [mergingFolder, setMergingFolder] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState<string | null>(null);
@@ -254,10 +265,11 @@ const TiffManagerBulkPage = () => {
 
   useEffect(() => {
     if (!activeProject) {
-      setSearch("");
       setProjectSearch("");
       setResult(null);
     }
+    setSingleImageDeleteMode(false);
+    setSelectedSingleImageFolders([]);
     void fetchFolders();
   }, [activeProject, fetchFolders]);
 
@@ -346,9 +358,13 @@ const TiffManagerBulkPage = () => {
   };
 
   const handleOpenProject = (name: string) => {
-    setSearch("");
     setSearchParams({ project: normalizeProjectName(name) });
   };
+
+  const handleOpenRealtimeEngine = useCallback(() => {
+    if (!activeProject) return;
+    navigate(`/realtime?project=${encodeURIComponent(activeProject)}`);
+  }, [activeProject, navigate]);
 
   const handleDownloadProject = useCallback((rawName: string) => {
     const name = normalizeProjectName(rawName);
@@ -433,39 +449,25 @@ const TiffManagerBulkPage = () => {
     [projects, syncProjects, t],
   );
 
-  const handleDelete = useCallback(
+  const deleteFolderRequest = useCallback(
     async (folderName: string) => {
-      setError(null);
-      setInfo(null);
-      setDeletingFolder(folderName);
-      try {
-        const deleteUrl = activeProject
-          ? `tiff-bulk/folders/${encodeURIComponent(folderName)}?project_name=${encodeURIComponent(activeProject)}`
-          : `tiff-bulk/folders/${encodeURIComponent(folderName)}`;
-        const response = await fetch(endpoint(deleteUrl), {
-          method: "DELETE",
-          headers: { Accept: "application/json" },
-        });
-        const payload: { deleted?: string; detail?: string } = await response.json().catch(() => ({}));
-        if (!response.ok || !payload.deleted) {
-          throw new Error(payload.detail || t("bulk.deleteError"));
-        }
-        setInfo(t("bulk.deleteSuccess", { name: payload.deleted }));
-        await fetchFolders();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : t("bulk.deleteError"));
-      } finally {
-        setDeletingFolder(null);
+      const deleteUrl = activeProject
+        ? `tiff-bulk/folders/${encodeURIComponent(folderName)}?project_name=${encodeURIComponent(activeProject)}`
+        : `tiff-bulk/folders/${encodeURIComponent(folderName)}`;
+      const response = await fetch(endpoint(deleteUrl), {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      });
+      const payload: { deleted?: string; detail?: string } = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.deleted) {
+        throw new Error(payload.detail || t("bulk.deleteError"));
       }
+      return payload.deleted;
     },
-    [activeProject, fetchFolders, t],
+    [activeProject, t],
   );
 
-  const filteredFolders = useMemo(() => {
-    if (!search.trim()) return folders;
-    const query = search.trim().toLowerCase();
-    return folders.filter((folder) => scopedFolderName(folder.name).toLowerCase().includes(query));
-  }, [folders, search, scopedFolderName]);
+  const filteredFolders = folders;
 
   const singleImageFolders = useMemo(
     () =>
@@ -474,6 +476,14 @@ const TiffManagerBulkPage = () => {
       ),
     [filteredFolders],
   );
+
+  useEffect(() => {
+    const available = new Set(singleImageFolders.map((folder) => folder.name));
+    setSelectedSingleImageFolders((prev) => prev.filter((folderName) => available.has(folderName)));
+    if (singleImageFolders.length === 0) {
+      setSingleImageDeleteMode(false);
+    }
+  }, [singleImageFolders]);
 
   useEffect(() => {
     const sourceSingleImageFolders = folders.filter(
@@ -534,11 +544,154 @@ const TiffManagerBulkPage = () => {
     [filteredFolders],
   );
 
+  useEffect(() => {
+    const available = new Set(multiImageFolders.map((folder) => folder.name));
+    setSelectedMultiImageFolders((prev) => prev.filter((folderName) => available.has(folderName)));
+    if (multiImageFolders.length === 0) {
+      setMultiImageDeleteMode(false);
+    }
+  }, [multiImageFolders]);
+
+  const toggleSingleImageDeleteSelection = useCallback((folderName: string) => {
+    setSelectedSingleImageFolders((prev) =>
+      prev.includes(folderName) ? prev.filter((name) => name !== folderName) : [...prev, folderName],
+    );
+  }, []);
+
+  const handleCancelSingleImageDeleteMode = useCallback(() => {
+    if (deletingSelectedSingleImages) return;
+    setSingleImageDeleteMode(false);
+    setSelectedSingleImageFolders([]);
+  }, [deletingSelectedSingleImages]);
+
+  const handleDeleteSelectedSingleImages = useCallback(async () => {
+    if (selectedSingleImageFolders.length === 0 || deletingSelectedSingleImages) return;
+    setError(null);
+    setInfo(null);
+    setDeletingSelectedSingleImages(true);
+
+    const targets = [...selectedSingleImageFolders];
+    const deletedNames: string[] = [];
+
+    try {
+      for (const folderName of targets) {
+        setDeletingFolder(folderName);
+        const deleted = await deleteFolderRequest(folderName);
+        deletedNames.push(deleted);
+      }
+      if (deletedNames.length === 1) {
+        setInfo(t("bulk.deleteSuccess", { name: deletedNames[0] }));
+      } else if (deletedNames.length > 1) {
+        setInfo(tt(`${deletedNames.length} 件を削除しました。`, `Deleted ${deletedNames.length} items.`));
+      }
+      setSingleImageDeleteMode(false);
+      setSelectedSingleImageFolders([]);
+    } catch (err) {
+      if (deletedNames.length > 0) {
+        setInfo(tt(`${deletedNames.length} 件を削除しました。`, `Deleted ${deletedNames.length} items.`));
+      }
+      setError(err instanceof Error ? err.message : t("bulk.deleteError"));
+    } finally {
+      setDeletingFolder(null);
+      setDeletingSelectedSingleImages(false);
+      await fetchFolders();
+    }
+  }, [deleteFolderRequest, deletingSelectedSingleImages, fetchFolders, selectedSingleImageFolders, t, tt]);
+
+  const toggleMultiImageDeleteSelection = useCallback((folderName: string) => {
+    setSelectedMultiImageFolders((prev) =>
+      prev.includes(folderName) ? prev.filter((name) => name !== folderName) : [...prev, folderName],
+    );
+  }, []);
+
+  const handleCancelMultiImageDeleteMode = useCallback(() => {
+    if (deletingSelectedMultiImages) return;
+    setMultiImageDeleteMode(false);
+    setSelectedMultiImageFolders([]);
+  }, [deletingSelectedMultiImages]);
+
+  const handleDeleteSelectedMultiImages = useCallback(async () => {
+    if (selectedMultiImageFolders.length === 0 || deletingSelectedMultiImages) return;
+    setError(null);
+    setInfo(null);
+    setDeletingSelectedMultiImages(true);
+
+    const targets = [...selectedMultiImageFolders];
+    const deletedNames: string[] = [];
+
+    try {
+      for (const folderName of targets) {
+        setDeletingFolder(folderName);
+        const deleted = await deleteFolderRequest(folderName);
+        deletedNames.push(deleted);
+      }
+      if (deletedNames.length === 1) {
+        setInfo(t("bulk.deleteSuccess", { name: deletedNames[0] }));
+      } else if (deletedNames.length > 1) {
+        setInfo(tt(`${deletedNames.length} 件を削除しました。`, `Deleted ${deletedNames.length} items.`));
+      }
+      setMultiImageDeleteMode(false);
+      setSelectedMultiImageFolders([]);
+    } catch (err) {
+      if (deletedNames.length > 0) {
+        setInfo(tt(`${deletedNames.length} 件を削除しました。`, `Deleted ${deletedNames.length} items.`));
+      }
+      setError(err instanceof Error ? err.message : t("bulk.deleteError"));
+    } finally {
+      setDeletingFolder(null);
+      setDeletingSelectedMultiImages(false);
+      await fetchFolders();
+    }
+  }, [deleteFolderRequest, deletingSelectedMultiImages, fetchFolders, selectedMultiImageFolders, t, tt]);
+
   const filteredProjects = useMemo(() => {
     if (!projectSearch.trim()) return projects;
     const query = projectSearch.trim().toLowerCase();
     return projects.filter((project) => project.name.toLowerCase().includes(query));
   }, [projectSearch, projects]);
+
+  const getFolderOriginLabel = useCallback(
+    (folder: FolderEntry) =>
+      folder.source_origin === "realtime" ? tt("リアルタイム", "Realtime") : tt("アップロード", "Upload"),
+    [tt],
+  );
+
+  const getFolderOriginBadgeSx = useCallback(
+    (folder: FolderEntry) => ({
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      minWidth: 82,
+      px: 1,
+      py: 0.4,
+      borderRadius: 999,
+      fontSize: 10,
+      fontWeight: 700,
+      lineHeight: 1.2,
+      whiteSpace: "nowrap",
+      border: "1px solid",
+      borderColor: folder.source_origin === "realtime" ? "success.main" : "info.main",
+      color: folder.source_origin === "realtime" ? "success.dark" : "info.dark",
+      backgroundColor: folder.source_origin === "realtime" ? "rgba(46, 125, 50, 0.08)" : "rgba(25, 118, 210, 0.08)",
+    }),
+    [],
+  );
+
+  const getManualLabelCountLabel = useCallback(
+    (folder: FolderEntry) => {
+      const count = folder.manual_labeled_roi_count ?? 0;
+      return count > 0 ? String(count) : "-";
+    },
+    [],
+  );
+
+  const getManualAddedCountLabel = useCallback(
+    (folder: FolderEntry) => {
+      const count = folder.manual_added_roi_count ?? 0;
+      return count > 0 ? String(count) : "-";
+    },
+    [],
+  );
 
   const handleOpenInference = useCallback(
     (folder: FolderEntry) => {
@@ -548,6 +701,7 @@ const TiffManagerBulkPage = () => {
         folder: folder.name,
         db_name: dbName,
         has_extraction_db: folder.has_extraction_db ? "1" : "0",
+        has_inference_result: folder.has_inference_result ? "1" : "0",
         ...(activeProject ? { project: activeProject } : {}),
       });
       navigate(`/tiff-manager-bulk/inference?${params.toString()}`);
@@ -573,21 +727,7 @@ const TiffManagerBulkPage = () => {
         if (!focusMergePayload.ok || !merged?.merged_tif_name || !merged?.merged_folder_name) {
           throw new Error(merged?.detail || t("bulk.extractError"));
         }
-
-        const extractPayload = await fetch(endpoint("tiff-bulk/extract"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ folder_name: merged.merged_folder_name, project_name: activeProject || null }),
-        });
-        const extracted: ExtractionResult & { detail?: string } = await extractPayload
-          .json()
-          .catch(() => ({} as ExtractionResult));
-        if (!extractPayload.ok || !extracted?.db_name) {
-          throw new Error(extracted.detail || t("bulk.extractError"));
-        }
-
-        setResult(extracted);
-        setInfo(t("bulk.extractMergedSuccess", { db: extracted.db_name }));
+        setInfo(tt("マージ画像を作成しました。", "Merged image created."));
         await fetchFolders();
       } catch (err) {
         setError(err instanceof Error ? err.message : t("bulk.extractError"));
@@ -646,7 +786,7 @@ const TiffManagerBulkPage = () => {
           throw new Error(tt("先にROI抽出&推論を実行してください。", "Run ROI extraction & inference first."));
         }
         const dbName = `${folder.name}_bulk.db`;
-        const params = new URLSearchParams({ db_name: dbName, source: "roi" });
+        const params = new URLSearchParams({ db_name: dbName, source: "db" });
         if (activeProject) {
           params.set("project_name", activeProject);
           params.set("return_to", `/tiff-manager-bulk?project=${encodeURIComponent(activeProject)}`);
@@ -771,32 +911,36 @@ const TiffManagerBulkPage = () => {
 
   if (!activeProject) {
     return (
-      <Container
-        maxWidth={false}
-        sx={{
-          py: 3,
-          px: { xs: 2, sm: 3, md: 4 },
-        }}
-      >
+      <Container maxWidth={false} sx={PAGE_CONTAINER_SX}>
         <Stack spacing={2}>
           <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
             <Link underline="hover" color="inherit" href="/">
               {t("common.home")}
-            </Link>
-            <Link underline="hover" color="inherit" href="/roi">
-              {tt("ROI抽出", "ROI extraction")}
             </Link>
             <Typography color="text.primary" fontSize={14}>
               {tt("データベース", "Database")}
             </Typography>
           </Breadcrumbs>
 
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<ArrowBackIosNewIcon fontSize="small" />}
+            href="/"
+            sx={{ alignSelf: "flex-start" }}
+          >
+            {tt("Homeへ戻る", "Back to Home")}
+          </Button>
+
           <Box>
-            <Typography variant="h5" fontWeight={600}>
-              {t("projects.title")}
+            <Typography variant="h5" fontWeight={500}>
+              {tt("データベース", "Database")}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              {t("projects.subtitle")}
+              {tt(
+                "プロジェクトを作成・選択してから、画像のアップロードや一覧確認を行います。",
+                "Create or select a project, then upload images and review the image lists.",
+              )}
             </Typography>
           </Box>
 
@@ -862,7 +1006,7 @@ const TiffManagerBulkPage = () => {
             <Box mt={2}>
               {filteredProjects.length === 0 ? (
                 <Box textAlign="center" py={6}>
-                  <Typography variant="h6" fontWeight={600}>
+                  <Typography variant="h6" fontWeight={500}>
                     {projectSearch.trim() ? t("projects.emptySearch") : t("projects.empty")}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
@@ -870,22 +1014,22 @@ const TiffManagerBulkPage = () => {
                   </Typography>
                 </Box>
               ) : (
-                <TableContainer>
-                  <Table size="small">
+                <TableContainer sx={TABLE_CONTAINER_SX}>
+                  <Table size="small" sx={buildDataTableSx(900)}>
                     <TableHead>
                       <TableRow>
                         <TableCell>{t("projects.table.name")}</TableCell>
                         <TableCell align="right">{t("projects.table.createdAt")}</TableCell>
-                        <TableCell align="center">{t("projects.table.open")}</TableCell>
-                        <TableCell align="center">{tt("保存", "Save")}</TableCell>
-                        <TableCell align="center">{t("projects.table.delete")}</TableCell>
+                        <TableCell align="center" sx={{ width: 100 }} />
+                        <TableCell align="center" sx={{ width: 120 }} />
+                        <TableCell align="center" sx={{ width: 120 }} />
                       </TableRow>
                     </TableHead>
                     <TableBody>
                     {filteredProjects.map((project) => (
                       <TableRow key={project.name} hover>
                           <TableCell sx={{ maxWidth: 520 }}>
-                            <Typography noWrap fontWeight={500}>
+                            <Typography noWrap fontWeight={500} sx={ELLIPSIS_TEXT_SX}>
                               {project.name}
                             </Typography>
                           </TableCell>
@@ -898,7 +1042,7 @@ const TiffManagerBulkPage = () => {
                           </TableCell>
                           <TableCell align="center">
                             <Button variant="contained" size="small" onClick={() => handleOpenProject(project.name)}>
-                              {t("projects.open")}
+                              {tt("開く", "Open")}
                             </Button>
                           </TableCell>
                           <TableCell align="center">
@@ -939,48 +1083,38 @@ const TiffManagerBulkPage = () => {
   const displayProjectName = activeProject ? activeProject : "";
 
   return (
-    <Container
-      maxWidth={false}
-      sx={{
-        py: 3,
-        px: { xs: 2, sm: 3, md: 4 },
-      }}
-    >
+    <Container maxWidth={false} sx={PAGE_CONTAINER_SX}>
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
           <Link underline="hover" color="inherit" href="/">
             {t("common.home")}
           </Link>
-          <Link underline="hover" color="inherit" href="/roi">
-            {tt("ROI抽出", "ROI extraction")}
-          </Link>
           <Link underline="hover" color="inherit" onClick={handleBackToProjects}>
             {tt("データベース", "Database")}
           </Link>
-          <Typography color="text.primary" fontSize={14}>
-            {displayProjectName}
-          </Typography>
         </Breadcrumbs>
 
-        <Box>
+        <Stack spacing={1}>
           <Button
             size="small"
             variant="outlined"
             startIcon={<ArrowBackIosNewIcon fontSize="small" />}
             onClick={handleBackToProjects}
+            sx={{ alignSelf: "flex-start" }}
           >
-            {t("projects.back")}
+            {tt("データベースへ戻る", "Back to Database")}
           </Button>
-          <Typography variant="h5" fontWeight={600}>
-            {tt("データベース", "Database")}
+          <Typography variant="h5" fontWeight={500}>
+            {displayProjectName}
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {t("projects.current", { project: displayProjectName })}
-          </Typography>
-        </Box>
+        </Stack>
 
         <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 } }}>
-          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
+          <Stack spacing={2}>
+            <Typography variant="subtitle2" color="text.secondary">
+              {tt("利用方法を選択してください。", "Choose how you want to use this project.")}
+            </Typography>
+
             <input ref={directoryInputRef} type="file" accept=".tif,.tiff" hidden onChange={handleDirectoryChange} />
             <input
               ref={fileInputRef}
@@ -990,40 +1124,97 @@ const TiffManagerBulkPage = () => {
               hidden
               onChange={handleFileChange}
             />
-            <Button
-              variant="contained"
-              startIcon={<DriveFolderUploadIcon />}
-              onClick={handleOpenDirectoryDialog}
-              disabled={isUploading}
-            >
-              {isUploading ? t("bulk.uploading") : tt("Zstackフォルダをアップロード", "Upload Z-stack folder")}
-            </Button>
-            <Button
-              variant="outlined"
-              startIcon={<UploadFileIcon />}
-              onClick={handleOpenFileDialog}
-              disabled={isUploading}
-            >
-              {isUploading ? t("bulk.uploading") : tt("画像アップロード", "Upload image")}
-            </Button>
-            <TextField
-              size="small"
-              placeholder={t("bulk.searchPlaceholder")}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon fontSize="small" />
-                  </InputAdornment>
-                ),
-                inputProps: { "aria-label": "search bulk folders" },
-              }}
-              sx={{
-                minWidth: { xs: "100%", md: 360 },
-                flexGrow: 1,
-              }}
-            />
+
+            <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems="stretch">
+              <Box
+                sx={(theme) => ({
+                  flex: 1,
+                  minWidth: 0,
+                  p: { xs: 2, md: 2.25 },
+                  borderRadius: 2,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  background:
+                    theme.palette.mode === "light" ? "rgba(46, 125, 50, 0.04)" : "rgba(102, 187, 106, 0.12)",
+                })}
+              >
+                <Stack spacing={2} height="100%" justifyContent="space-between">
+                  <Box>
+                    <Typography variant="subtitle1" fontWeight={700}>
+                      {tt("リアルタイム", "Realtime")}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {tt(
+                        "CCD画像を観察しながら、そのまま取り込んで解析するときに使います。",
+                        "Use this when ingesting CCD images live while observing.",
+                      )}
+                    </Typography>
+                  </Box>
+                  <Button
+                    variant="contained"
+                    color="success"
+                    size="large"
+                    startIcon={<AutoGraphIcon fontSize="small" />}
+                    onClick={handleOpenRealtimeEngine}
+                    sx={{
+                      minWidth: { xs: "100%", md: 260 },
+                      px: 3,
+                      py: 1.2,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {tt("リアルタイムエンジン", "Realtime engine")}
+                  </Button>
+                </Stack>
+              </Box>
+
+              <Box
+                sx={(theme) => ({
+                  flex: 1,
+                  minWidth: 0,
+                  p: { xs: 2, md: 2.25 },
+                  borderRadius: 2,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  background:
+                    theme.palette.mode === "light" ? "rgba(25, 118, 210, 0.04)" : "rgba(144, 202, 249, 0.12)",
+                })}
+              >
+                <Stack spacing={2} height="100%">
+                  <Box>
+                    <Typography variant="subtitle1" fontWeight={700}>
+                      {tt("アップロード", "Upload")}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {tt(
+                        "必要な画像だけ手動で取り込み、あとから抽出や解析を進めるときに使います。",
+                        "Use this when manually uploading only the images you need for later processing.",
+                      )}
+                    </Typography>
+                  </Box>
+                  <Stack direction="row" spacing={1.25}>
+                    <Button
+                      variant="outlined"
+                      startIcon={<UploadFileIcon />}
+                      onClick={handleOpenFileDialog}
+                      disabled={isUploading}
+                      sx={{ flex: 1, minWidth: 0, whiteSpace: "nowrap" }}
+                    >
+                      {isUploading ? t("bulk.uploading") : tt("画像", "Image")}
+                    </Button>
+                    <Button
+                      variant="contained"
+                      startIcon={<DriveFolderUploadIcon />}
+                      onClick={handleOpenDirectoryDialog}
+                      disabled={isUploading}
+                      sx={{ flex: 1, minWidth: 0, whiteSpace: "nowrap" }}
+                    >
+                      {isUploading ? t("bulk.uploading") : tt("同視野画像フォルダ", "Same-field image folder")}
+                    </Button>
+                  </Stack>
+                </Stack>
+              </Box>
+            </Stack>
           </Stack>
         </Paper>
 
@@ -1041,11 +1232,11 @@ const TiffManagerBulkPage = () => {
         ) : filteredFolders.length === 0 ? (
           <Paper variant="outlined" sx={{ p: { xs: 1, md: 1.5 } }}>
             <Box textAlign="center" py={8}>
-              <Typography variant="h6" fontWeight={600}>
+              <Typography variant="h6" fontWeight={500}>
                 {t("bulk.notFoundTitle")}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {search.trim() ? t("bulk.notFoundBody.search") : t("bulk.notFoundBody.empty")}
+                {t("bulk.notFoundBody.empty")}
               </Typography>
             </Box>
           </Paper>
@@ -1054,7 +1245,7 @@ const TiffManagerBulkPage = () => {
             <Paper variant="outlined" sx={{ p: { xs: 1, md: 1.5 } }}>
               <Stack spacing={1.5}>
                 <Box>
-                  <Typography variant="h6" fontWeight={600}>
+                  <Typography variant="h6" fontWeight={500}>
                     {tt("画像リスト", "Image list")}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
@@ -1062,27 +1253,78 @@ const TiffManagerBulkPage = () => {
                   </Typography>
                 </Box>
 
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    startIcon={<ScienceIcon fontSize="small" />}
-                    onClick={() => void handleBatchExtractInferSingleImages()}
-                    disabled={singleImageFolders.length === 0 || batchInferRunning || batchCellCountRunning}
-                  >
-                    {batchInferRunning ? tt("処理中...", "Processing...") : tt("ROI抽出&推論", "ROI extraction & inference")}
-                  </Button>
-                  {activeProject && singleImageFolders.length > 0 && singleImageFolders.every((folder) => hasReadyInferenceResult(folder)) ? (
+                <Stack
+                  direction={{ xs: "column", md: "row" }}
+                  spacing={1}
+                  justifyContent="space-between"
+                  alignItems={{ xs: "stretch", md: "center" }}
+                >
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={0.75} flexWrap="wrap">
                     <Button
-                      variant="outlined"
-                      size="small"
+                      variant="contained"
+                      size="medium"
                       startIcon={<ScienceIcon fontSize="small" />}
-                      onClick={() => void handleBatchCellCountSingleImages()}
-                      disabled={batchInferRunning || batchCellCountRunning}
+                      onClick={() => void handleBatchExtractInferSingleImages()}
+                      disabled={singleImageFolders.length === 0 || batchInferRunning || batchCellCountRunning || singleImageDeleteMode}
+                      sx={{ px: 2.5, py: 0.9 }}
                     >
-                      {batchCellCountRunning ? tt("処理中...", "Processing...") : tt("セルカウント", "Cell count")}
+                      {batchInferRunning ? tt("処理中...", "Processing...") : tt("ROI抽出&推論", "ROI extraction & inference")}
                     </Button>
-                  ) : null}
+                    {activeProject && singleImageFolders.length > 0 && singleImageFolders.every((folder) => hasReadyInferenceResult(folder)) ? (
+                      <Button
+                        variant="outlined"
+                        size="medium"
+                        startIcon={<ScienceIcon fontSize="small" />}
+                        onClick={() => void handleBatchCellCountSingleImages()}
+                        disabled={batchInferRunning || batchCellCountRunning || singleImageDeleteMode}
+                        sx={{ px: 2.5, py: 0.9 }}
+                      >
+                        {batchCellCountRunning ? tt("処理中...", "Processing...") : tt("セルカウント", "Cell count")}
+                      </Button>
+                    ) : null}
+                  </Stack>
+
+                  <Stack direction="row" spacing={0.75} alignItems="center" justifyContent="flex-end" flexWrap="wrap">
+                    {singleImageDeleteMode ? (
+                      <>
+                        <Typography variant="caption" color="text.secondary">
+                          {tt(`${selectedSingleImageFolders.length} 件選択中`, `${selectedSingleImageFolders.length} selected`)}
+                        </Typography>
+                        <Button
+                          variant="contained"
+                          color="error"
+                          size="small"
+                          startIcon={<DeleteOutlineIcon fontSize="small" />}
+                          onClick={() => void handleDeleteSelectedSingleImages()}
+                          disabled={selectedSingleImageFolders.length === 0 || deletingSelectedSingleImages}
+                        >
+                          {deletingSelectedSingleImages ? t("bulk.deleting") : t("bulk.delete")}
+                        </Button>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={handleCancelSingleImageDeleteMode}
+                          disabled={deletingSelectedSingleImages}
+                        >
+                          {tt("キャンセル", "Cancel")}
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        variant="outlined"
+                        color="error"
+                        size="small"
+                        startIcon={<DeleteOutlineIcon fontSize="small" />}
+                        onClick={() => {
+                          setSingleImageDeleteMode(true);
+                          setSelectedSingleImageFolders([]);
+                        }}
+                        disabled={singleImageFolders.length === 0 || batchInferRunning || batchCellCountRunning || Boolean(deletingFolder)}
+                      >
+                        {t("bulk.delete")}
+                      </Button>
+                    )}
+                  </Stack>
                 </Stack>
 
                 {singleImageFolders.length === 0 ? (
@@ -1092,14 +1334,17 @@ const TiffManagerBulkPage = () => {
                     </Typography>
                   </Box>
                 ) : (
-                  <TableContainer>
-                    <Table size="small">
-                      <TableHead>
+                  <TableContainer sx={TABLE_CONTAINER_SX}>
+                    <Table size="small" sx={buildDataTableSx(960)}>
+                        <TableHead>
                         <TableRow>
-                          <TableCell>{tt("画像", "Image")}</TableCell>
-                          <TableCell align="center">DeepScan</TableCell>
-                          <TableCell align="center">{tt("保存", "Save")}</TableCell>
-                          <TableCell align="center">{t("bulk.table.delete")}</TableCell>
+                          {singleImageDeleteMode ? <TableCell padding="checkbox" align="center" /> : null}
+                          <TableCell>{tt("名前", "Name")}</TableCell>
+                          <TableCell align="center" sx={{ width: 128 }}>{tt("ROI変更数", "ROI changes")}</TableCell>
+                          <TableCell align="center" sx={{ width: 128 }}>{tt("ROI追加数", "ROI additions")}</TableCell>
+                          <TableCell align="right" sx={{ width: 120 }} />
+                          <TableCell align="right" sx={{ width: 112 }} />
+                          <TableCell align="center" sx={{ width: 110 }}>{tt("種類", "Type")}</TableCell>
                         </TableRow>
                       </TableHead>
                       <TableBody>
@@ -1110,23 +1355,64 @@ const TiffManagerBulkPage = () => {
                             mergingFolder === folder.name ||
                             batchInferRunning ||
                             batchCellCountRunning;
+                          const isSelectedForDelete = selectedSingleImageFolders.includes(folder.name);
                           return (
-                            <TableRow key={folder.name} hover>
+                            <TableRow
+                              key={folder.name}
+                              hover={!singleImageDeleteMode}
+                              selected={singleImageDeleteMode && isSelectedForDelete}
+                              onClick={
+                                singleImageDeleteMode && !deletingSelectedSingleImages
+                                  ? () => toggleSingleImageDeleteSelection(folder.name)
+                                  : undefined
+                              }
+                              sx={singleImageDeleteMode ? { cursor: deletingSelectedSingleImages ? "default" : "pointer" } : undefined}
+                            >
+                              {singleImageDeleteMode ? (
+                                <TableCell padding="checkbox" align="center">
+                                  <Checkbox
+                                    color="error"
+                                    checked={isSelectedForDelete}
+                                    disabled={deletingSelectedSingleImages}
+                                    onClick={(event) => event.stopPropagation()}
+                                    onChange={() => toggleSingleImageDeleteSelection(folder.name)}
+                                  />
+                                </TableCell>
+                              ) : null}
                               <TableCell sx={{ maxWidth: 560 }}>
                                 <Tooltip title={folder.name}>
-                                  <Typography noWrap fontWeight={500}>
+                                  <Typography noWrap fontWeight={500} sx={ELLIPSIS_TEXT_SX}>
                                     {scopedFolderName(folder.name)}
                                   </Typography>
                                 </Tooltip>
                               </TableCell>
                               <TableCell align="center">
+                                <Typography
+                                  variant="body2"
+                                  color={(folder.manual_labeled_roi_count ?? 0) > 0 ? "text.primary" : "text.secondary"}
+                                  sx={{ whiteSpace: "nowrap", fontWeight: (folder.manual_labeled_roi_count ?? 0) > 0 ? 500 : 400 }}
+                                >
+                                  {getManualLabelCountLabel(folder)}
+                                </Typography>
+                              </TableCell>
+                              <TableCell align="center">
+                                <Typography
+                                  variant="body2"
+                                  color={(folder.manual_added_roi_count ?? 0) > 0 ? "text.primary" : "text.secondary"}
+                                  sx={{ whiteSpace: "nowrap", fontWeight: (folder.manual_added_roi_count ?? 0) > 0 ? 500 : 400 }}
+                                >
+                                  {getManualAddedCountLabel(folder)}
+                                </Typography>
+                              </TableCell>
+                              <TableCell align="right">
                                 {hasReadyInferenceResult(folder) ? (
                                   <Button
                                     variant="outlined"
                                     size="small"
                                     startIcon={<ScienceIcon fontSize="small" />}
                                     onClick={() => void handleOpenSingleImageDeepScan(folder)}
-                                    disabled={isBusy}
+                                    disabled={isBusy || singleImageDeleteMode}
+                                    sx={{ minWidth: 0 }}
                                   >
                                     {openingSingleImageFolder === folder.name ? tt("処理中...", "Processing...") : "DeepScan"}
                                   </Button>
@@ -1136,28 +1422,22 @@ const TiffManagerBulkPage = () => {
                                   </Typography>
                                 )}
                               </TableCell>
-                              <TableCell align="center">
+                              <TableCell align="right">
                                 <Button
                                   variant="outlined"
                                   size="small"
                                   startIcon={<FileDownloadIcon fontSize="small" />}
                                   onClick={() => handleDownloadSingleTiff(folder.name)}
-                                  disabled={isBusy}
+                                  disabled={isBusy || singleImageDeleteMode}
+                                  sx={{ minWidth: 0 }}
                                 >
                                   {tt("保存", "Save")}
                                 </Button>
                               </TableCell>
                               <TableCell align="center">
-                                <Button
-                                  variant="outlined"
-                                  color="error"
-                                  size="small"
-                                  startIcon={<DeleteOutlineIcon />}
-                                  onClick={() => handleDelete(folder.name)}
-                                  disabled={isBusy}
-                                >
-                                  {deletingFolder === folder.name ? t("bulk.deleting") : t("bulk.delete")}
-                                </Button>
+                                <Box component="span" sx={getFolderOriginBadgeSx(folder)}>
+                                  {getFolderOriginLabel(folder)}
+                                </Box>
                               </TableCell>
                             </TableRow>
                           );
@@ -1172,7 +1452,7 @@ const TiffManagerBulkPage = () => {
             <Paper variant="outlined" sx={{ p: { xs: 1, md: 1.5 } }}>
               <Stack spacing={1.5}>
                 <Box>
-                  <Typography variant="h6" fontWeight={600}>
+                  <Typography variant="h6" fontWeight={500}>
                     {tt("同視野フォルダリスト", "Same-field folder list")}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
@@ -1187,14 +1467,65 @@ const TiffManagerBulkPage = () => {
                     </Typography>
                   </Box>
                 ) : (
-                  <TableContainer>
-                    <Table size="small">
+                  <>
+                    <Stack
+                      direction={{ xs: "column", md: "row" }}
+                      spacing={1}
+                      justifyContent="flex-end"
+                      alignItems={{ xs: "stretch", md: "center" }}
+                    >
+                      <Stack direction="row" spacing={0.75} alignItems="center" justifyContent="flex-end" flexWrap="wrap">
+                        {multiImageDeleteMode ? (
+                          <>
+                            <Typography variant="caption" color="text.secondary">
+                              {tt(`${selectedMultiImageFolders.length} 件選択中`, `${selectedMultiImageFolders.length} selected`)}
+                            </Typography>
+                            <Button
+                              variant="contained"
+                              color="error"
+                              size="small"
+                              startIcon={<DeleteOutlineIcon fontSize="small" />}
+                              onClick={() => void handleDeleteSelectedMultiImages()}
+                              disabled={selectedMultiImageFolders.length === 0 || deletingSelectedMultiImages}
+                            >
+                              {deletingSelectedMultiImages ? t("bulk.deleting") : t("bulk.delete")}
+                            </Button>
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              onClick={handleCancelMultiImageDeleteMode}
+                              disabled={deletingSelectedMultiImages}
+                            >
+                              {tt("キャンセル", "Cancel")}
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            variant="outlined"
+                            color="error"
+                            size="small"
+                            startIcon={<DeleteOutlineIcon fontSize="small" />}
+                            onClick={() => {
+                              setMultiImageDeleteMode(true);
+                              setSelectedMultiImageFolders([]);
+                            }}
+                            disabled={multiImageFolders.length === 0 || batchInferRunning || batchCellCountRunning || Boolean(deletingFolder) || Boolean(mergingFolder)}
+                          >
+                            {t("bulk.delete")}
+                          </Button>
+                        )}
+                      </Stack>
+                    </Stack>
+
+                  <TableContainer sx={TABLE_CONTAINER_SX}>
+                    <Table size="small" sx={buildDataTableSx(860)}>
                       <TableHead>
                         <TableRow>
-                          <TableCell>{t("bulk.table.folder")}</TableCell>
-                          <TableCell align="center">{tt("一覧", "List")}</TableCell>
-                          <TableCell align="center">{t("bulk.extractFocusMerged")}</TableCell>
-                          <TableCell align="center">{t("bulk.table.delete")}</TableCell>
+                          {multiImageDeleteMode ? <TableCell padding="checkbox" align="center" /> : null}
+                          <TableCell>{tt("名前", "Name")}</TableCell>
+                          <TableCell align="right" sx={{ width: 92 }} />
+                          <TableCell align="right" sx={{ width: 180 }} />
+                          <TableCell align="center" sx={{ width: 110 }}>{tt("種類", "Type")}</TableCell>
                         </TableRow>
                       </TableHead>
                       <TableBody>
@@ -1204,30 +1535,65 @@ const TiffManagerBulkPage = () => {
                             deletingFolder === folder.name ||
                             mergingFolder === folder.name ||
                             batchInferRunning ||
-                            batchCellCountRunning;
+                            batchCellCountRunning ||
+                            deletingSelectedMultiImages;
+                          const isSelectedForDelete = selectedMultiImageFolders.includes(folder.name);
                           return (
-                            <TableRow key={folder.name} hover>
+                            <TableRow
+                              key={folder.name}
+                              hover={!multiImageDeleteMode}
+                              selected={multiImageDeleteMode && isSelectedForDelete}
+                              onClick={
+                                multiImageDeleteMode && !deletingSelectedMultiImages
+                                  ? () => toggleMultiImageDeleteSelection(folder.name)
+                                  : undefined
+                              }
+                              sx={{
+                                ...(multiImageDeleteMode ? { cursor: deletingSelectedMultiImages ? "default" : "pointer" } : undefined),
+                                "& > td": {
+                                  py: 1.5,
+                                },
+                              }}
+                            >
+                                {multiImageDeleteMode ? (
+                                  <TableCell padding="checkbox" align="center">
+                                    <Checkbox
+                                      color="error"
+                                      checked={isSelectedForDelete}
+                                      disabled={deletingSelectedMultiImages}
+                                      onClick={(event) => event.stopPropagation()}
+                                      onChange={() => toggleMultiImageDeleteSelection(folder.name)}
+                                    />
+                                  </TableCell>
+                                ) : null}
                                 <TableCell sx={{ maxWidth: 560 }}>
                                   <Tooltip title={folder.name}>
-                                    <Typography noWrap fontWeight={500}>
+                                    <Typography noWrap fontWeight={500} sx={ELLIPSIS_TEXT_SX}>
                                       {displayName}
                                     </Typography>
                                   </Tooltip>
                                 </TableCell>
-                                <TableCell align="center">
-                                  <Stack spacing={0.5} alignItems="center">
-                                    <Button
-                                      variant="outlined"
-                                      size="small"
-                                      onClick={() => handleOpenInference(folder)}
-                                      disabled={isBusy}
-                                    >
-                                      {tt("一覧", "List")}
-                                    </Button>
-                                  </Stack>
+                                <TableCell align="right">
+                                  <Button
+                                    variant="outlined"
+                                    size="small"
+                                    onClick={() => handleOpenInference(folder)}
+                                    disabled={isBusy || multiImageDeleteMode}
+                                    sx={{ minWidth: 0 }}
+                                  >
+                                    {tt("一覧", "List")}
+                                  </Button>
                                 </TableCell>
-                                <TableCell align="center">
-                                  <Stack spacing={0.5} alignItems="center">
+                                <TableCell align="right">
+                                  <Box
+                                    sx={{
+                                      position: "relative",
+                                      minHeight: 54,
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "flex-end",
+                                    }}
+                                  >
                                     <Button
                                       variant="outlined"
                                       size="small"
@@ -1235,28 +1601,30 @@ const TiffManagerBulkPage = () => {
                                       onClick={() => {
                                         void handleFocusMerge(folder.name);
                                       }}
-                                      disabled={isBusy}
+                                      disabled={isBusy || multiImageDeleteMode}
+                                      sx={{ minWidth: 0 }}
                                     >
-                                      {mergingFolder === folder.name ? t("bulk.extracting") : t("bulk.extractFocusMerged")}
+                                      {mergingFolder === folder.name ? tt("作成中...", "Creating...") : t("bulk.extractFocusMerged")}
                                     </Button>
-                                    {folder.has_focus_merged ? (
-                                      <Typography variant="caption" color="text.secondary">
-                                        {tt("単一画像リストへ追加済み", "Added to single-image list")}
-                                      </Typography>
-                                    ) : null}
-                                  </Stack>
+                                    <Typography
+                                      variant="caption"
+                                      color="text.secondary"
+                                      sx={{
+                                        position: "absolute",
+                                        right: 0,
+                                        bottom: 0,
+                                        lineHeight: 1.2,
+                                        visibility: folder.has_focus_merged ? "visible" : "hidden",
+                                      }}
+                                    >
+                                      {tt("生成済", "Generated")}
+                                    </Typography>
+                                  </Box>
                                 </TableCell>
                                 <TableCell align="center">
-                                  <Button
-                                    variant="outlined"
-                                    color="error"
-                                    size="small"
-                                    startIcon={<DeleteOutlineIcon />}
-                                    onClick={() => handleDelete(folder.name)}
-                                    disabled={isBusy}
-                                  >
-                                    {deletingFolder === folder.name ? t("bulk.deleting") : t("bulk.delete")}
-                                  </Button>
+                                  <Box component="span" sx={getFolderOriginBadgeSx(folder)}>
+                                    {getFolderOriginLabel(folder)}
+                                  </Box>
                                 </TableCell>
                               </TableRow>
                           );
@@ -1264,6 +1632,7 @@ const TiffManagerBulkPage = () => {
                       </TableBody>
                     </Table>
                   </TableContainer>
+                  </>
                 )}
               </Stack>
             </Paper>
@@ -1273,7 +1642,7 @@ const TiffManagerBulkPage = () => {
         {result && (
           <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 } }}>
             <Stack spacing={2}>
-              <Typography variant="h6" fontWeight={600}>
+              <Typography variant="h6" fontWeight={500}>
                 {t("bulk.result.title")}
               </Typography>
               <Stack spacing={1}>
@@ -1314,8 +1683,8 @@ const TiffManagerBulkPage = () => {
                     {t("bulk.result.noFiles")}
                   </Typography>
                 ) : (
-                  <TableContainer>
-                    <Table size="small">
+                  <TableContainer sx={TABLE_CONTAINER_SX}>
+                    <Table size="small" sx={buildDataTableSx(720)}>
                       <TableHead>
                         <TableRow>
                           <TableCell>{t("bulk.table.filename")}</TableCell>
@@ -1327,7 +1696,9 @@ const TiffManagerBulkPage = () => {
                           <TableRow key={file.relative_path}>
                             <TableCell sx={{ maxWidth: 360 }}>
                               <Tooltip title={file.relative_path}>
-                                <Typography noWrap>{file.relative_path}</Typography>
+                                <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
+                                  {file.relative_path}
+                                </Typography>
                               </Tooltip>
                             </TableCell>
                             <TableCell align="right">{file.roi_count.toLocaleString()}</TableCell>
@@ -1358,7 +1729,7 @@ const ResultRow = ({ label, value }: ResultRowProps) => (
   <Stack direction={{ xs: "column", sm: "row" }} spacing={0.5}>
     <Typography
       variant="body2"
-      sx={{ minWidth: 180, fontWeight: 600, color: "text.secondary" }}
+      sx={{ minWidth: 180, fontWeight: 500, color: "text.secondary" }}
     >
       {label}
     </Typography>

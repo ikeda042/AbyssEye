@@ -29,6 +29,7 @@ import ArrowForwardIosIcon from "@mui/icons-material/ArrowForwardIos";
 import { API_BASE_URL } from "../config";
 import { getInferenceClassDescription } from "../constants/inference";
 import { useI18n } from "../i18n";
+import { PAGE_CONTAINER_SX } from "../ui/layout";
 
 type Inference = {
   predicted_class: number;
@@ -501,11 +502,28 @@ const DeepScanPage = () => {
     }),
     [tt],
   );
-  const deepscanIsRoiStyle = deepscanSource === "roi" || deepscanSource === "realtime" || deepscanSource === "db";
-  const deepscanBreadcrumbLabel = deepscanIsRoiStyle ? tt("ROI抽出", "ROI Extraction") : tt("Databases", "Databases");
-  const deepscanBreadcrumbTo = returnTo || "/tiff-manager-bulk";
+  const deepscanBreadcrumbLabel =
+    deepscanSource === "realtime" ? tt("リアルタイムエンジン", "Realtime engine") : tt("データベース", "Database");
+  const deepscanBreadcrumbTo = returnTo || (deepscanSource === "realtime" ? "/realtime" : "/databases");
   const deepscanBackButtonLabel = returnTo ? labels.backToSelection : labels.backToList;
-  const deepscanBackTarget = returnTo || (deepscanIsRoiStyle ? "/tiff-manager-bulk" : "/databases");
+  const deepscanBackTarget = returnTo || (deepscanSource === "realtime" ? "/realtime" : "/databases");
+  const projectListPath = "/databases";
+  const projectDetailPath = projectName ? `/tiff-manager-bulk?project=${encodeURIComponent(projectName)}` : "";
+  const showProjectBreadcrumbTrail = deepscanSource !== "realtime" && Boolean(projectName);
+  const breadcrumbTrail = showProjectBreadcrumbTrail
+    ? [
+        <Link key="db" underline="hover" color="inherit" component={RouterLink} to={projectListPath}>
+          {tt("データベース", "Database")}
+        </Link>,
+        <Link key="project" underline="hover" color="inherit" component={RouterLink} to={projectDetailPath}>
+          {projectName}
+        </Link>,
+      ]
+    : [
+        <Link key="back" underline="hover" color="inherit" component={RouterLink} to={deepscanBreadcrumbTo}>
+          {deepscanBreadcrumbLabel}
+        </Link>,
+      ];
   const classLabels = useMemo(
     () =>
       Array.from({ length: 4 }, (_, index) => {
@@ -537,7 +555,7 @@ const DeepScanPage = () => {
   }, [deepVisionOverlayEnabled]);
 
   useEffect(() => {
-    if (!projectName || deepscanSource !== "roi") {
+    if (!projectName || deepscanSource === "realtime") {
       setProjectSingleImagePagerItems([]);
       return;
     }
@@ -932,7 +950,6 @@ const DeepScanPage = () => {
   }, [focusProfile]);
 
   const availableImages = status?.available_images ?? [];
-  const showFocusTrack = availableImages.length > 1 || (focusTrack?.total ?? 0) > 1;
   const projectSingleImagePager = useMemo(() => {
     if (!projectSingleImagePagerItems.length) return null;
     const index = projectSingleImagePagerItems.findIndex((item) => item.db_name === dbName);
@@ -940,6 +957,7 @@ const DeepScanPage = () => {
     return { items: projectSingleImagePagerItems, index };
   }, [dbName, projectSingleImagePagerItems]);
   const usesProjectSingleImagePager = (projectSingleImagePager?.items.length ?? 0) > 1;
+  const showFocusTrack = !usesProjectSingleImagePager && (availableImages.length > 1 || (focusTrack?.total ?? 0) > 1);
   const hasImagePager = usesProjectSingleImagePager || availableImages.length > 1;
   const currentImageIndex = usesProjectSingleImagePager
     ? projectSingleImagePager?.index ?? 0
@@ -1306,25 +1324,33 @@ const DeepScanPage = () => {
 
   return (
     <ThemeProvider theme={deepScanTheme}>
-      <Container maxWidth="xl" sx={{ py: 4.25, px: { xs: 0.65, sm: 1, md: 1.35, lg: 1.7, xl: 1.9 } }}>
-        <Stack spacing={2.5}>
+      <Container maxWidth={false} sx={PAGE_CONTAINER_SX}>
+        <Stack spacing={2}>
           <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
             <Link underline="hover" color="inherit" href="/">
               Home
             </Link>
-            <Link underline="hover" color="inherit" component={RouterLink} to={deepscanBreadcrumbTo}>
-              {deepscanBreadcrumbLabel}
-            </Link>
+            {breadcrumbTrail}
             <Typography color="text.primary" fontSize={14}>
               DeepScan
             </Typography>
           </Breadcrumbs>
 
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<ArrowBackIosNewIcon fontSize="small" />}
+            onClick={handleBackToSelection}
+            sx={{ alignSelf: "flex-start" }}
+          >
+            {deepscanBackButtonLabel}
+          </Button>
+
           {error && <Alert severity="error">{error}</Alert>}
 
           <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }} justifyContent="space-between">
             <Box>
-              <Typography variant="h5" fontWeight={700}>
+              <Typography variant="h5" fontWeight={600}>
                 DeepScan
               </Typography>
               {/* <Typography variant="body2" color="text.secondary">
@@ -1332,14 +1358,6 @@ const DeepScanPage = () => {
               </Typography> */}
             </Box>
             <Stack direction="row" spacing={1}>
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<ArrowBackIosNewIcon fontSize="small" />}
-                onClick={handleBackToSelection}
-              >
-                {deepscanBackButtonLabel}
-              </Button>
               <Button
                 variant="contained"
                 size="small"
@@ -1357,7 +1375,7 @@ const DeepScanPage = () => {
               <Card variant="outlined">
                 <CardContent>
                   <Stack
-                    direction={{ xs: "column", md: "row" }}
+                    direction={{ xs: "column", lg: "row" }}
                     spacing={1.5}
                     alignItems="stretch"
                   >
@@ -1385,7 +1403,7 @@ const DeepScanPage = () => {
                         backgroundColor: "rgba(15,23,42,0.02)",
                       }}
                     >
-                      <Typography variant="subtitle2" fontWeight={600}>
+                      <Typography variant="subtitle2" fontWeight={500}>
                         {labels.tiffDisplayMode}
                       </Typography>
                       <Stack spacing={0.5} alignItems={{ xs: "flex-start", sm: "flex-end" }} sx={{ minWidth: 0 }}>
@@ -1402,7 +1420,7 @@ const DeepScanPage = () => {
                             <ToggleButton value="opticalBoost">Optical Boost</ToggleButton>
                           </ToggleButtonGroup>
                           <Stack direction="row" spacing={0.75} alignItems="center">
-                            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
                               {labels.frameBasis}
                             </Typography>
                             <ToggleButtonGroup
@@ -1429,7 +1447,7 @@ const DeepScanPage = () => {
                               ml: 1,
                               mr: 0,
                               "& .MuiFormControlLabel-label": {
-                                fontWeight: 700,
+                                fontWeight: 600,
                                 fontSize: 14,
                                 color: deepVisionOverlayEnabled ? "primary.main" : "text.secondary",
                                 letterSpacing: "0.01em",
@@ -1469,14 +1487,6 @@ const DeepScanPage = () => {
                             sx={{ minWidth: 36, px: 1 }}
                           >
                             <ArrowForwardIosIcon fontSize="small" />
-                          </Button>
-                          <Button
-                            variant="outlined"
-                            size="small"
-                            onClick={handleBackToSelection}
-                            sx={{ whiteSpace: "nowrap" }}
-                          >
-                            {deepscanBackButtonLabel}
                           </Button>
                         </Stack>
                         <Typography variant="caption" color="text.secondary">
@@ -1624,7 +1634,17 @@ const DeepScanPage = () => {
                       )}
                     </Box>
                   </Box>
-                  <Stack spacing={1.25} sx={{ minWidth: { md: 260 }, width: { md: 300, lg: 320 }, maxWidth: 360, alignSelf: "stretch" }}>
+                  <Stack
+                    spacing={1.25}
+                    sx={{
+                      width: "100%",
+                      minWidth: 0,
+                      maxWidth: { lg: 360 },
+                      flexBasis: { lg: 320 },
+                      flexShrink: 0,
+                      alignSelf: "stretch",
+                    }}
+                  >
                     <Box
                       aria-hidden={!showFocusTrack}
                       sx={{
@@ -1636,7 +1656,7 @@ const DeepScanPage = () => {
                         pointerEvents: showFocusTrack ? "auto" : "none",
                       }}
                     >
-                        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 0.5 }}>
+                        <Typography variant="subtitle2" fontWeight={500} sx={{ mb: 0.5 }}>
                           {labels.focusTrackTitle}
                         </Typography>
                         {focusProfile ? (
@@ -1756,7 +1776,7 @@ const DeepScanPage = () => {
                       }}
                     >
                       <Box>
-                        <Typography variant="subtitle2" fontWeight={600} gutterBottom>
+                        <Typography variant="subtitle2" fontWeight={500} gutterBottom>
                           {labels.deepScanSummary}
                         </Typography>
                         <Stack spacing={0.5}>
@@ -1786,7 +1806,7 @@ const DeepScanPage = () => {
                           }}
                         >
                           <Stack spacing={0.5}>
-                            <Typography variant="subtitle2" fontWeight={600}>
+                            <Typography variant="subtitle2" fontWeight={500}>
                               {labels.cellCountSummary}
                             </Typography>
                             {cellCountError ? (
@@ -1868,7 +1888,7 @@ const DeepScanPage = () => {
                           )}
                         </Stack>
                         <Stack direction="row" alignItems="center" justifyContent="space-between" mb={0.5}>
-                          <Typography variant="subtitle2" fontWeight={600}>
+                          <Typography variant="subtitle2" fontWeight={500}>
                             {labels.manualLabelTitle}
                           </Typography>
                           {(manualLabelSaving || manualRoiSaving) && (
@@ -1914,7 +1934,7 @@ const DeepScanPage = () => {
                       </Box>
                       <Box sx={{ mt: "auto", pt: 1, borderTop: "1px solid rgba(15,23,42,0.08)" }}>
                         <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" mb={0.5}>
-                          <Typography variant="subtitle2" fontWeight={600}>
+                          <Typography variant="subtitle2" fontWeight={500}>
                             {labels.selectedRoi}
                           </Typography>
                           {selectedOverlayRoiMeta ? (
@@ -1928,7 +1948,7 @@ const DeepScanPage = () => {
                                 }}
                               />
                               <Box>
-                                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
                                   Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
                                   {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}) / {labels.confidence}(AI):{" "}
                                   {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
@@ -1982,7 +2002,7 @@ const DeepScanPage = () => {
                     backgroundColor: "rgba(15,23,42,0.02)",
                   }}
                 >
-                  <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 0.75 }}>
+                  <Typography variant="subtitle1" fontWeight={500} sx={{ mb: 0.75 }}>
                     {labels.targetDb}
                   </Typography>
                   <Stack direction="row" flexWrap="wrap" columnGap={2.5} rowGap={0.75}>
@@ -2007,7 +2027,7 @@ const DeepScanPage = () => {
               <Card variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, gridColumn: { xs: "1", lg: "1 / span 2" } }}>
                 <Stack spacing={0.5}>
                   <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "flex-start", sm: "center" }} spacing={1} justifyContent="space-between">
-                    <Typography variant="subtitle1" fontWeight={600}>
+                    <Typography variant="subtitle1" fontWeight={500}>
                       {labels.inferencePreview}
                     </Typography>
                     <Stack
@@ -2018,7 +2038,7 @@ const DeepScanPage = () => {
                       flexWrap="wrap"
                     >
                       <Stack direction="row" spacing={0.75} alignItems="center">
-                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
                           {labels.previewLabelMode}
                         </Typography>
                         <ToggleButtonGroup
@@ -2076,7 +2096,7 @@ const DeepScanPage = () => {
                     onDrop={(event) => handleBucketDrop(event, classIndex)}
                   >
                     <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
-                      <Typography variant="subtitle1" fontWeight={600}>
+                      <Typography variant="subtitle1" fontWeight={500}>
                         {label} ({bucket.length})
                       </Typography>
                     </Stack>
@@ -2160,7 +2180,7 @@ const DeepScanPage = () => {
           <Stack spacing={3}>
             <Card variant="outlined">
               <CardContent>
-                <Stack direction={{ xs: "column", md: "row" }} spacing={2.5} alignItems="stretch">
+                <Stack direction={{ xs: "column", lg: "row" }} spacing={2.5} alignItems="stretch">
                   <Box
                     sx={{
                       flex: 1,
@@ -2180,7 +2200,7 @@ const DeepScanPage = () => {
                     />
                   </Box>
                   <Stack spacing={1.25} sx={{ width: "100%", maxWidth: "none", alignSelf: "stretch" }}>
-                    <Typography variant="subtitle1" fontWeight={600}>
+                    <Typography variant="subtitle1" fontWeight={500}>
                       {labels.targetDb}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">

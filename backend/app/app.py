@@ -13,6 +13,7 @@ from .deepscan.router import router as deepscan_router
 from .dev.router import router as dev_router
 from .inference.router import router as inference_router
 from .realtime.router import router as realtime_router
+from .realtime import watch_projects as realtime_watch_projects
 from .roi_extract.router import router as roi_router
 from .tiff_manager.router import router as tiff_router
 from .tiff_manager_buld.router import router as tiff_bulk_router
@@ -69,6 +70,16 @@ app.mount(
     StaticFiles(directory=FRONTEND_DIST / "assets", check_dir=False),
     name="frontend-assets",
 )
+
+
+@app.on_event("startup")
+async def start_realtime_watch_projects() -> None:
+    await realtime_watch_projects.start_watch_projects()
+
+
+@app.on_event("shutdown")
+async def stop_realtime_watch_projects() -> None:
+    await realtime_watch_projects.stop_watch_projects()
 
 
 @app.get(f"{API_PREFIX}/")

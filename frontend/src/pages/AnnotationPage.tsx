@@ -423,7 +423,7 @@ const AnnotationPage = () => {
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Paper variant="outlined" sx={{ p: 3 }}>
           <Stack spacing={2} alignItems="flex-start">
-            <Typography variant="h6" fontWeight={600}>
+            <Typography variant="h6" fontWeight={500}>
               {labels.dbMissingTitle}
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -460,7 +460,7 @@ const AnnotationPage = () => {
         </Breadcrumbs>
 
         <Stack spacing={0.5}>
-          <Typography variant="h5" fontWeight={600}>
+          <Typography variant="h5" fontWeight={500}>
             {labels.title}
           </Typography>
           <Typography variant="body2" color="text.secondary">
@@ -635,7 +635,7 @@ const AnnotationPage = () => {
               }}
             >
               <Stack spacing={0.5}>
-                <Typography variant="subtitle1" fontWeight={600}>
+                <Typography variant="subtitle1" fontWeight={500}>
                   {labels.recordInfo}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">

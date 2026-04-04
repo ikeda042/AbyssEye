@@ -27,14 +27,17 @@ import SearchIcon from "@mui/icons-material/Search";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import ScienceIcon from "@mui/icons-material/Science";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 import { API_BASE_URL } from "../config";
 import { useI18n } from "../i18n";
+import { buildDataTableSx, ELLIPSIS_TEXT_SX, PAGE_CONTAINER_SX, TABLE_CONTAINER_SX } from "../ui/layout";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 
 const TiffManagerPage = () => {
   const navigate = useNavigate();
-  const { t } = useI18n();
+  const { t, language } = useI18n();
+  const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
   const [tifFiles, setTifFiles] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -173,10 +176,7 @@ const TiffManagerPage = () => {
   return (
     <Container
       maxWidth={false}
-      sx={{
-        py: 3,
-        px: { xs: 2, sm: 3, md: 4 },
-      }}
+      sx={PAGE_CONTAINER_SX}
     >
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
@@ -188,8 +188,18 @@ const TiffManagerPage = () => {
           </Typography>
         </Breadcrumbs>
 
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<ArrowBackIosNewIcon fontSize="small" />}
+          href="/"
+          sx={{ alignSelf: "flex-start" }}
+        >
+          {tt("Homeへ戻る", "Back to Home")}
+        </Button>
+
         <Box>
-          <Typography variant="h5" fontWeight={600}>
+          <Typography variant="h5" fontWeight={500}>
             {t("tiff.title")}
           </Typography>
           {/* <Typography variant="body2" color="text.secondary">
@@ -247,7 +257,7 @@ const TiffManagerPage = () => {
             </Box>
           ) : filteredFiles.length === 0 ? (
             <Box textAlign="center" py={8}>
-              <Typography variant="h6" fontWeight={600}>
+              <Typography variant="h6" fontWeight={500}>
                 {t("tiff.notFoundTitle")}
               </Typography>
               <Typography variant="body2" color="text.secondary">
@@ -255,8 +265,8 @@ const TiffManagerPage = () => {
               </Typography>
             </Box>
           ) : (
-            <TableContainer>
-              <Table size="small">
+            <TableContainer sx={TABLE_CONTAINER_SX}>
+              <Table size="small" sx={buildDataTableSx(760)}>
                 <TableHead>
                   <TableRow>
                     <TableCell>{t("tiff.table.filename")}</TableCell>
@@ -270,7 +280,7 @@ const TiffManagerPage = () => {
                     <TableRow key={file} hover>
                       <TableCell sx={{ maxWidth: 560 }}>
                         <Tooltip title={file}>
-                          <Typography noWrap fontWeight={500}>
+                          <Typography noWrap fontWeight={500} sx={ELLIPSIS_TEXT_SX}>
                             {file}
                           </Typography>
                         </Tooltip>

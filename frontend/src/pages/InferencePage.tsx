@@ -558,7 +558,7 @@ const InferencePage = () => {
       <Container maxWidth="md" sx={{ py: 6 }}>
         <Paper sx={{ p: 4 }}>
           <Stack spacing={2} alignItems="flex-start">
-            <Typography variant="h5" fontWeight={600}>
+            <Typography variant="h5" fontWeight={500}>
               {messages.dbMissing}
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -602,7 +602,7 @@ const InferencePage = () => {
         <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 } }}>
           <Stack spacing={2}>
             <Box>
-              <Typography variant="h6" fontWeight={600}>
+              <Typography variant="h6" fontWeight={500}>
                 {dbName}
               </Typography>
               <Typography variant="body2" color="text.secondary">
@@ -718,7 +718,7 @@ const InferencePage = () => {
             return (
               <Paper key={label} variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, minHeight: 360 }}>
                 <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
-                  <Typography variant="subtitle1" fontWeight={600}>
+                  <Typography variant="subtitle1" fontWeight={500}>
                     {label} ({bucket.length})
                   </Typography>
                   <Button
@@ -802,7 +802,7 @@ const InferencePage = () => {
 
         {classBuckets.others.length > 0 && (
           <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2 } }}>
-            <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+            <Typography variant="subtitle1" fontWeight={500} gutterBottom>
               {tt("その他クラス", "Other classes")} ({classBuckets.others.length})
             </Typography>
             <Typography variant="body2" color="text.secondary">

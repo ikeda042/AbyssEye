@@ -19,12 +19,14 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
+import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import DriveFolderUploadIcon from "@mui/icons-material/DriveFolderUpload";
 
 import { API_BASE_URL } from "../config";
 import { useI18n } from "../i18n";
+import { buildDataTableSx, ELLIPSIS_TEXT_SX, PAGE_CONTAINER_SX, TABLE_CONTAINER_SX } from "../ui/layout";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
 const ALLOWED_MODEL_EXTENSIONS = [".h5", ".hdf5", ".keras", ".pb", ".tflite"];
@@ -47,7 +49,8 @@ const isModelEntry = (value: unknown): value is ModelEntry =>
   typeof (value as Record<string, unknown>).is_active === "boolean";
 
 const ModelManagerPage = () => {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
+  const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
@@ -186,10 +189,7 @@ const ModelManagerPage = () => {
   return (
     <Container
       maxWidth={false}
-      sx={{
-        py: 3,
-        px: { xs: 2, sm: 3, md: 4 },
-      }}
+      sx={PAGE_CONTAINER_SX}
     >
       <Stack spacing={2}>
         <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
@@ -201,8 +201,18 @@ const ModelManagerPage = () => {
           </Typography>
         </Breadcrumbs>
 
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<ArrowBackIosNewIcon fontSize="small" />}
+          href="/"
+          sx={{ alignSelf: "flex-start" }}
+        >
+          {tt("Homeへ戻る", "Back to Home")}
+        </Button>
+
         <Box>
-          <Typography variant="h5" fontWeight={600}>
+          <Typography variant="h5" fontWeight={500}>
             {t("models.title")}
           </Typography>
           <Typography variant="body2" color="text.secondary">
@@ -270,7 +280,7 @@ const ModelManagerPage = () => {
             </Box>
           ) : models.length === 0 ? (
             <Box textAlign="center" py={8}>
-              <Typography variant="h6" fontWeight={600}>
+              <Typography variant="h6" fontWeight={500}>
                 {t("models.emptyTitle")}
               </Typography>
               <Typography variant="body2" color="text.secondary">
@@ -278,8 +288,8 @@ const ModelManagerPage = () => {
               </Typography>
             </Box>
           ) : (
-            <TableContainer>
-              <Table size="small">
+            <TableContainer sx={TABLE_CONTAINER_SX}>
+              <Table size="small" sx={buildDataTableSx(760)}>
                 <TableHead>
                   <TableRow>
                     <TableCell>{t("models.table.name")}</TableCell>
@@ -293,13 +303,15 @@ const ModelManagerPage = () => {
                     <TableRow key={model.relative_path} selected={model.is_active}>
                       <TableCell>
                         <Stack direction="row" spacing={1} alignItems="center">
-                          <Typography fontWeight={600}>{model.name}</Typography>
+                          <Typography fontWeight={500} sx={ELLIPSIS_TEXT_SX}>
+                            {model.name}
+                          </Typography>
                           {model.is_active && <Chip label={t("models.active")} color="success" size="small" variant="outlined" />}
                         </Stack>
                       </TableCell>
                       <TableCell>{model.kind}</TableCell>
                       <TableCell>
-                        <Typography component="span" fontFamily="monospace">
+                        <Typography component="span" fontFamily="monospace" sx={ELLIPSIS_TEXT_SX}>
                           {model.relative_path}
                         </Typography>
                       </TableCell>

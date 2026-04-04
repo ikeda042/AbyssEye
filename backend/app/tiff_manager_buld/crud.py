@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import io
 import itertools
 import json
 import math
@@ -22,6 +23,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.types import JSON as SAJSON
 
 from ..databases import crud as databases_crud
+from ..deepscan import crud as deepscan_crud
 from ..inference import crud as inference_crud
 from ..roi_extract.roi_module import ROIExtractor
 
@@ -34,6 +36,8 @@ FOCUS_MERGED_FILENAME = "__focus_merged.tif"
 REALTIME_FOLDER_META_FILENAME = "__realtime_folder_meta.json"
 REALTIME_FOLDER_MODE_SINGLE = "single"
 REALTIME_FOLDER_MODE_STACK = "stack"
+FOLDER_SOURCE_REALTIME = "realtime"
+FOLDER_SOURCE_UPLOAD = "upload"
 
 Base = declarative_base()
 
@@ -71,6 +75,9 @@ class FolderInfo:
     has_focus_merged: bool
     has_inference_result: bool = False
     realtime_folder_mode: str | None = None
+    source_origin: str | None = None
+    manual_labeled_roi_count: int = 0
+    manual_added_roi_count: int = 0
 
 
 @dataclass
@@ -518,17 +525,24 @@ def _realtime_folder_meta_path(folder_path: Path) -> Path:
     return folder_path / REALTIME_FOLDER_META_FILENAME
 
 
-def write_realtime_folder_mode(folder_path: Path, mode: str) -> None:
+def write_realtime_folder_mode(
+    folder_path: Path,
+    mode: str,
+    *,
+    source_origin: str = FOLDER_SOURCE_REALTIME,
+) -> None:
     if mode not in {REALTIME_FOLDER_MODE_SINGLE, REALTIME_FOLDER_MODE_STACK}:
         raise ValueError(f"Unsupported realtime folder mode: {mode}")
+    if source_origin not in {FOLDER_SOURCE_REALTIME, FOLDER_SOURCE_UPLOAD}:
+        raise ValueError(f"Unsupported folder source origin: {source_origin}")
     folder_path.mkdir(parents=True, exist_ok=True)
     _realtime_folder_meta_path(folder_path).write_text(
-        json.dumps({"realtime_folder_mode": mode}, ensure_ascii=False),
+        json.dumps({"realtime_folder_mode": mode, "source_origin": source_origin}, ensure_ascii=False),
         encoding="utf-8",
     )
 
 
-def _read_realtime_folder_mode(folder_path: Path) -> str | None:
+def _read_realtime_folder_meta(folder_path: Path) -> dict[str, str] | None:
     meta_path = _realtime_folder_meta_path(folder_path)
     if not meta_path.is_file():
         return None
@@ -536,10 +550,41 @@ def _read_realtime_folder_mode(folder_path: Path) -> str | None:
         payload = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(payload, dict):
+        return None
+    result: dict[str, str] = {}
     mode = payload.get("realtime_folder_mode")
     if mode in {REALTIME_FOLDER_MODE_SINGLE, REALTIME_FOLDER_MODE_STACK}:
-        return str(mode)
-    return None
+        result["realtime_folder_mode"] = str(mode)
+    source_origin = payload.get("source_origin")
+    if source_origin in {FOLDER_SOURCE_REALTIME, FOLDER_SOURCE_UPLOAD}:
+        result["source_origin"] = str(source_origin)
+    return result or None
+
+
+def _read_realtime_folder_mode(folder_path: Path) -> str | None:
+    payload = _read_realtime_folder_meta(folder_path)
+    if not payload:
+        return None
+    return payload.get("realtime_folder_mode")
+
+
+def _resolve_folder_source_origin(folder_path: Path, source_tiffs: Sequence[Path]) -> str:
+    payload = _read_realtime_folder_meta(folder_path) or {}
+    source_origin = payload.get("source_origin")
+    if source_origin in {FOLDER_SOURCE_REALTIME, FOLDER_SOURCE_UPLOAD}:
+        return source_origin
+
+    if folder_path.name.endswith("_merged"):
+        base_name = folder_path.name[: -len("_merged")]
+        base_path = TIFF_STORAGE_DIR / base_name
+        if base_path.is_dir():
+            base_source_tiffs = list(_iter_source_tiff_files(base_path))
+            return _resolve_folder_source_origin(base_path, base_source_tiffs)
+
+    if _resolve_realtime_folder_mode(folder_path, source_tiffs):
+        return FOLDER_SOURCE_REALTIME
+    return FOLDER_SOURCE_UPLOAD
 
 
 def _infer_realtime_folder_mode_from_files(folder_path: Path, source_tiffs: Sequence[Path]) -> str | None:
@@ -561,6 +606,60 @@ def _resolve_realtime_folder_mode(folder_path: Path, source_tiffs: Sequence[Path
     return _read_realtime_folder_mode(folder_path) or _infer_realtime_folder_mode_from_files(folder_path, source_tiffs)
 
 
+def _resolve_folder_db_path_for_metadata(folder_name: str) -> Path | None:
+    bulk_db_path = _db_path_for_folder(folder_name)
+    if bulk_db_path.exists():
+        return bulk_db_path
+    merged_db_path = _db_path_for_focus_merged(folder_name)
+    if merged_db_path.exists():
+        return merged_db_path
+    return None
+
+
+def _count_manual_labeled_rois(db_path: Path | None) -> int:
+    if db_path is None or not db_path.exists():
+        return 0
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM roi_records
+                WHERE manual_label IS NOT NULL
+                  AND TRIM(manual_label) <> ''
+                """
+            ).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def _count_manual_added_rois(db_path: Path | None) -> int:
+    if db_path is None or not db_path.exists():
+        return 0
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT roi_meta FROM roi_records").fetchall()
+    except sqlite3.Error:
+        return 0
+
+    count = 0
+    for row in rows:
+        roi_meta = row["roi_meta"]
+        meta_obj: object = {}
+        if isinstance(roi_meta, str):
+            try:
+                meta_obj = json.loads(roi_meta)
+            except json.JSONDecodeError:
+                meta_obj = {}
+        elif isinstance(roi_meta, dict):
+            meta_obj = roi_meta
+        if isinstance(meta_obj, dict) and bool(meta_obj.get("manual_added")):
+            count += 1
+    return count
+
+
 async def list_uploaded_folders(project_name: str | None = None) -> list[FolderInfo]:
     _ensure_dirs()
     expected_prefix = _project_prefix(project_name)
@@ -575,9 +674,13 @@ async def list_uploaded_folders(project_name: str | None = None) -> list[FolderI
         source_tiffs = [path_obj for path_obj in tiffs if path_obj.name != FOCUS_MERGED_FILENAME]
         if not tiffs:
             continue
-        has_db = _db_path_for_folder(path.name).exists() or _db_path_for_focus_merged(path.name).exists()
+        db_path = _resolve_folder_db_path_for_metadata(path.name)
+        has_db = db_path is not None
         has_inference_result = has_db and _has_ready_inference_result(path.name)
         realtime_folder_mode = _resolve_realtime_folder_mode(path, source_tiffs)
+        source_origin = _resolve_folder_source_origin(path, source_tiffs)
+        manual_labeled_roi_count = _count_manual_labeled_rois(db_path)
+        manual_added_roi_count = _count_manual_added_rois(db_path)
         folders.append(
             FolderInfo(
                 name=path.name,
@@ -586,6 +689,9 @@ async def list_uploaded_folders(project_name: str | None = None) -> list[FolderI
                 has_focus_merged=has_focus_merged,
                 has_inference_result=has_inference_result,
                 realtime_folder_mode=realtime_folder_mode,
+                source_origin=source_origin,
+                manual_labeled_roi_count=manual_labeled_roi_count,
+                manual_added_roi_count=manual_added_roi_count,
             )
         )
     return folders
@@ -593,7 +699,7 @@ async def list_uploaded_folders(project_name: str | None = None) -> list[FolderI
 
 async def list_files_in_folder(folder_name: str, project_name: str | None = None) -> list[str]:
     folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
-    files = sorted(str(path.relative_to(folder_path)) for path in _iter_tiff_files(folder_path))
+    files = sorted(str(path.relative_to(folder_path)) for path in _iter_source_tiff_files(folder_path))
     if not files:
         raise HTTPException(status_code=404, detail="TIFFファイルが見つかりません。")
     return files
@@ -745,6 +851,80 @@ def _project_export_display_name(folder_name: str, project_name: str) -> str:
     return folder_name
 
 
+def _build_csv_text(rows: list[list[object]]) -> str:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
+def _build_roi_summary_csv(db_path: Path) -> str:
+    rows: list[list[object]] = [["image_filename", "roi_count"]]
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            query_rows = conn.execute(
+                """
+                SELECT image_filename, COUNT(*) AS roi_count
+                FROM roi_records
+                GROUP BY image_filename
+                ORDER BY image_filename ASC
+                """
+            ).fetchall()
+    except sqlite3.DatabaseError:
+        return _build_csv_text(rows)
+
+    for row in query_rows:
+        image_filename = str(row["image_filename"] or "").strip()
+        if not image_filename:
+            continue
+        rows.append([image_filename, int(row["roi_count"] or 0)])
+    return _build_csv_text(rows)
+
+
+def _build_cell_count_summary_csv(db_path: Path) -> str | None:
+    try:
+        summary = deepscan_crud.get_cell_count_summary(db_path.name)
+    except HTTPException:
+        return None
+
+    rows: list[list[object]] = [
+        ["db_name", "total_roi_count", "class0_total", "class1_total", "class2_total", "class3_total"],
+        [
+            summary.db_name,
+            summary.total_roi_count,
+            summary.class0_total,
+            summary.class1_total,
+            summary.class2_total,
+            summary.class3_total,
+        ],
+        [],
+        ["image_filename", "roi_count", "class0_count", "class1_count", "class2_count", "class3_count"],
+    ]
+    for image in summary.images:
+        rows.append(
+            [
+                image.relative_path,
+                image.roi_count,
+                image.class0_count,
+                image.class1_count,
+                image.class2_count,
+                image.class3_count,
+            ]
+        )
+    return _build_csv_text(rows)
+
+
+def _iter_project_result_files(folder_path: Path) -> list[Path]:
+    candidates = [
+        _db_path_for_folder(folder_path.name),
+        _db_path_for_focus_merged(folder_path.name),
+        DATABASE_DIR / f"{folder_path.name}_extract_tuning_template.csv",
+        DATABASE_DIR / f"{folder_path.name}_extract_tuning_search_report.csv",
+    ]
+    return [path for path in candidates if path.exists()]
+
+
 def _project_export_sort_key(folder_name: str) -> tuple[tuple[int, int | str], ...]:
     parts = [part for part in folder_name.split("_") if part]
     key: list[tuple[int, int | str]] = []
@@ -784,23 +964,36 @@ async def export_project_archive(project_name: str) -> Path:
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for folder_path in folders:
                 source_tiffs = sorted(_iter_source_tiff_files(folder_path), key=lambda path: str(path.relative_to(folder_path)).lower())
-                if not source_tiffs:
-                    continue
-
                 display_name = _project_export_display_name(folder_path.name, safe_project)
-                folder_mode = _resolve_realtime_folder_mode(folder_path, source_tiffs)
-                is_stack = folder_mode == REALTIME_FOLDER_MODE_STACK or len(source_tiffs) > 1
+                if source_tiffs:
+                    folder_mode = _resolve_realtime_folder_mode(folder_path, source_tiffs)
+                    is_stack = folder_mode == REALTIME_FOLDER_MODE_STACK or len(source_tiffs) > 1
 
-                if is_stack:
-                    for tif_path in source_tiffs:
-                        relative_name = tif_path.relative_to(folder_path).with_suffix(".tif")
-                        arcname = Path(display_name) / relative_name
-                        zf.write(tif_path, arcname.as_posix())
+                    if is_stack:
+                        for tif_path in source_tiffs:
+                            relative_name = tif_path.relative_to(folder_path).with_suffix(".tif")
+                            arcname = Path(display_name) / relative_name
+                            zf.write(tif_path, arcname.as_posix())
+                    else:
+                        single_tif = source_tiffs[0]
+                        arcname = f"{display_name}.tif"
+                        zf.write(single_tif, arcname)
+
+                result_files = _iter_project_result_files(folder_path)
+                if not result_files:
                     continue
 
-                single_tif = source_tiffs[0]
-                arcname = f"{display_name}.tif"
-                zf.write(single_tif, arcname)
+                results_dir = Path("_results") / display_name
+                for result_path in result_files:
+                    zf.write(result_path, (results_dir / result_path.name).as_posix())
+
+                bulk_db_path = _db_path_for_folder(folder_path.name)
+                if bulk_db_path.exists():
+                    roi_summary_csv = _build_roi_summary_csv(bulk_db_path)
+                    zf.writestr((results_dir / "roi_summary.csv").as_posix(), roi_summary_csv)
+                    cell_count_csv = _build_cell_count_summary_csv(bulk_db_path)
+                    if cell_count_csv:
+                        zf.writestr((results_dir / "cell_count_summary.csv").as_posix(), cell_count_csv)
 
         return archive_path
 
@@ -971,10 +1164,19 @@ async def extract_focus_merged_rois(folder_name: str, project_name: str | None =
     _ensure_dirs()
     folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
     merged_tif = folder_path / FOCUS_MERGED_FILENAME
-    if not merged_tif.exists():
+    detached_folder_path = _focus_merged_single_folder_path(folder_path.name)
+    detached_tif_name = _focus_merged_single_tif_name(folder_path.name)
+    detached_tif_path = detached_folder_path / detached_tif_name
+    detached_db_path = _db_path_for_folder(detached_folder_path.name)
+
+    using_detached_image = not merged_tif.exists() and detached_tif_path.exists()
+    if not merged_tif.exists() and not detached_tif_path.exists():
         raise HTTPException(status_code=404, detail="フォーカスマージ画像が見つかりません。")
 
-    db_path = _db_path_for_focus_merged(folder_path.name)
+    db_path = detached_db_path if using_detached_image else _db_path_for_focus_merged(folder_path.name)
+    target_folder_name = detached_folder_path.name if using_detached_image else folder_path.name
+    target_tif_path = detached_tif_path if using_detached_image else merged_tif
+    target_relative_path = target_tif_path.name if using_detached_image else target_tif_path.relative_to(folder_path).as_posix()
 
     def _run() -> FocusMergeExtractionResult:
         engine = create_engine(f"sqlite:///{db_path}", echo=False)
@@ -984,33 +1186,33 @@ async def extract_focus_merged_rois(folder_name: str, project_name: str | None =
         total_roi_count = 0
         file_result: FileExtractionSummary | None = None
         try:
-            session.query(BulkRoiRecord).filter(BulkRoiRecord.image_filename == FOCUS_MERGED_FILENAME).delete()
+            session.query(BulkRoiRecord).filter(BulkRoiRecord.image_filename == target_relative_path).delete()
 
-            img_rgb, rois, original_shape, processed_shape = _extract_rois_from_tiff(merged_tif, folder_path.name)
+            img_rgb, rois, original_shape, processed_shape = _extract_rois_from_tiff(target_tif_path, target_folder_name)
             h, w = original_shape
             processed_h, processed_w = processed_shape
             roi_count = len(rois)
             total_roi_count = roi_count
-            relative_path = merged_tif.relative_to(folder_path).as_posix()
+            relative_path = target_relative_path
 
             for roi in rois:
                 png_blob = _encode_patch(img_rgb, roi)
                 if png_blob is None:
                     continue
                 roi_meta = {
-                    "image": merged_tif.stem,
+                    "image": target_tif_path.stem,
                     "scale": DEFAULT_SCALE,
-                    "filename": f"{merged_tif.stem}_roi_{roi['ID']:04d}.png",
-                    "folder": folder_path.name,
+                    "filename": f"{target_tif_path.stem}_roi_{roi['ID']:04d}.png",
+                    "folder": target_folder_name,
                     "tif_path": relative_path,
                     "original_shape": {"height": int(h), "width": int(w)},
                     "processed_shape": {"height": int(processed_h), "width": int(processed_w)},
                     **roi,
                 }
                 record = BulkRoiRecord(
-                    folder_name=folder_path.name,
+                    folder_name=target_folder_name,
                     image_filename=relative_path,
-                    image_stem=merged_tif.stem,
+                    image_stem=target_tif_path.stem,
                     scale=DEFAULT_SCALE,
                     num_rois=roi_count,
                     roi_id=int(roi["ID"]),
@@ -1031,7 +1233,7 @@ async def extract_focus_merged_rois(folder_name: str, project_name: str | None =
                 session.add(record)
 
             file_result = FileExtractionSummary(
-                tif_name=merged_tif.name,
+                tif_name=target_tif_path.name,
                 relative_path=relative_path,
                 roi_count=roi_count,
                 original_shape=(h, w),
@@ -1047,12 +1249,12 @@ async def extract_focus_merged_rois(folder_name: str, project_name: str | None =
         db_size_bytes = db_path.stat().st_size if db_path.exists() else 0
 
         return FocusMergeExtractionResult(
-            folder_name=folder_path.name,
+            folder_name=target_folder_name,
             db_name=db_path.name,
             db_path=db_path,
             db_size_bytes=db_size_bytes,
             saved_at=datetime.now(),
-            merged_tif_name=FOCUS_MERGED_FILENAME,
+            merged_tif_name=target_tif_path.name,
             roi_count=file_result.roi_count,
             total_roi_count=total_roi_count,
         )
@@ -1467,7 +1669,6 @@ async def focus_merge_folder(folder_name: str, project_name: str | None = None) 
     if not tiff_paths:
         raise HTTPException(status_code=404, detail="TIFFファイルが見つかりません。")
 
-    output_path = folder_path / FOCUS_MERGED_FILENAME
     detached_folder_name = _focus_merged_single_folder_name(folder_path.name)
     detached_folder_path = _focus_merged_single_folder_path(folder_path.name)
     detached_tif_name = _focus_merged_single_tif_name(folder_path.name)
@@ -1475,12 +1676,16 @@ async def focus_merge_folder(folder_name: str, project_name: str | None = None) 
 
     def _run() -> FocusMergeResult:
         merged, shape, valid_count = _merge_focus_stack(tiff_paths)
-        success_internal = cv2.imwrite(str(output_path), merged)
-        if not success_internal:
-            raise HTTPException(status_code=500, detail="フォーカスマージ画像の保存に失敗しました。")
+        legacy_internal_path = folder_path / FOCUS_MERGED_FILENAME
+        if legacy_internal_path.exists():
+            legacy_internal_path.unlink()
         shutil.rmtree(detached_folder_path, ignore_errors=True)
         detached_folder_path.mkdir(parents=True, exist_ok=True)
-        write_realtime_folder_mode(detached_folder_path, REALTIME_FOLDER_MODE_SINGLE)
+        write_realtime_folder_mode(
+            detached_folder_path,
+            REALTIME_FOLDER_MODE_SINGLE,
+            source_origin=_resolve_folder_source_origin(folder_path, tiff_paths),
+        )
         success_detached = cv2.imwrite(str(detached_tif_path), merged)
         if not success_detached:
             raise HTTPException(status_code=500, detail="単一画像用フォーカスマージ画像の保存に失敗しました。")

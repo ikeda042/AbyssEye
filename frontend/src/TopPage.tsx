@@ -1,26 +1,15 @@
-import { useMemo, useCallback, cloneElement, useEffect, useState } from "react";
-import type { ReactElement } from "react";
+import { useMemo, useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Alert, Box, Card, CardActionArea, CardContent, Container, Typography, Stack, useTheme } from "@mui/material";
-import type { SvgIconProps } from "@mui/material/SvgIcon";
-import Grid from "@mui/material/GridLegacy";
+import { Breadcrumbs, Paper, Typography, useTheme } from "@mui/material";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import Inventory2Icon from "@mui/icons-material/Inventory2";
 import { API_BASE_URL } from "./config";
 import { useI18n } from "./i18n";
+import PageShell from "./ui/PageShell";
+import EntryCardGrid from "./ui/EntryCardGrid";
+import { APP_TEXT_VARIANTS, PAGE_BREADCRUMBS_SX } from "./ui/layout";
 
 const HEALTHCHECK_URL = API_BASE_URL;
-
-type BaseCardItem = {
-  title: string;
-  description: string;
-  accent: string;
-  icon: ReactElement<SvgIconProps>;
-};
-
-type CardItem =
-  | (BaseCardItem & { path: string; href?: never })
-  | (BaseCardItem & { href: string; path?: never });
 
 const TopPage = () => {
   const navigate = useNavigate();
@@ -30,21 +19,24 @@ const TopPage = () => {
   const [backendStatusText, setBackendStatusText] = useState<string | null>(null);
   const theme = useTheme();
   const accent = theme.palette.primary.main;
-  const cards = useMemo<CardItem[]>(
+  const cards = useMemo(
     () => [
       {
-        title: tt("ROI抽出", "ROI extraction"),
+        title: tt("データベース", "Database"),
         description: tt(
-          "ファイルをアップロードするか、リアルタイムエンジンを使うかを選択します。",
-          "Choose whether to use file upload or the realtime engine.",
+          "プロジェクトを作成して画像を整理し、画像リストやリアルタイムエンジンへ進みます。",
+          "Create projects, organize images, and move on to image lists or the realtime engine.",
         ),
-        path: "/roi",
+        path: "/databases",
         accent,
         icon: <Inventory2Icon />,
       },
       {
-        title: t("top.cards.models.title"),
-        description: t("top.cards.models.desc"),
+        title: tt("モデル選択", "Model selection"),
+        description: tt(
+          "使用する推論モデルを確認し、切り替えや管理を行います。",
+          "Review the inference models you use and switch or manage them.",
+        ),
         path: "/model-manager",
         accent,
         icon: <ModelTrainingIcon />,
@@ -96,105 +88,49 @@ const TopPage = () => {
     return t("top.health.error");
   }, [backendStatusText, healthStatus, t]);
 
-  return (
-    <Box
+  const statusColor =
+    healthStatus === "ok" ? "success.main" : healthStatus === "error" ? "error.main" : "info.main";
+
+  const headerAside = (
+    <Paper
+      variant="outlined"
       sx={{
-        minHeight: "100vh",
-        backgroundColor: (theme) => theme.palette.background.default,
-        py: { xs: 5, md: 8 },
-        px: { xs: 2.5, sm: 3.5, md: 4.5 },
+        px: 1.5,
+        py: 1.25,
+        width: "100%",
+        maxWidth: "100%",
+        borderColor: theme.palette.divider,
+        backgroundColor: theme.palette.background.paper,
       }}
     >
-      <Container maxWidth="lg" sx={{ p: 0, pb: 6 }}>
-        <Box textAlign="center" mb={6}>
-          {/* <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, color: "text.primary" }}>
-            AbyssEye local APIs
-          </Typography>
-          <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
-            Choose the module you need for ROI extraction, inference, or database management.
-          </Typography> */}
-        </Box>
-        <Box mb={4}>
-          <Alert
-            severity={healthStatus === "ok" ? "success" : healthStatus === "error" ? "error" : "info"}
-            variant="outlined"
-          >
-            {healthMessage}
-          </Alert>
-        </Box>
+      <Typography
+        variant={APP_TEXT_VARIANTS.meta}
+        fontWeight={600}
+        sx={{ color: "text.secondary", display: "block", mb: 0.5 }}
+      >
+        {tt("Backend状態", "Backend status")}
+      </Typography>
+      <Typography variant={APP_TEXT_VARIANTS.body} sx={{ color: statusColor }}>
+        {healthMessage}
+      </Typography>
+    </Paper>
+  );
 
-        <Grid container spacing={3} justifyContent="flex-start" alignItems="stretch">
-          {cards.map((card) => (
-            <Grid item xs={12} sm={6} md={6} lg={6} key={card.title} sx={{ display: "flex" }}>
-              <Card
-                elevation={2}
-                sx={{
-                  borderRadius: 2,
-                  border: (theme) => `1px solid ${theme.palette.divider}`,
-                  background: (theme) => theme.palette.background.paper,
-                  boxShadow: (theme) =>
-                    theme.palette.mode === "dark"
-                      ? "0 10px 30px rgba(15,23,42,0.35)"
-                      : "0 10px 30px rgba(15,23,42,0.08)",
-                  height: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                  width: "100%",
-                }}
-              >
-                <CardActionArea
-                  sx={{
-                    height: "100%",
-                    p: 3,
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "flex-start",
-                    gap: 2,
-                    justifyContent: "space-between",
-                  }}
-                  {...("href" in card
-                    ? {
-                        component: "a",
-                        href: card.href,
-                        target: "_blank",
-                        rel: "noopener noreferrer",
-                      }
-                    : {
-                        onClick: () => handleNavigate(card.path),
-                      })}
-                >
-                  <Stack direction="row" spacing={1.5} alignItems="center" sx={{ width: "100%" }}>
-                    <Box
-                      sx={{
-                        width: 48,
-                        height: 48,
-                        borderRadius: 2,
-                        backgroundColor: "rgba(15,23,42,0.06)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      {cloneElement(card.icon, { sx: { fontSize: 28, color: card.accent } })}
-                    </Box>
-                    <Box sx={{ flex: 1 }}>
-                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                        {card.title}
-                      </Typography>
-                    </Box>
-                  </Stack>
-                  <CardContent sx={{ p: 0, flex: 1, width: "100%" }}>
-                    <Typography variant="body2" color="text.secondary">
-                      {card.description}
-                    </Typography>
-                  </CardContent>
-                </CardActionArea>
-              </Card>
-            </Grid>
-          ))}
-        </Grid>
-      </Container>
-    </Box>
+  return (
+    <PageShell
+      breadcrumbs={
+        <Breadcrumbs aria-label="breadcrumb" separator="›" sx={PAGE_BREADCRUMBS_SX}>
+          <Typography color="text.primary" fontSize={14}>
+            {t("common.home")}
+          </Typography>
+        </Breadcrumbs>
+      }
+      title="AbyssEye"
+      description={tt("使いたい機能を選択してください。", "Choose the module you want to use.")}
+      headerAside={headerAside}
+    >
+      <EntryCardGrid cards={cards} onNavigate={handleNavigate} />
+    </PageShell>
   );
 };
 

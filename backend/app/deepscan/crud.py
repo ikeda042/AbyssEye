@@ -898,6 +898,41 @@ def _list_bulk_images(db_path: Path) -> list[DeepScanImageInfo]:
     return images
 
 
+def _infer_bulk_folder_name_from_db(db_path: Path) -> str:
+    stem = db_path.stem
+    if stem.endswith("_bulk"):
+        return stem.removesuffix("_bulk")
+    if stem.endswith("_focus_merged"):
+        return stem.removesuffix("_focus_merged")
+    return stem
+
+
+def _list_bulk_images_from_folder_without_roi_rows(db_path: Path) -> list[DeepScanImageInfo]:
+    folder_name = _infer_bulk_folder_name_from_db(db_path)
+    folder_path = BULK_TIFF_DIR / folder_name
+    if not folder_path.is_dir():
+        return []
+
+    images: list[DeepScanImageInfo] = []
+    for tif_path in sorted(
+        (path for path in folder_path.rglob("*") if path.is_file() and path.suffix.lower() in {".tif", ".tiff"}),
+        key=lambda path: str(path.relative_to(folder_path)).lower(),
+    ):
+        relative_path = str(tif_path.relative_to(folder_path))
+        shape = _read_shape_from_tif(tif_path)
+        images.append(
+            DeepScanImageInfo(
+                relative_path=relative_path,
+                tif_name=tif_path.name,
+                roi_count=0,
+                original_shape=shape,
+                processed_shape=shape,
+                tif_path=tif_path,
+            )
+        )
+    return images
+
+
 def _resolve_tif_path(db_path: Path, tif_name: str | None = None) -> tuple[Path, list[DeepScanImageInfo], DeepScanImageInfo | None, int]:
     bulk_images = _list_bulk_images(db_path)
     if bulk_images:
@@ -912,6 +947,20 @@ def _resolve_tif_path(db_path: Path, tif_name: str | None = None) -> tuple[Path,
         if current_image.tif_path is None:
             raise HTTPException(status_code=404, detail="対応するTIFFが見つかりません。")
         return current_image.tif_path, bulk_images, current_image, current_index
+
+    bulk_folder_images = _list_bulk_images_from_folder_without_roi_rows(db_path)
+    if bulk_folder_images:
+        current_index = 0
+        if tif_name:
+            key = tif_name.strip()
+            for idx, image in enumerate(bulk_folder_images):
+                if image.relative_path == key or image.tif_name == key:
+                    current_index = idx
+                    break
+        current_image = bulk_folder_images[current_index]
+        if current_image.tif_path is None:
+            raise HTTPException(status_code=404, detail="対応するTIFFが見つかりません。")
+        return current_image.tif_path, bulk_folder_images, current_image, current_index
 
     candidate_dirs = [
         TIFF_DIR,

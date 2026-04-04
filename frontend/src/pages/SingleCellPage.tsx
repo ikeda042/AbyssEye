@@ -242,7 +242,7 @@ const MetaRow = ({ label, value }: { label: string; value: ReactNode }) => (
     <Typography variant="body2" color="text.secondary">
       {label}
     </Typography>
-    <Typography variant="body2" fontWeight={600} textAlign="right" sx={{ wordBreak: "break-all" }}>
+    <Typography variant="body2" fontWeight={500} textAlign="right" sx={{ wordBreak: "break-all" }}>
       {value ?? "-"}
     </Typography>
   </Stack>
@@ -1007,7 +1007,7 @@ const SingleCellPage = () => {
           </Breadcrumbs>
           <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 } }}>
             <Stack spacing={2} alignItems="flex-start">
-              <Typography variant="h6" fontWeight={600}>
+              <Typography variant="h6" fontWeight={500}>
                 {tt("データベースが指定されていません", "Database is not specified")}
               </Typography>
               <Typography variant="body2" color="text.secondary">
@@ -1067,7 +1067,7 @@ const SingleCellPage = () => {
             }}
           >
             <Stack direction="row" justifyContent="space-between" alignItems="center">
-              <Typography variant="subtitle1" fontWeight={600}>
+              <Typography variant="subtitle1" fontWeight={500}>
                 {tt("レコードプレビュー", "Record preview")}
               </Typography>
               <Typography variant="body2" color="text.secondary">
@@ -1214,7 +1214,7 @@ const SingleCellPage = () => {
                       {inferenceResult && !isInferenceLoading && (
                         <Stack spacing={1.5} sx={{ width: "100%" }}>
                       <Box textAlign="center">
-                        <Typography variant="subtitle1" fontWeight={600}>
+                        <Typography variant="subtitle1" fontWeight={500}>
                           {tt("予測クラス", "Predicted class")}: {inferenceResult.predicted_class}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
@@ -1384,7 +1384,7 @@ const SingleCellPage = () => {
               gap: 2,
             }}
           >
-            <Typography variant="subtitle1" fontWeight={600}>
+            <Typography variant="subtitle1" fontWeight={500}>
               {tt("切り出し位置", "Crop position")}
             </Typography>
             {currentRecord ? (
@@ -1402,7 +1402,7 @@ const SingleCellPage = () => {
 
             <Divider sx={{ my: 1 }} />
 
-            <Typography variant="subtitle1" fontWeight={600}>
+            <Typography variant="subtitle1" fontWeight={500}>
               {tt("レコード情報", "Record info")}
             </Typography>
             {currentRecord ? (

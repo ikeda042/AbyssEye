@@ -166,7 +166,7 @@ const RoiExtractPage = () => {
               <Typography variant="overline" sx={{ letterSpacing: 3, color: "text.secondary" }}>
                 {t("roi.overline")}
               </Typography>
-              <Typography variant="h4" sx={{ fontWeight: 600 }}>
+              <Typography variant="h4" sx={{ fontWeight: 500 }}>
                 {t("roi.title")}
               </Typography>
               <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
@@ -206,7 +206,7 @@ const RoiExtractPage = () => {
                     {isLoading ? (
                       <CircularProgress size={32} />
                     ) : selectedTif ? (
-                      <Typography sx={{ fontSize: 18, fontWeight: 600 }}>{selectedTif}</Typography>
+                      <Typography sx={{ fontSize: 18, fontWeight: 500 }}>{selectedTif}</Typography>
                     ) : (
                       <Typography sx={{ color: "text.secondary", textAlign: "center" }}>
                         {t("roi.targetPlaceholder")}
@@ -294,7 +294,7 @@ const RoiExtractPage = () => {
                     p: 2,
                   }}
                 >
-                  <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5 }}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 500, mb: 1.5 }}>
                     {t("roi.resultTitle")}
                   </Typography>
                   <Stack spacing={1}>
@@ -365,7 +365,7 @@ const ResultRow = ({ label, value }: ResultRowProps) => (
   <Stack direction={{ xs: "column", sm: "row" }} spacing={0.5}>
     <Typography
       variant="body2"
-      sx={{ minWidth: 160, fontWeight: 600, color: "text.secondary" }}
+      sx={{ minWidth: 160, fontWeight: 500, color: "text.secondary" }}
     >
       {label}
     </Typography>
