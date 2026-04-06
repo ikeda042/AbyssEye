@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import crud
 
@@ -17,6 +17,11 @@ class CallApiPayload(BaseModel):
     url: str
 
 
+class GitPullPayload(BaseModel):
+    branch: str | None = Field(default=None, description="取得したいブランチ名。省略時は現在のブランチを更新します。")
+    remote: str = Field(default="origin", description="取得元 remote 名")
+
+
 @router.get("/temptext", response_class=PlainTextResponse)
 async def temp_text() -> str:
     return await crud.get_temp_text()
@@ -28,9 +33,10 @@ async def set_temp_text(payload: TempTextPayload) -> str:
 
 
 @router.post("/git/pull", response_class=PlainTextResponse)
-async def run_git_pull() -> str:
+async def run_git_pull(payload: GitPullPayload | None = None) -> str:
     try:
-        return await crud.git_pull()
+        request_payload = payload or GitPullPayload()
+        return await crud.git_pull(branch=request_payload.branch, remote=request_payload.remote)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

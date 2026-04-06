@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import subprocess
 from pathlib import Path
 from typing import AsyncIterator
@@ -166,19 +167,90 @@ async def set_temp_text(text: str) -> str:
     return _memory_text
 
 
-async def git_pull() -> str:
-    """Run git pull --ff-only at the repository root and return combined output."""
+_GIT_REF_PATTERN = re.compile(r"^[A-Za-z0-9._/\-]+$")
+
+
+def _sanitize_git_name(value: str | None, *, field: str) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if cleaned.startswith("-") or ".." in cleaned or "@" in cleaned or cleaned.endswith("/") or not _GIT_REF_PATTERN.fullmatch(cleaned):
+        raise RuntimeError(f"{field} が不正です: {value}")
+    return cleaned
+
+
+def _run_git_command(*args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    if result.returncode != 0:
+        raise RuntimeError(output or f"git {' '.join(args)} failed")
+    return output
+
+
+def _git_command_ok(*args: str) -> bool:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _current_branch_name() -> str:
+    return _run_git_command("rev-parse", "--abbrev-ref", "HEAD").strip()
+
+
+def _working_tree_dirty() -> bool:
+    status = _run_git_command("status", "--porcelain")
+    return bool(status.strip())
+
+
+async def git_pull(branch: str | None = None, remote: str = "origin") -> str:
+    """Update the current branch or fetch/switch/pull a requested branch."""
+
     def _task() -> str:
-        result = subprocess.run(
-            ["git", "pull", "--ff-only"],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        output = (result.stdout or "") + (result.stderr or "")
-        if result.returncode != 0:
-            raise RuntimeError(output.strip() or "git pull failed")
-        return output.strip() or "git pull completed (no output)"
+        target_branch = _sanitize_git_name(branch, field="ブランチ名")
+        target_remote = _sanitize_git_name(remote, field="remote名") or "origin"
+        current_branch = _current_branch_name()
+
+        lines: list[str] = [f"Current branch: {current_branch}"]
+
+        if not target_branch:
+            pull_output = _run_git_command("pull", "--ff-only")
+            lines.append(pull_output or "git pull completed (no output)")
+            return "\n".join(line for line in lines if line)
+
+        lines.append(f"Requested branch: {target_branch}")
+        _run_git_command("fetch", target_remote, target_branch)
+
+        if target_branch != current_branch:
+            if _working_tree_dirty():
+                raise RuntimeError(
+                    "未コミットの変更があるためブランチを切り替えできません。"
+                    " 先に commit または stash してください。"
+                )
+            remote_ref = f"{target_remote}/{target_branch}"
+            if _git_command_ok("show-ref", "--verify", f"refs/heads/{target_branch}"):
+                switch_output = _run_git_command("switch", target_branch)
+            else:
+                if not _git_command_ok("show-ref", "--verify", f"refs/remotes/{remote_ref}"):
+                    raise RuntimeError(f"remote branch が見つかりません: {remote_ref}")
+                switch_output = _run_git_command("switch", "-c", target_branch, "--track", remote_ref)
+            if switch_output:
+                lines.append(switch_output)
+
+        pull_output = _run_git_command("pull", "--ff-only", target_remote, target_branch)
+        lines.append(pull_output or "git pull completed (no output)")
+        lines.append(f"Active branch: {_current_branch_name()}")
+        return "\n".join(line for line in lines if line)
 
     return await asyncio.to_thread(_task)
 

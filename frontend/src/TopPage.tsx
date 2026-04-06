@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Breadcrumbs, Paper, Typography, useTheme } from "@mui/material";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import Inventory2Icon from "@mui/icons-material/Inventory2";
+import ApiIcon from "@mui/icons-material/Api";
 import { API_BASE_URL } from "./config";
 import { useI18n } from "./i18n";
 import PageShell from "./ui/PageShell";
@@ -10,6 +11,7 @@ import EntryCardGrid from "./ui/EntryCardGrid";
 import { APP_TEXT_VARIANTS, PAGE_BREADCRUMBS_SX } from "./ui/layout";
 
 const HEALTHCHECK_URL = API_BASE_URL;
+const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
 
 const TopPage = () => {
   const navigate = useNavigate();
@@ -40,6 +42,16 @@ const TopPage = () => {
         path: "/model-manager",
         accent,
         icon: <ModelTrainingIcon />,
+      },
+      {
+        title: "Swagger",
+        description: tt(
+          "バックエンドAPIの一覧を確認し、その場で各APIを実行できます。",
+          "Review the backend API list and execute each endpoint from the docs page.",
+        ),
+        href: SWAGGER_DOCS_URL,
+        accent,
+        icon: <ApiIcon />,
       },
     ],
     [accent, t, tt]
