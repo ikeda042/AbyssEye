@@ -17,17 +17,21 @@ cd AbyssEye
 git checkout AbyssEye-Neo
 git pull --ff-only origin AbyssEye-Neo
 ```
-a
-依存関係も更新されている可能性があるので、pull のあとにセットアップをもう一度実行してください。
+
+依存関係も更新されている可能性があるので、必要に応じて手動で入れ直してください。
+
+バックエンド依存関係を更新する場合:
 
 ```bash
-./scripts/setup-dev.sh
+source venv/bin/activate
+pip install -r backend/requirements.txt
 ```
 
-そのあと、いつもどおり起動できます。
+フロントエンド依存関係を更新する場合:
 
 ```bash
-./scripts/dev-up.sh
+cd frontend
+npm install
 ```
 
 `git pull --ff-only` で止まった場合は、ローカルに未コミット変更や独自の commit がある可能性があります。その場合はいったん変更を退避するか commit してから実行してください。
@@ -36,35 +40,11 @@ a
 
 - バックエンドは `Python 3.11` を推奨します。
 - `Python 3.12` でも動く可能性はありますが、`Python 3.13` / `3.14` では TensorFlow がインストールできないため、推論機能は利用できません。
-- 自動セットアップを使う場合は `python3.11`、`npm`、`lsof` が必要です。
+- 手動セットアップには `python3.11` と `npm` が必要です。
 
 `python3.11` が手元にない場合は、`docker/backend.Dockerfile` と同じく Python 3.11 系の環境を用意してください。
 
-## 4. 自動でセットアップして起動する方法
-
-いちばん楽なのはこの方法です。セットアップを 1 回実行したあと、起動は 1 コマンドで済みます。
-
-### セットアップ
-
-```bash
-./scripts/setup-dev.sh
-```
-
-### 起動
-
-```bash
-./scripts/dev-up.sh
-```
-
-この方法では、次のような点をまとめて吸収します。
-
-- `Python 3.11` の `venv` を使う
-- 壊れた `venv` を自動で作り直す
-- backend / frontend の依存関係をまとめて入れる
-- `8000` や `3000` が埋まっているときは空いているポートを使う
-- backend の `matplotlib` 初回警告を避ける
-
-## 5. 手動でセットアップして起動する方法
+## 4. 手動でセットアップして起動する方法
 
 ### バックエンドのセットアップ
 
@@ -107,7 +87,26 @@ cd frontend
 VITE_BACKEND_PORT=8001 npm run dev
 ```
 
+## 5. 再起動だけしたいとき
+
+セットアップ済みで、依存関係の入れ直しをせずに再起動だけしたい場合は次だけで大丈夫です。
+
+### バックエンドの再起動
+
+仮想環境を有効化済みのターミナルで実行してください。
+
+```bash
+python backend/main.py
+```
+
+### フロントエンドの再起動
+
+```bash
+cd frontend
+npm run dev
+```
+
 ## 6. 補足
 
-- `./scripts/dev-up.sh` は backend の自動リロードをデフォルトで無効にして、終了時にプロセスが残りにくいようにしています。
-- backend の自動リロードも欲しい場合は `APP_RELOAD=true ./scripts/dev-up.sh` を使ってください。
+- バックエンドを別ポートで起動した場合だけ、フロントエンド側で `VITE_BACKEND_PORT` を合わせてください。
+- `python backend/main.py` の前に `source venv/bin/activate` を忘れると、仮想環境外の Python が使われることがあります。

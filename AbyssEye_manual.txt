@@ -13,10 +13,19 @@ AbyssEye は、TIFF 画像やリアルタイム取得画像をもとに、ROI �
 2. 起動方法
 
 初回セットアップ:
-./scripts/setup-dev.sh
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -r backend/requirements.txt
+cd frontend
+npm install
 
 起動:
-./scripts/dev-up.sh
+source venv/bin/activate
+python backend/main.py
+
+別ターミナルで:
+cd frontend
+npm run dev
 
 起動後、ブラウザで次を開きます。
 http://localhost:3000
@@ -254,10 +263,20 @@ manual label を付けると、AI 判定よりも手動判定を優先して表�
 
 git checkout AbyssEye-Neo
 git pull --ff-only origin AbyssEye-Neo
-./scripts/setup-dev.sh
+
+必要なら依存関係を更新:
+source venv/bin/activate
+pip install -r backend/requirements.txt
+cd frontend
+npm install
 
 そのあと起動:
-./scripts/dev-up.sh
+source venv/bin/activate
+python backend/main.py
+
+別ターミナルで:
+cd frontend
+npm run dev
 
 もし git pull が止まった場合は、ローカルの未コミット変更や独自コミットが原因の可能性があります。必要に応じて変更を退避または commit してからやり直してください。
 
@@ -277,4 +296,4 @@ git pull --ff-only origin AbyssEye-Neo
   削除できるのは手動追加した ROI のみです。
 
 - 最新コードに更新したのに動作がおかしい
-  `./scripts/setup-dev.sh` を再実行して依存関係を入れ直してください。
+  依存関係が変わっている可能性があります。`source venv/bin/activate` のあとに `pip install -r backend/requirements.txt` と `cd frontend && npm install` を必要に応じて実行してください。

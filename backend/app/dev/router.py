@@ -18,8 +18,12 @@ class CallApiPayload(BaseModel):
 
 
 class GitPullPayload(BaseModel):
-    branch: str | None = Field(default=None, description="取得したいブランチ名。省略時は現在のブランチを更新します。")
-    remote: str = Field(default="origin", description="取得元 remote 名")
+    branch: str | None = Field(
+        default="AbyssEye-Neo",
+        description="取得したいブランチ名。省略時は AbyssEye-Neo を更新します。",
+        examples=["AbyssEye-Neo"],
+    )
+    remote: str = Field(default="origin", description="取得元 remote 名", examples=["origin"])
 
 
 @router.get("/temptext", response_class=PlainTextResponse)

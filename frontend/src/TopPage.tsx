@@ -4,7 +4,6 @@ import { Breadcrumbs, Paper, Typography, useTheme } from "@mui/material";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import Inventory2Icon from "@mui/icons-material/Inventory2";
 import ApiIcon from "@mui/icons-material/Api";
-import ApartmentIcon from "@mui/icons-material/Apartment";
 import { API_BASE_URL } from "./config";
 import { useI18n } from "./i18n";
 import PageShell from "./ui/PageShell";
@@ -53,16 +52,6 @@ const TopPage = () => {
         href: SWAGGER_DOCS_URL,
         accent,
         icon: <ApiIcon />,
-      },
-      {
-        title: tt("ホンジョウ", "Honjo"),
-        description: tt(
-          "ホンジョウ向けの画面へ進みます。",
-          "Open the Honjo workspace.",
-        ),
-        path: "/honjo",
-        accent,
-        icon: <ApartmentIcon />,
       },
     ],
     [accent, t, tt]
