@@ -1,64 +1,16 @@
 # AbyssEye
 
-## 1. Clone
+## 1. 新しいAbyssEyeのインストール
 
-試作品は `AbyssEye-Neo` ブランチで公開しています。
+新しいバージョンは `AbyssEye-Neo` ブランチで公開しています。
+まず、ターミナルで以下のコマンドでインストールしてください。
 
 ```bash
 git clone -b AbyssEye-Neo https://github.com/Gashu884/AbyssEye.git
 cd AbyssEye
 ```
 
-## 2. 開発者の更新を取り込む
-
-すでに clone 済みの利用者が、開発者の新しい commit を取り込む方法は 2 つあります。
-
-### 方法1. ターミナルで更新する
-
-```bash
-git checkout AbyssEye-Neo
-git pull --ff-only origin AbyssEye-Neo
-```
-
-### 方法2. Swagger から更新する
-
-`AbyssEye` を起動済みなら、Swagger から `git pull` を実行することもできます。
-
-1. ブラウザで `http://localhost:8000/api/v1/docs` を開く
-2. `POST /api/v1/dev/git/pull` を開く
-3. `Try it out` を押す
-4. 必要なら body を次のように入れる
-
-```json
-{
-  "branch": "AbyssEye-Neo",
-  "remote": "origin"
-}
-```
-
-5. `Execute` を押す
-
-`branch` を省略した場合も、既定では `AbyssEye-Neo` を更新します。
-
-依存関係も更新されている可能性があるので、必要に応じて手動で入れ直してください。
-
-バックエンド依存関係を更新する場合:
-
-```bash
-source venv/bin/activate
-pip install -r backend/requirements.txt
-```
-
-フロントエンド依存関係を更新する場合:
-
-```bash
-cd frontend
-npm install
-```
-
-`git pull --ff-only` や Swagger の `dev/git/pull` が止まった場合は、ローカルに未コミット変更や独自の commit がある可能性があります。その場合はいったん変更を退避するか commit してから実行してください。
-
-## 3. 前提
+## 2. 前提
 
 - バックエンドは `Python 3.11` を推奨します。
 - `Python 3.12` でも動く可能性はありますが、`Python 3.13` / `3.14` では TensorFlow がインストールできないため、推論機能は利用できません。
@@ -66,7 +18,7 @@ npm install
 
 `python3.11` が手元にない場合は、`docker/backend.Dockerfile` と同じく Python 3.11 系の環境を用意してください。
 
-## 4. 手動でセットアップして起動する方法
+## 3. 手動でセットアップして起動する方法
 
 ### バックエンドのセットアップ
 
@@ -109,7 +61,7 @@ cd frontend
 VITE_BACKEND_PORT=8001 npm run dev
 ```
 
-## 5. 再起動だけしたいとき
+## 4. 再起動だけしたいとき
 
 セットアップ済みで、依存関係の入れ直しをせずに再起動だけしたい場合は次だけで大丈夫です。
 
@@ -127,6 +79,54 @@ python backend/main.py
 cd frontend
 npm run dev
 ```
+## 5. 開発者の更新を取り込む
+
+すでに clone 済みの利用者が、開発者の新しい commit を取り込む方法は 2 つあります。
+
+### 方法1. ターミナルで更新する
+
+```bash
+git checkout AbyssEye-Neo
+git pull --ff-only origin AbyssEye-Neo
+```
+
+### 方法2. Swagger から更新する
+
+`AbyssEye` を起動済みなら、HomeのSwagger から `git pull` を実行することもできます。
+
+1. ブラウザで `http://localhost:8000/api/v1/docs` を開く
+2. `POST /api/v1/dev/git/pull` を開く
+3. `Try it out` を押す
+4. 必要なら body を次のように入れる
+
+```json
+{
+  "branch": "AbyssEye-Neo",
+  "remote": "origin"
+}
+```
+
+5. `Execute` を押す
+
+`branch` を省略した場合も、既定では `AbyssEye-Neo` を更新します。
+
+依存関係も更新されている可能性があるので、必要に応じて手動で入れ直してください。
+
+バックエンド依存関係を更新する場合:
+
+```bash
+source venv/bin/activate
+pip install -r backend/requirements.txt
+```
+
+フロントエンド依存関係を更新する場合:
+
+```bash
+cd frontend
+npm install
+```
+
+`git pull --ff-only` や Swagger の `dev/git/pull` が止まった場合は、ローカルに未コミット変更や独自の commit がある可能性があります。その場合はいったん変更を退避するか commit してから実行してください。
 
 ## 6. 補足
 
