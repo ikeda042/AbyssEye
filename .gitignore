@@ -19,3 +19,6 @@ frontend/dist/
 
 # Runtime inference cache
 /backend/app/databases/*_inference_cache.json
+
+# Uploaded retraining archives should stay local
+/backend/app/retraining_uploads/

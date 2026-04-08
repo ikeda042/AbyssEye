@@ -12,6 +12,8 @@ import ModelManagerPage from "./pages/ModelManagerPage";
 import RealtimePage from "./pages/RealtimePage";
 import DeepScanPage from "./pages/DeepScanPage";
 import DevPage from "./pages/DevPage";
+import RetrainingPage from "./pages/RetrainingPage";
+import SwaggerPage from "./pages/SwaggerPage";
 import AppHeader from "./AppHeader";
 
 const storageKey = "abyssEye:colorMode";
@@ -221,6 +223,8 @@ const App = () => {
               <Route path="/inference" element={<InferencePage />} />
               <Route path="/annotation" element={<AnnotationPage />} />
               <Route path="/model-manager" element={<ModelManagerPage />} />
+              <Route path="/retraining" element={<RetrainingPage />} />
+              <Route path="/swagger" element={<SwaggerPage />} />
               <Route path="/realtime/projects" element={<Navigate to="/databases" replace />} />
               <Route path="/realtime" element={<RealtimePage />} />
               <Route path="/deepscan" element={<DeepScanPage />} />

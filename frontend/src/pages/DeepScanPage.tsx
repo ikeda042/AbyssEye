@@ -11,6 +11,7 @@ import {
   Container,
   Link,
   Button,
+  IconButton,
   ToggleButton,
   ToggleButtonGroup,
   Stack,
@@ -25,6 +26,7 @@ import {
 import RefreshIcon from "@mui/icons-material/Refresh";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 import ArrowForwardIosIcon from "@mui/icons-material/ArrowForwardIos";
+import CloseIcon from "@mui/icons-material/Close";
 
 import { API_BASE_URL } from "../config";
 import { getInferenceClassDescription } from "../constants/inference";
@@ -202,12 +204,19 @@ const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
 const overlayStaggerSeconds = 0.008;
 const overlayScanDelayOffset = overlayStaggerSeconds * 10;
 const ROI_DISPLAY_CACHE_LIMIT = 4000;
-
-const drawFrame = keyframes`
-  0% { clip-path: inset(65% 65% 65% 65%); opacity: 0; transform: scale(0.96); }
-  25% { opacity: 0.92; }
-  100% { clip-path: inset(0 0 0 0); opacity: 1; transform: scale(1); }
-`;
+const getFloatingPreviewWidth = (viewportWidth: number) => {
+  if (viewportWidth < 600) return 210;
+  if (viewportWidth < 900) return 232;
+  return 264;
+};
+const getFloatingPreviewMargin = (viewportWidth: number) => (viewportWidth < 600 ? 12 : viewportWidth < 900 ? 16 : 24);
+const getFloatingPreviewMaxWidth = (viewportWidth: number) => {
+  if (viewportWidth < 600) return Math.max(220, viewportWidth - 32);
+  if (viewportWidth < 900) return 340;
+  return 420;
+};
+const clampFloatingPreviewWidth = (viewportWidth: number, width: number) =>
+  Math.min(getFloatingPreviewMaxWidth(viewportWidth), Math.max(180, width));
 
 const overlayReveal = keyframes`
   0% { opacity: 0; transform: scale(0.97); }
@@ -412,12 +421,25 @@ const DeepScanPage = () => {
   const [selectedOverlayRoiId, setSelectedOverlayRoiId] = useState<number | null>(null);
   const [selectedOverlayRoiSrc, setSelectedOverlayRoiSrc] = useState<string | null>(null);
   const [selectedOverlayRoiMeta, setSelectedOverlayRoiMeta] = useState<RealtimeROI | null>(null);
+  const [selectedOverlayPreviewOpen, setSelectedOverlayPreviewOpen] = useState(false);
+  const floatingPreviewRef = useRef<HTMLDivElement | null>(null);
+  const floatingPreviewDragStateRef = useRef<{ offsetX: number; offsetY: number; width: number; height: number } | null>(null);
+  const floatingPreviewResizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [viewportSize, setViewportSize] = useState(() => ({
+    width: typeof window === "undefined" ? 1280 : window.innerWidth,
+    height: typeof window === "undefined" ? 900 : window.innerHeight,
+  }));
+  const [floatingPreviewWidth, setFloatingPreviewWidth] = useState(() =>
+    clampFloatingPreviewWidth(typeof window === "undefined" ? 1280 : window.innerWidth, getFloatingPreviewWidth(typeof window === "undefined" ? 1280 : window.innerWidth)),
+  );
+  const [floatingPreviewPosition, setFloatingPreviewPosition] = useState<{ left: number; top: number } | null>(null);
+  const [floatingPreviewDragging, setFloatingPreviewDragging] = useState(false);
+  const [floatingPreviewResizing, setFloatingPreviewResizing] = useState(false);
+  const [floatingPreviewEmbedded, setFloatingPreviewEmbedded] = useState(false);
   const [manualLabelSaving, setManualLabelSaving] = useState(false);
   const [manualLabelMessage, setManualLabelMessage] = useState<string | null>(null);
   const [manualLabelError, setManualLabelError] = useState<string | null>(null);
-  const [cellCountSummary, setCellCountSummary] = useState<DeepscanCellCountSummary | null>(null);
   const [cellCountLoading, setCellCountLoading] = useState(false);
-  const [cellCountError, setCellCountError] = useState<string | null>(null);
   const [manualRoiMode, setManualRoiMode] = useState(false);
   const [manualRoiSaving, setManualRoiSaving] = useState(false);
   const [manualRoiError, setManualRoiError] = useState<string | null>(null);
@@ -468,8 +490,10 @@ const DeepScanPage = () => {
       noLabel: tt("ラベルなし", "No label"),
       manualHint: tt("ROIを選択するとmanual labelを設定できます。", "Select an ROI to set a manual label."),
       selectedRoi: tt("選択 ROI", "Selected ROI"),
+      previewEmbed: tt("埋め込み", "Embed"),
+      previewRelease: tt("解除", "Release"),
       confidence: tt("信頼度", "Confidence"),
-      manualFallbackWarning: tt("manual label が無いため AI ラベルを使用しています。", "Using AI label because manual label is missing."),
+      manualFallbackWarning: tt("manual label が無いため AI ラベルを使用", "Using AI label because manual label is missing."),
       noRoiSelected: tt("ROIが選択されていません。", "No ROI selected."),
       manualRoiMode: tt("手動ROI追加", "Manual ROI add"),
       manualRoiHint: tt("追加モードON中: 画像をクリックすると48x48 ROIを追加します。", "Add mode ON: click image to add a 48x48 ROI."),
@@ -553,6 +577,27 @@ const DeepScanPage = () => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(storageKeys.deepVision, deepVisionOverlayEnabled ? "1" : "0");
   }, [deepVisionOverlayEnabled]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleResize = () => {
+      setViewportSize({ width: window.innerWidth, height: window.innerHeight });
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    setFloatingPreviewWidth((prev) => clampFloatingPreviewWidth(viewportSize.width, prev));
+  }, [viewportSize.width]);
+
+  const floatingPreviewMargin = useMemo(() => getFloatingPreviewMargin(viewportSize.width), [viewportSize.width]);
+  const getDefaultFloatingPreviewPosition = useCallback(() => {
+    return {
+      left: Math.max(12, viewportSize.width - floatingPreviewWidth - floatingPreviewMargin),
+      top: viewportSize.width < 900 ? 84 : 96,
+    };
+  }, [floatingPreviewMargin, floatingPreviewWidth, viewportSize.width]);
 
   useEffect(() => {
     if (!projectName || deepscanSource === "realtime") {
@@ -684,6 +729,7 @@ const DeepScanPage = () => {
     setSelectedOverlayRoiId(null);
     setSelectedOverlayRoiSrc(null);
     setSelectedOverlayRoiMeta(null);
+    setSelectedOverlayPreviewOpen(false);
     setManualLabelError(null);
     setManualLabelMessage(null);
     setManualRoiError(null);
@@ -839,11 +885,63 @@ const DeepScanPage = () => {
   }, [selectedOverlayRoiId, status?.tif_name, tifDisplayMode, status?.rois]);
 
   useEffect(() => {
+    if (!selectedOverlayPreviewOpen || floatingPreviewEmbedded) return;
+    const previewHeight = floatingPreviewRef.current?.getBoundingClientRect().height ?? floatingPreviewWidth;
+    const maxLeft = Math.max(floatingPreviewMargin, viewportSize.width - floatingPreviewWidth - floatingPreviewMargin);
+    const maxTop = Math.max(12, viewportSize.height - previewHeight - floatingPreviewMargin);
+    setFloatingPreviewPosition((prev) => {
+      const next = prev ?? getDefaultFloatingPreviewPosition();
+      return {
+        left: Math.min(Math.max(next.left, floatingPreviewMargin), maxLeft),
+        top: Math.min(Math.max(next.top, 12), maxTop),
+      };
+    });
+  }, [
+    floatingPreviewMargin,
+    floatingPreviewWidth,
+    floatingPreviewEmbedded,
+    getDefaultFloatingPreviewPosition,
+    selectedOverlayPreviewOpen,
+    viewportSize.height,
+    viewportSize.width,
+  ]);
+
+  useEffect(() => {
+    if (!floatingPreviewDragging && !floatingPreviewResizing) return;
+    const handlePointerMove = (event: PointerEvent) => {
+      const resizeState = floatingPreviewResizeStateRef.current;
+      if (resizeState) {
+        const nextWidth = clampFloatingPreviewWidth(viewportSize.width, resizeState.startWidth + (event.clientX - resizeState.startX));
+        setFloatingPreviewWidth(nextWidth);
+        return;
+      }
+      const dragState = floatingPreviewDragStateRef.current;
+      if (!dragState) return;
+      const margin = floatingPreviewMargin;
+      const maxLeft = Math.max(margin, viewportSize.width - dragState.width - margin);
+      const maxTop = Math.max(12, viewportSize.height - dragState.height - margin);
+      const nextLeft = Math.min(Math.max(event.clientX - dragState.offsetX, margin), maxLeft);
+      const nextTop = Math.min(Math.max(event.clientY - dragState.offsetY, 12), maxTop);
+      setFloatingPreviewPosition({ left: nextLeft, top: nextTop });
+    };
+    const handlePointerUp = () => {
+      floatingPreviewDragStateRef.current = null;
+      floatingPreviewResizeStateRef.current = null;
+      setFloatingPreviewDragging(false);
+      setFloatingPreviewResizing(false);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [floatingPreviewDragging, floatingPreviewMargin, floatingPreviewResizing, viewportSize.height, viewportSize.width]);
+
+  useEffect(() => {
     if (!dbName) {
       setError(labels.dbNameRequired);
       setStatus(null);
-      setCellCountSummary(null);
-      setCellCountError(null);
       prevTifParamRef.current = "";
       return;
     }
@@ -861,11 +959,6 @@ const DeepScanPage = () => {
       blackout: tifChanged,
     });
   }, [dbName, currentTifParam, fetchStatus, labels.dbNameRequired]);
-
-  useEffect(() => {
-    setCellCountSummary(null);
-    setCellCountError(null);
-  }, [dbName]);
 
   const previewBuckets = useMemo(() => {
     const buckets: Record<number, RealtimeROI[]> = { 0: [], 1: [], 2: [], 3: [] };
@@ -909,14 +1002,7 @@ const DeepScanPage = () => {
   const selectedRoiColor =
     (selectedOverlayLabelInfo && classColors[selectedOverlayLabelInfo.label]) ||
     (selectedOverlayRoiMeta ? classColors[selectedOverlayRoiMeta.predicted_class] : undefined);
-
-  const frameAspectRatio = useMemo(() => {
-    const dims = status?.processed_shape || status?.original_shape;
-    if (dims && typeof dims.width === "number" && typeof dims.height === "number" && dims.width > 0 && dims.height > 0) {
-      return `${dims.width} / ${dims.height}`;
-    }
-    return "16 / 10";
-  }, [status?.processed_shape, status?.original_shape]);
+  const showFloatingSelectedPreview = Boolean(selectedOverlayPreviewOpen && selectedOverlayRoiMeta);
 
   const selectedManualLabelValue = (() => {
     const parsed = parseManualLabel(selectedOverlayRoiMeta?.manual_label);
@@ -1031,17 +1117,14 @@ const DeepScanPage = () => {
   const handleFetchCellCountSummary = useCallback(async () => {
     if (!dbName) return;
     setCellCountLoading(true);
-    setCellCountError(null);
     try {
       const response = await fetch(buildCellCountSummaryEndpoint(dbName));
       const payload: DeepscanCellCountSummary & { detail?: string } = await response.json().catch(() => ({} as DeepscanCellCountSummary));
       if (!response.ok) {
         throw new Error((payload as { detail?: string })?.detail || labels.cellCountFetchFailed);
       }
-      setCellCountSummary(payload);
     } catch (err) {
-      setCellCountError(err instanceof Error ? err.message : labels.cellCountFetchFailed);
-      setCellCountSummary(null);
+      void err;
     } finally {
       setCellCountLoading(false);
     }
@@ -1101,6 +1184,55 @@ const DeepScanPage = () => {
     [applyStatusMutator],
   );
 
+  const handleSelectOverlayRoi = useCallback((roiId: number) => {
+    setSelectedOverlayRoiId(roiId);
+    setSelectedOverlayPreviewOpen(true);
+  }, []);
+
+  const handleFloatingPreviewPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || floatingPreviewEmbedded) return;
+    const card = floatingPreviewRef.current;
+    if (!card) return;
+    const rect = card.getBoundingClientRect();
+    floatingPreviewDragStateRef.current = {
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+    setFloatingPreviewDragging(true);
+  }, [floatingPreviewEmbedded]);
+
+  const handleFloatingPreviewResizePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    floatingPreviewResizeStateRef.current = {
+      startX: event.clientX,
+      startWidth: floatingPreviewRef.current?.getBoundingClientRect().width ?? floatingPreviewWidth,
+    };
+    setFloatingPreviewResizing(true);
+  }, [floatingPreviewWidth]);
+
+  const handleToggleFloatingPreviewEmbed = useCallback(() => {
+    const card = floatingPreviewRef.current;
+    if (!card) {
+      setFloatingPreviewEmbedded((prev) => !prev);
+      return;
+    }
+    const rect = card.getBoundingClientRect();
+    if (floatingPreviewEmbedded) {
+      setFloatingPreviewPosition({ left: rect.left, top: rect.top });
+      setFloatingPreviewEmbedded(false);
+      return;
+    }
+    setFloatingPreviewPosition({
+      left: rect.left + window.scrollX,
+      top: rect.top + window.scrollY,
+    });
+    setFloatingPreviewEmbedded(true);
+  }, [floatingPreviewEmbedded]);
+
   const removeRoi = useCallback(
     (roiId: number) => {
       applyStatusMutator((prev) => ({
@@ -1153,7 +1285,7 @@ const DeepScanPage = () => {
           throw new Error(detail || labels.manualRoiAddFailed);
         }
         appendRoi(payload as RealtimeROI);
-        setSelectedOverlayRoiId((payload as RealtimeROI).roi_id);
+        handleSelectOverlayRoi((payload as RealtimeROI).roi_id);
         setManualLabelMessage(labels.manualRoiAdded);
       } catch (err) {
         setManualRoiError(err instanceof Error ? err.message : labels.manualRoiAddFailed);
@@ -1170,6 +1302,7 @@ const DeepScanPage = () => {
       imageNaturalSize?.width,
       labels.manualRoiAddFailed,
       labels.manualRoiAdded,
+      handleSelectOverlayRoi,
       manualRoiMode,
       manualRoiSaving,
       status?.current_image_relative_path,
@@ -1383,6 +1516,8 @@ const DeepScanPage = () => {
                       sx={{
                         flex: 1,
                         minWidth: 0,
+                        maxWidth: { lg: 1140 },
+                        flexBasis: { lg: 1140 },
                         borderRadius: 1,
                         overflow: "hidden",
                         border: "1px solid rgba(15,23,42,0.1)",
@@ -1498,11 +1633,11 @@ const DeepScanPage = () => {
                       ref={imageContainerRef}
                       onClick={(event) => void handleImageClickForManualRoi(event)}
                       sx={{
-                        flex: "0 0 auto",
+                        flex: 1,
                         position: "relative",
                         width: "100%",
-                        aspectRatio: frameAspectRatio,
-                        minHeight: { xs: 420, md: 620, lg: 700 },
+                        maxWidth: { xs: "100%", md: 1080, lg: 1140 },
+                        minHeight: { xs: 420, md: 630, lg: 705 },
                         backgroundColor: (theme) =>
                           theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
                         overflow: "hidden",
@@ -1569,22 +1704,12 @@ const DeepScanPage = () => {
                                   overflow: "hidden",
                                   cursor: "pointer",
                                   boxShadow: isSelected
-                                    ? `0 0 0 2px ${isManualAdded ? "rgba(249,115,22,0.9)" : `${color}`}, 0 0 24px 6px ${isManualAdded ? "rgba(249,115,22,0.35)" : `${color}66`}`
+                                    ? `0 0 24px 6px ${isManualAdded ? "rgba(249,115,22,0.35)" : `${color}66`}`
                                     : "0 0 0 0.5px rgba(15,23,42,0.06)",
                                   transition: "box-shadow 160ms ease, background-color 160ms ease, transform 160ms ease, opacity 120ms ease",
                                   "&:hover": {
-                                    boxShadow: `0 0 0 1.4px ${color}9a, 0 0 0 7px ${color}16`,
+                                    boxShadow: `0 0 18px 4px ${color}33`,
                                     backgroundColor: `${color}16`,
-                                  },
-                                  "&::before": {
-                                    content: '""',
-                                    position: "absolute",
-                                    inset: 0,
-                                    borderRadius: "inherit",
-                                    border: `1.5px ${isManualAdded ? "dashed" : "solid"} ${color}`,
-                                    clipPath: "inset(65% 65% 65% 65%)",
-                                    opacity: 0,
-                                    animation: `${drawFrame} 0.6s cubic-bezier(0.18, 0.72, 0.25, 1) ${delay}s forwards`,
                                   },
                                   "&::after": {
                                     content: '""',
@@ -1599,7 +1724,7 @@ const DeepScanPage = () => {
                                 }}
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  setSelectedOverlayRoiId(roi.roi_id);
+                                  handleSelectOverlayRoi(roi.roi_id);
                                 }}
                               >
                                 <Box
@@ -1639,23 +1764,147 @@ const DeepScanPage = () => {
                     sx={{
                       width: "100%",
                       minWidth: 0,
-                      maxWidth: { lg: 360 },
-                      flexBasis: { lg: 320 },
+                      maxWidth: { lg: 560 },
+                      flexBasis: { lg: 540 },
                       flexShrink: 0,
                       alignSelf: "stretch",
+                      pt: { lg: "92px" },
                     }}
                   >
-                    <Box
-                      aria-hidden={!showFocusTrack}
-                      sx={{
-                        border: "1px solid rgba(14,165,233,0.35)",
-                        borderRadius: 1,
-                        p: 1.1,
-                        backgroundColor: "rgba(14,165,233,0.04)",
-                        visibility: showFocusTrack ? "visible" : "hidden",
-                        pointerEvents: showFocusTrack ? "auto" : "none",
-                      }}
-                    >
+                    <Stack spacing={1.25}>
+                      <Box
+                        sx={{
+                          border: "1px dashed rgba(15,23,42,0.15)",
+                          borderRadius: 1,
+                          p: 1,
+                          backgroundColor: "rgba(15,23,42,0.02)",
+                        }}
+                      >
+                        <Typography variant="subtitle2" fontWeight={500} gutterBottom>
+                          {labels.deepScanSummary}
+                        </Typography>
+                        <Stack spacing={0.5}>
+                          {classLabels.map((label, idx) => (
+                            <Stack key={label} direction="row" alignItems="center" spacing={1}>
+                              <Box sx={{ width: 12, height: 12, borderRadius: 0.75, bgcolor: classColors[idx] }} />
+                              <Typography variant="body2" color="text.secondary">
+                                {label}: {previewBuckets.counts[idx]}
+                              </Typography>
+                            </Stack>
+                          ))}
+                          {previewBuckets.counts.others > 0 && (
+                            <Typography variant="body2" color="text.secondary">
+                              {labels.others}: {previewBuckets.counts.others}
+                            </Typography>
+                          )}
+                          <Typography variant="caption" color="text.secondary">
+                            {labels.previewLabelMode}: {previewLabelMode === "manual" ? labels.frameLabelManual : labels.frameLabelAi}
+                          </Typography>
+                        </Stack>
+                      </Box>
+                      <Box
+                        sx={{
+                          border: "1px dashed rgba(15,23,42,0.15)",
+                          borderRadius: 1,
+                          p: 1,
+                          backgroundColor: "rgba(15,23,42,0.02)",
+                        }}
+                      >
+                        <Stack spacing={0.75} mb={0.75}>
+                          <FormControlLabel
+                            control={
+                              <Switch
+                                size="small"
+                                checked={manualRoiMode}
+                                onChange={(_, checked) => setManualRoiMode(checked)}
+                                disabled={manualRoiSaving}
+                              />
+                            }
+                            label={labels.manualRoiMode}
+                            sx={{ m: 0 }}
+                          />
+                          {manualRoiMode && (
+                            <Typography variant="caption" color="text.secondary">
+                              {labels.manualRoiHint}
+                            </Typography>
+                          )}
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            color="error"
+                            onClick={() => void handleDeleteSelectedRoi()}
+                            disabled={!selectedOverlayRoiId || !selectedOverlayRoiMeta?.manual_added || manualRoiSaving}
+                            sx={{ width: "fit-content" }}
+                          >
+                            {labels.manualRoiDelete}
+                          </Button>
+                          {selectedOverlayRoiId && !selectedOverlayRoiMeta?.manual_added && (
+                            <Typography variant="caption" color="text.secondary">
+                              {labels.manualOnlyDeleteHint}
+                            </Typography>
+                          )}
+                          {manualRoiError && (
+                            <Typography variant="caption" color="error">
+                              {manualRoiError}
+                            </Typography>
+                          )}
+                        </Stack>
+                        <Stack direction="row" alignItems="center" justifyContent="space-between" mb={0.5}>
+                          <Typography variant="subtitle2" fontWeight={500}>
+                            {labels.manualLabelTitle}
+                          </Typography>
+                          {(manualLabelSaving || manualRoiSaving) && (
+                            <Typography variant="caption" color="text.secondary">
+                              {labels.updating}
+                            </Typography>
+                          )}
+                        </Stack>
+                        <Stack spacing={0.5}>
+                          <ToggleButtonGroup
+                            size="small"
+                            exclusive
+                            value={selectedManualLabelValue}
+                            onChange={(_, value) => {
+                              if (value === null || manualLabelSaving) return;
+                              const next = value === "none" ? null : String(value);
+                              void handleManualLabelUpdate(next);
+                            }}
+                            disabled={!selectedOverlayRoiMeta || manualLabelSaving || manualRoiSaving || !dbName}
+                          >
+                            <ToggleButton value="none">{labels.noLabel}</ToggleButton>
+                            <ToggleButton value="0">0</ToggleButton>
+                            <ToggleButton value="1">1</ToggleButton>
+                            <ToggleButton value="2">2</ToggleButton>
+                            <ToggleButton value="3">3</ToggleButton>
+                          </ToggleButtonGroup>
+                          {manualLabelError && (
+                            <Typography variant="caption" color="error">
+                              {manualLabelError}
+                            </Typography>
+                          )}
+                          {manualLabelMessage && (
+                            <Typography variant="caption" color="success.main">
+                              {manualLabelMessage}
+                            </Typography>
+                          )}
+                          {!selectedOverlayRoiMeta && (
+                            <Typography variant="caption" color="text.secondary">
+                              {labels.manualHint}
+                            </Typography>
+                          )}
+                        </Stack>
+                      </Box>
+                      <Box
+                        aria-hidden={!showFocusTrack}
+                        sx={{
+                          border: "1px solid rgba(14,165,233,0.35)",
+                          borderRadius: 1,
+                          p: 1.1,
+                          backgroundColor: "rgba(14,165,233,0.04)",
+                          visibility: showFocusTrack ? "visible" : "hidden",
+                          pointerEvents: showFocusTrack ? "auto" : "none",
+                        }}
+                      >
                         <Typography variant="subtitle2" fontWeight={500} sx={{ mb: 0.5 }}>
                           {labels.focusTrackTitle}
                         </Typography>
@@ -1762,234 +2011,8 @@ const DeepScanPage = () => {
                             {labels.focusNoData}
                           </Typography>
                         )}
-                    </Box>
-                    <Box
-                      sx={{
-                        flex: 1,
-                        border: "1px dashed rgba(15,23,42,0.15)",
-                        borderRadius: 1,
-                        p: 1,
-                        backgroundColor: "rgba(15,23,42,0.02)",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 0.5,
-                      }}
-                    >
-                      <Box>
-                        <Typography variant="subtitle2" fontWeight={500} gutterBottom>
-                          {labels.deepScanSummary}
-                        </Typography>
-                        <Stack spacing={0.5}>
-                          {classLabels.map((label, idx) => (
-                            <Stack key={label} direction="row" alignItems="center" spacing={1}>
-                              <Box sx={{ width: 12, height: 12, borderRadius: 0.75, bgcolor: classColors[idx] }} />
-                              <Typography variant="body2" color="text.secondary">
-                                {label}: {previewBuckets.counts[idx]}
-                              </Typography>
-                            </Stack>
-                          ))}
-                          {previewBuckets.counts.others > 0 && (
-                            <Typography variant="body2" color="text.secondary">
-                              {labels.others}: {previewBuckets.counts.others}
-                            </Typography>
-                          )}
-                          <Typography variant="caption" color="text.secondary">
-                            {labels.previewLabelMode}: {previewLabelMode === "manual" ? labels.frameLabelManual : labels.frameLabelAi}
-                          </Typography>
-                        </Stack>
                       </Box>
-                      {false && (
-                        <Box
-                          sx={{
-                            pt: 1,
-                            borderTop: "1px solid rgba(15,23,42,0.08)",
-                          }}
-                        >
-                          <Stack spacing={0.5}>
-                            <Typography variant="subtitle2" fontWeight={500}>
-                              {labels.cellCountSummary}
-                            </Typography>
-                            {cellCountError ? (
-                              <Typography variant="caption" color="error">
-                                {cellCountError}
-                              </Typography>
-                            ) : null}
-                            {cellCountSummary ? (
-                              <>
-                                <Typography variant="body2" color="text.secondary">
-                                  {labels.cellCountTotal}: {cellCountSummary?.total_roi_count.toLocaleString()}
-                                </Typography>
-                                <Stack direction="row" spacing={1} flexWrap="wrap">
-                                  <Typography variant="body2" color="text.secondary">
-                                    {labels.cellCountClass0}: {cellCountSummary?.class0_total.toLocaleString()}
-                                  </Typography>
-                                  <Typography variant="body2" color="text.secondary">
-                                    {labels.cellCountClass1}: {cellCountSummary?.class1_total.toLocaleString()}
-                                  </Typography>
-                                  <Typography variant="body2" color="text.secondary">
-                                    {labels.cellCountClass2}: {cellCountSummary?.class2_total.toLocaleString()}
-                                  </Typography>
-                                  <Typography variant="body2" color="text.secondary">
-                                    {labels.cellCountClass3}: {cellCountSummary?.class3_total.toLocaleString()}
-                                  </Typography>
-                                </Stack>
-                              </>
-                            ) : (
-                              <Typography variant="caption" color="text.secondary">
-                                {labels.cellCountNoData}
-                              </Typography>
-                            )}
-                          </Stack>
-                        </Box>
-                      )}
-                      <Box
-                        sx={{
-                          pt: 1,
-                          borderTop: "1px solid rgba(15,23,42,0.08)",
-                        }}
-                      >
-                        <Stack spacing={0.75} mb={0.75}>
-                          <FormControlLabel
-                            control={
-                              <Switch
-                                size="small"
-                                checked={manualRoiMode}
-                                onChange={(_, checked) => setManualRoiMode(checked)}
-                                disabled={manualRoiSaving}
-                              />
-                            }
-                            label={labels.manualRoiMode}
-                            sx={{ m: 0 }}
-                          />
-                          {manualRoiMode && (
-                            <Typography variant="caption" color="text.secondary">
-                              {labels.manualRoiHint}
-                            </Typography>
-                          )}
-                          <Button
-                            variant="outlined"
-                            size="small"
-                            color="error"
-                            onClick={() => void handleDeleteSelectedRoi()}
-                            disabled={!selectedOverlayRoiId || !selectedOverlayRoiMeta?.manual_added || manualRoiSaving}
-                            sx={{ width: "fit-content" }}
-                          >
-                            {labels.manualRoiDelete}
-                          </Button>
-                          {selectedOverlayRoiId && !selectedOverlayRoiMeta?.manual_added && (
-                            <Typography variant="caption" color="text.secondary">
-                              {labels.manualOnlyDeleteHint}
-                            </Typography>
-                          )}
-                          {manualRoiError && (
-                            <Typography variant="caption" color="error">
-                              {manualRoiError}
-                            </Typography>
-                          )}
-                        </Stack>
-                        <Stack direction="row" alignItems="center" justifyContent="space-between" mb={0.5}>
-                          <Typography variant="subtitle2" fontWeight={500}>
-                            {labels.manualLabelTitle}
-                          </Typography>
-                          {(manualLabelSaving || manualRoiSaving) && (
-                            <Typography variant="caption" color="text.secondary">
-                              {labels.updating}
-                            </Typography>
-                          )}
-                        </Stack>
-                        <Stack spacing={0.5}>
-                          <ToggleButtonGroup
-                            size="small"
-                            exclusive
-                            value={selectedManualLabelValue}
-                            onChange={(_, value) => {
-                              if (value === null || manualLabelSaving) return;
-                              const next = value === "none" ? null : String(value);
-                              void handleManualLabelUpdate(next);
-                            }}
-                            disabled={!selectedOverlayRoiMeta || manualLabelSaving || manualRoiSaving || !dbName}
-                          >
-                            <ToggleButton value="none">{labels.noLabel}</ToggleButton>
-                            <ToggleButton value="0">0</ToggleButton>
-                            <ToggleButton value="1">1</ToggleButton>
-                            <ToggleButton value="2">2</ToggleButton>
-                            <ToggleButton value="3">3</ToggleButton>
-                          </ToggleButtonGroup>
-                          {manualLabelError && (
-                            <Typography variant="caption" color="error">
-                              {manualLabelError}
-                            </Typography>
-                          )}
-                          {manualLabelMessage && (
-                            <Typography variant="caption" color="success.main">
-                              {manualLabelMessage}
-                            </Typography>
-                          )}
-                          {!selectedOverlayRoiMeta && (
-                            <Typography variant="caption" color="text.secondary">
-                              {labels.manualHint}
-                            </Typography>
-                          )}
-                        </Stack>
-                      </Box>
-                      <Box sx={{ mt: "auto", pt: 1, borderTop: "1px solid rgba(15,23,42,0.08)" }}>
-                        <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" mb={0.5}>
-                          <Typography variant="subtitle2" fontWeight={500}>
-                            {labels.selectedRoi}
-                          </Typography>
-                          {selectedOverlayRoiMeta ? (
-                            <Stack direction="row" spacing={1} alignItems="center">
-                              <Box
-                                sx={{
-                                  width: 10,
-                                  height: 10,
-                                  borderRadius: "50%",
-                                  bgcolor: selectedRoiColor ?? "rgba(148,163,184,0.6)",
-                                }}
-                              />
-                              <Box>
-                                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
-                                  Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
-                                  {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}) / {labels.confidence}(AI):{" "}
-                                  {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
-                                </Typography>
-                                {frameLabelMode === "manual" && selectedOverlayLabelInfo?.source === "ai" && (
-                                  <Typography variant="caption" color="text.secondary">
-                                    {labels.manualFallbackWarning}
-                                  </Typography>
-                                )}
-                              </Box>
-                            </Stack>
-                          ) : (
-                            <Typography variant="body2" color="text.secondary">
-                              {labels.noRoiSelected}
-                            </Typography>
-                          )}
-                        </Stack>
-                        {selectedOverlayRoiSrc ? (
-                          <Box
-                            component="img"
-                            src={selectedOverlayRoiSrc}
-                            alt="Selected ROI"
-                            sx={{
-                              width: "100%",
-                              maxWidth: 260,
-                              borderRadius: 1,
-                              border: `3px solid ${selectedRoiColor ?? "rgba(15,23,42,0.12)"}`,
-                              backgroundColor: (theme) =>
-                                theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
-                              display: "block",
-                              marginLeft: "auto",
-                              marginRight: "auto",
-                            }}
-                          />
-                        ) : (
-                          <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ py: 1.25 }}>
-                            {labels.noRoiSelected}
-                          </Typography>
-                        )}
-                      </Box>
-                    </Box>
+                    </Stack>
                   </Stack>
                 </Stack>
 
@@ -2152,7 +2175,7 @@ const DeepScanPage = () => {
                               onDragEnd={handleRoiDragEnd}
                               onClick={(event) => {
                                   event.stopPropagation();
-                                  setSelectedOverlayRoiId(roi.roi_id);
+                                  handleSelectOverlayRoi(roi.roi_id);
                                 }}
                             >
                               <Box
@@ -2214,6 +2237,155 @@ const DeepScanPage = () => {
         ) : null}
       </Stack>
     </Container>
+      {showFloatingSelectedPreview && selectedOverlayRoiMeta && (
+        <Card
+          ref={floatingPreviewRef}
+          elevation={10}
+          sx={{
+            position: floatingPreviewEmbedded ? "absolute" : "fixed",
+            top: floatingPreviewPosition?.top ?? getDefaultFloatingPreviewPosition().top,
+            left: floatingPreviewPosition?.left ?? getDefaultFloatingPreviewPosition().left,
+            width: floatingPreviewWidth,
+            zIndex: (theme) => theme.zIndex.appBar - 1,
+            borderRadius: 2,
+            border: "1px solid rgba(148,163,184,0.32)",
+            overflow: "hidden",
+            boxShadow: "0 18px 36px rgba(15,23,42,0.18)",
+            backgroundColor: (theme) => theme.palette.background.paper,
+          }}
+        >
+          <IconButton
+            size="small"
+            aria-label="Close selected ROI preview"
+            onClick={() => setSelectedOverlayPreviewOpen(false)}
+            sx={{
+              position: "absolute",
+              top: 8,
+              right: 8,
+              zIndex: 2,
+              minWidth: 0,
+              width: 18,
+              height: 18,
+              p: 0,
+              color: "rgba(248,250,252,0.92)",
+              bgcolor: "transparent",
+              border: "none",
+              boxShadow: "none",
+              "&:hover": { bgcolor: "transparent", color: "white" },
+            }}
+          >
+            <CloseIcon fontSize="small" />
+          </IconButton>
+          <Stack spacing={1.1} sx={{ p: 1.5 }}>
+            <Box
+              onPointerDown={handleFloatingPreviewPointerDown}
+              sx={{
+                pt: 0.25,
+                pr: 3,
+                minHeight: 74,
+                display: "grid",
+                gridTemplateRows: "auto auto auto",
+                alignContent: "start",
+                cursor: floatingPreviewEmbedded ? "default" : floatingPreviewDragging ? "grabbing" : "grab",
+                userSelect: "none",
+              }}
+            >
+              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 0.4, pr: 1.5 }}>
+                <Typography variant="subtitle2" fontWeight={600}>
+                  {labels.selectedRoi}
+                </Typography>
+                <Button
+                  size="small"
+                  variant={floatingPreviewEmbedded ? "contained" : "outlined"}
+                  onClick={handleToggleFloatingPreviewEmbed}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  sx={{ minWidth: 0, px: 1, py: 0.2, fontSize: 11, lineHeight: 1.4, whiteSpace: "nowrap" }}
+                >
+                  {floatingPreviewEmbedded ? labels.previewRelease : labels.previewEmbed}
+                </Button>
+              </Stack>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", lineHeight: 1.45, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+              >
+                Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
+                {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}) / {labels.confidence}(AI):{" "}
+                {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{
+                  display: "block",
+                  mt: 0.45,
+                  lineHeight: 1.45,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  minHeight: 18,
+                  visibility: frameLabelMode === "manual" && selectedOverlayLabelInfo?.source === "ai" ? "visible" : "hidden",
+                }}
+              >
+                {labels.manualFallbackWarning}
+              </Typography>
+            </Box>
+            <Box
+              sx={{
+                width: "100%",
+                aspectRatio: "1 / 1",
+                borderRadius: 1.5,
+                border: `2px solid ${selectedRoiColor ?? "rgba(148,163,184,0.6)"}`,
+                backgroundColor: (theme) =>
+                  theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
+                overflow: "hidden",
+                display: "block",
+              }}
+            >
+              {selectedOverlayRoiSrc ? (
+                <Box
+                  component="img"
+                  src={selectedOverlayRoiSrc}
+                  alt="Selected ROI"
+                  sx={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    display: "block",
+                  }}
+                />
+              ) : (
+                <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ px: 2 }}>
+                  {labels.noRoiSelected}
+                </Typography>
+              )}
+            </Box>
+          </Stack>
+          <Box
+            onPointerDown={handleFloatingPreviewResizePointerDown}
+            sx={{
+              position: "absolute",
+              right: 7,
+              bottom: 7,
+              width: 16,
+              height: 16,
+              cursor: "nwse-resize",
+              zIndex: 2,
+              "&::before": {
+                content: '""',
+                position: "absolute",
+                right: 1,
+                bottom: 1,
+                width: 11,
+                height: 11,
+                borderRight: "2px solid rgba(148,163,184,0.9)",
+                borderBottom: "2px solid rgba(148,163,184,0.9)",
+                borderBottomRightRadius: 1,
+              },
+            }}
+          />
+        </Card>
+      )}
     </ThemeProvider>
   );
 };

@@ -37,6 +37,7 @@ LEGACY_REALTIME_TIFF_DIR = APP_DIR.parent / "realtime_tiff"
 ALLOWED_EXTENSIONS = {".tif", ".tiff"}
 ROI_CACHE_VERSION = 1
 REALTIME_STACK_DB_SUFFIX = "_bulk.db"
+MAX_PENDING_QUEUE_IMAGES = 10
 # fmt: on
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,7 @@ _pending_finalize_tasks: set[asyncio.Task[None]] = set()
 _current_tif_name: str | None = None
 _queued_tif_names: list[str] = []
 _status_cache: dict[str, RealtimeStatus] = {}
+_discarded_tif_names: set[str] = set()
 
 
 def _deserialize_roi_meta(raw_meta: object) -> object:
@@ -843,18 +845,30 @@ def _resolve_runtime_tif_path_unlocked(tif_name: str) -> Path:
     raise HTTPException(status_code=404, detail=f"{safe_name} が見つかりませんでした。")
 
 
-def _enqueue_runtime_status_unlocked(status: RealtimeStatus) -> None:
+def _drop_overflow_queued_tifs_unlocked() -> list[Path]:
+    dropped_paths: list[Path] = []
+    while len(_queued_tif_names) > MAX_PENDING_QUEUE_IMAGES:
+        dropped_name = _queued_tif_names.pop(0)
+        _status_cache.pop(dropped_name, None)
+        _discarded_tif_names.add(dropped_name)
+        dropped_paths.append(Path(dropped_name))
+    return dropped_paths
+
+
+def _enqueue_runtime_status_unlocked(status: RealtimeStatus) -> list[Path]:
     global _current_tif_name
     global _latest_status
 
     tif_name = status.tif_path.name
+    _discarded_tif_names.discard(tif_name)
     _status_cache[tif_name] = status
     if _current_tif_name is None:
         _current_tif_name = tif_name
         _latest_status = status
-        return
+        return []
     if tif_name != _current_tif_name and tif_name not in _queued_tif_names:
         _queued_tif_names.append(tif_name)
+    return _drop_overflow_queued_tifs_unlocked()
 
 
 def _sync_runtime_queue_unlocked() -> None:
@@ -888,7 +902,14 @@ def _sync_runtime_queue_unlocked() -> None:
                 continue
             _queued_tif_names.append(tif_name)
 
+    dropped_paths = _drop_overflow_queued_tifs_unlocked()
+    dropped_names = {path.name for path in dropped_paths}
+    for dropped_path in dropped_paths:
+        _delete_runtime_artifacts(dropped_path)
+
     for path in disk_paths:
+        if path.name in dropped_names:
+            continue
         _status_cache.setdefault(
             path.name,
             _build_pending_realtime_status(
@@ -905,6 +926,7 @@ def _advance_runtime_queue_unlocked(consumed_tif_name: str) -> None:
     global _current_tif_name
     global _latest_status
 
+    _discarded_tif_names.add(consumed_tif_name)
     _status_cache.pop(consumed_tif_name, None)
     _queued_tif_names[:] = [name for name in _queued_tif_names if name != consumed_tif_name]
     if _current_tif_name == consumed_tif_name:
@@ -972,6 +994,12 @@ async def _finalize_saved_realtime_tif_background(
             status_revision=status_revision,
         )
     except Exception:
+        async with _status_lock:
+            should_cleanup = target_path.name in _discarded_tif_names or not target_path.exists()
+            if should_cleanup:
+                _discarded_tif_names.discard(target_path.name)
+        if should_cleanup:
+            await asyncio.to_thread(_delete_runtime_artifacts, target_path)
         logger.exception("Realtime TIFF finalization failed for %s", target_path.name)
 
 
@@ -1270,10 +1298,17 @@ async def _finalize_saved_realtime_tif(
         source_filename=source_filename,
         source_is_uploaded=source_is_uploaded,
     )
+    should_cleanup = False
     async with _status_lock:
-        _status_cache[target_path.name] = next_status
-        if _current_tif_name == target_path.name:
-            _latest_status = next_status
+        if target_path.name in _discarded_tif_names or not target_path.exists():
+            _discarded_tif_names.discard(target_path.name)
+            should_cleanup = True
+        else:
+            _status_cache[target_path.name] = next_status
+            if _current_tif_name == target_path.name:
+                _latest_status = next_status
+    if should_cleanup:
+        await asyncio.to_thread(_delete_runtime_artifacts, target_path)
     return target_path
 
 
@@ -1290,6 +1325,7 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
         raise HTTPException(status_code=400, detail="空のファイルは保存できません。")
 
     target_path = await asyncio.to_thread(_write_bytes_with_dedup, data, REALTIME_TIFF_DIR, safe_name)
+    dropped_paths: list[Path]
     async with _status_lock:
         _latest_status_revision += 1
         revision = _latest_status_revision
@@ -1298,7 +1334,9 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
             source_filename=upload_file.filename or safe_name,
             source_is_uploaded=True,
         )
-        _enqueue_runtime_status_unlocked(pending_status)
+        dropped_paths = _enqueue_runtime_status_unlocked(pending_status)
+    for dropped_path in dropped_paths:
+        await asyncio.to_thread(_delete_runtime_artifacts, dropped_path)
     _schedule_realtime_finalize(
         target_path,
         source_filename=upload_file.filename or safe_name,
@@ -1325,6 +1363,7 @@ async def save_realtime_tif_from_path(source_path: Path) -> Path:
         REALTIME_TIFF_DIR,
         dest_name=safe_name,
     )
+    dropped_paths: list[Path]
     async with _status_lock:
         _latest_status_revision += 1
         revision = _latest_status_revision
@@ -1333,7 +1372,9 @@ async def save_realtime_tif_from_path(source_path: Path) -> Path:
             source_filename=safe_name,
             source_is_uploaded=False,
         )
-        _enqueue_runtime_status_unlocked(pending_status)
+        dropped_paths = _enqueue_runtime_status_unlocked(pending_status)
+    for dropped_path in dropped_paths:
+        await asyncio.to_thread(_delete_runtime_artifacts, dropped_path)
     _schedule_realtime_finalize(
         target_path,
         source_filename=safe_name,

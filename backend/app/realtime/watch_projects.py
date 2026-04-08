@@ -277,6 +277,10 @@ def _escape_ps_double_quoted(value: str) -> str:
     return value.replace("`", "``").replace('"', '`"')
 
 
+def _escape_shell_single_quoted(value: str) -> str:
+    return value.replace("'", "'\"'\"'")
+
+
 def build_powershell_watch_script(project_name: str, api_url: str) -> str:
     config = _load_config(project_name)
     if not config.watch_path:
@@ -433,6 +437,147 @@ def build_powershell_watch_script(project_name: str, api_url: str) -> str:
         "}",
     ]
     return "\r\n".join(lines) + "\r\n"
+
+
+def build_macos_watch_script(project_name: str, api_url: str) -> str:
+    config = _load_config(project_name)
+    if not config.watch_path:
+        raise HTTPException(status_code=400, detail="監視パスが未設定のため macOS watcher を生成できません。")
+
+    watch_path = _escape_shell_single_quoted(config.watch_path)
+    escaped_api_url = _escape_shell_single_quoted(config.api_url or api_url)
+    interval_literal = f"{config.poll_interval_seconds:.3f}".rstrip("0").rstrip(".")
+
+    lines = [
+        "#!/bin/zsh",
+        "",
+        "# ============================================",
+        "# 設定値（必要に応じて書き換えてください）",
+        "# ============================================",
+        "",
+        f"WATCH_PATH='{watch_path}'",
+        f"API_URL='{escaped_api_url}'",
+        f"INTERVAL_SECONDS='{interval_literal}'",
+        "",
+        "setopt null_glob",
+        "",
+        "is_target_tiff() {",
+        '  local file_path=\"$1\"',
+        '  local file_name=\"${file_path:t}\"',
+        '  local lower_name=\"${file_name:l}\"',
+        '  local stem_name=\"${file_name:r}\"',
+        "",
+        '  [[ \"$lower_name\" == *.tif || \"$lower_name\" == *.tiff ]] || return 1',
+        '  [[ \"$stem_name\" =~ ^TMP[0-9A-F]+$ ]] && return 1',
+        "  return 0",
+        "}",
+        "",
+        "list_tiff_files() {",
+        "  local file_path",
+        '  for file_path in \"$WATCH_PATH\"/*; do',
+        '    [[ -f \"$file_path\" ]] || continue',
+        '    if is_target_tiff \"$file_path\"; then',
+        '      print -r -- \"$file_path\"',
+        "    fi",
+        "  done",
+        "}",
+        "",
+        "get_file_signature() {",
+        '  local file_path=\"$1\"',
+        '  [[ -f \"$file_path\" ]] || return 1',
+        '  stat -f \"%z:%m\" \"$file_path\" 2>/dev/null',
+        "}",
+        "",
+        "wait_until_stable() {",
+        '  local file_path=\"$1\"',
+        "  local max_retry=20",
+        "  local retry_index",
+        '  local last_signature=\"\"',
+        '  local current_signature=\"\"',
+        '  local current_size=\"0\"',
+        "",
+        "  for ((retry_index = 0; retry_index < max_retry; retry_index += 1)); do",
+        '    [[ -f \"$file_path\" ]] || return 1',
+        '    current_signature=$(get_file_signature \"$file_path\") || { sleep 0.2; continue; }',
+        '    current_size=\"${current_signature%%:*}\"',
+        '    if [[ \"$current_size\" -gt 0 && \"$current_signature\" == \"$last_signature\" ]]; then',
+        '      print -r -- \"$current_signature\"',
+        "      return 0",
+        "    fi",
+        '    last_signature=\"$current_signature\"',
+        "    sleep 0.2",
+        "  done",
+        "  return 1",
+        "}",
+        "",
+        "send_tiff_file() {",
+        '  local file_path=\"$1\"',
+        '  [[ -f \"$file_path\" ]] || return 1',
+        '  print -r -- \"[INFO] 新規 TIFF ファイル検出: $file_path\"',
+        "",
+        '  local stable_signature=\"\"',
+        '  stable_signature=$(wait_until_stable \"$file_path\") || {',
+        '    print -r -- \"[WARN] ファイルがロックされているため読み込めませんでした: $file_path\"',
+        "    return 1",
+        "  }",
+        "",
+        '  local file_name=\"${file_path:t}\"',
+        '  local response_file=\"$(mktemp /tmp/abyss-eye-watch.XXXXXX)\"',
+        "  local http_code",
+        "",
+        '  print -r -- \"[INFO] アップロード開始: $file_name -> $API_URL\"',
+        '  http_code=$(curl -sS -o \"$response_file\" -w \"%{http_code}\" -X POST -F \"file=@${file_path};type=image/tiff\" \"$API_URL\")',
+        "  local curl_status=$?",
+        "",
+        "  if [[ $curl_status -ne 0 ]]; then",
+        '    print -r -- \"[ERROR] アップロード中にエラーが発生しました: curl exit $curl_status\"',
+        '    rm -f \"$response_file\"',
+        "    return 1",
+        "  fi",
+        "",
+        '  print -r -- \"[INFO] アップロード完了: StatusCode = $http_code\"',
+        '  if [[ -s \"$response_file\" ]]; then',
+        '    print -r -- \"[INFO] レスポンス本文:\"',
+        '    cat \"$response_file\"',
+        "  fi",
+        '  rm -f \"$response_file\"',
+        "",
+        '  [[ \"$http_code\" == 2* ]]',
+        "}",
+        "",
+        'if [[ ! -d \"$WATCH_PATH\" ]]; then',
+        '  print -r -- \"[ERROR] 監視対象フォルダが存在しません: $WATCH_PATH\"',
+        "  exit 1",
+        "fi",
+        "",
+        'print -r -- \"[INFO] フォルダ監視を開始します: $WATCH_PATH\"',
+        'print -r -- \"[INFO] 新しい .tif / .tiff ファイルが作成されると自動で POST します。\"',
+        'print -r -- \"[INFO] TMP*.tif の一時ファイルは自動的に無視します。\"',
+        'print -r -- \"[INFO] 停止するには Ctrl + C を押してください。\"',
+        "",
+        "typeset -A seen_signatures",
+        'while IFS= read -r existing_file; do',
+        '  [[ -n \"$existing_file\" ]] || continue',
+        '  existing_signature=$(get_file_signature \"$existing_file\") || continue',
+        '  seen_signatures[\"$existing_file\"]=\"$existing_signature\"',
+        "done < <(list_tiff_files)",
+        "",
+        "while true; do",
+        '  while IFS= read -r file_path; do',
+        '    [[ -n \"$file_path\" ]] || continue',
+        '    current_signature=$(get_file_signature \"$file_path\") || continue',
+        '    if [[ \"${seen_signatures[$file_path]-}\" != \"$current_signature\" ]]; then',
+        '      if send_tiff_file \"$file_path\"; then',
+        '        latest_signature=$(get_file_signature \"$file_path\") || latest_signature=\"$current_signature\"',
+        '        seen_signatures[\"$file_path\"]=\"$latest_signature\"',
+        "      fi",
+        "    fi",
+        "  done < <(list_tiff_files)",
+        "",
+        '  sleep \"$INTERVAL_SECONDS\"',
+        "done",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 async def _watch_project_loop(project_name: str) -> None:

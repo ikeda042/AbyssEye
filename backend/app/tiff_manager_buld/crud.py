@@ -915,6 +915,124 @@ def _build_cell_count_summary_csv(db_path: Path) -> str | None:
     return _build_csv_text(rows)
 
 
+def _deserialize_roi_meta_for_export(raw_meta: object) -> dict[str, object]:
+    if isinstance(raw_meta, dict):
+        return raw_meta
+    if isinstance(raw_meta, str):
+        try:
+            parsed = json.loads(raw_meta)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _build_training_dataset_entries(
+    db_path: Path,
+    *,
+    display_name: str,
+) -> tuple[list[list[object]], list[tuple[str, bytes]]]:
+    rows: list[list[object]] = [
+        [
+            "relative_path",
+            "label",
+            "source_folder",
+            "db_name",
+            "image_filename",
+            "record_id",
+            "roi_id",
+            "manual_label",
+            "ai_label",
+            "ai_model_name",
+            "manual_added",
+            "image_width_px",
+            "image_height_px",
+            "roi_start_x",
+            "roi_start_y",
+            "roi_end_x",
+            "roi_end_y",
+        ]
+    ]
+    files: list[tuple[str, bytes]] = []
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            available_columns = {row["name"] for row in conn.execute("PRAGMA table_info(roi_records)").fetchall()}
+            if "manual_label" not in available_columns or "png_blob" not in available_columns:
+                return rows, files
+            select_columns = [
+                "id",
+                "roi_id",
+                "image_filename" if "image_filename" in available_columns else "NULL AS image_filename",
+                "manual_label",
+                "ai_label" if "ai_label" in available_columns else "NULL AS ai_label",
+                "ai_model_name" if "ai_model_name" in available_columns else "NULL AS ai_model_name",
+                "roi_meta" if "roi_meta" in available_columns else "NULL AS roi_meta",
+                "image_width_px" if "image_width_px" in available_columns else "NULL AS image_width_px",
+                "image_height_px" if "image_height_px" in available_columns else "NULL AS image_height_px",
+                "roi_start_x" if "roi_start_x" in available_columns else "NULL AS roi_start_x",
+                "roi_start_y" if "roi_start_y" in available_columns else "NULL AS roi_start_y",
+                "roi_end_x" if "roi_end_x" in available_columns else "NULL AS roi_end_x",
+                "roi_end_y" if "roi_end_y" in available_columns else "NULL AS roi_end_y",
+                "png_blob",
+            ]
+            query_rows = conn.execute(
+                f"""
+                SELECT {", ".join(select_columns)}
+                FROM roi_records
+                ORDER BY COALESCE(image_filename, ''), id ASC
+                """
+            ).fetchall()
+    except sqlite3.DatabaseError:
+        return rows, files
+
+    for row in query_rows:
+        manual_label = _parse_cached_label(row["manual_label"])
+        if manual_label is None or manual_label < 0 or manual_label > 3:
+            continue
+        png_blob = row["png_blob"]
+        if png_blob is None:
+            continue
+        image_filename = str(row["image_filename"] or "").strip() or "unknown.tif"
+        record_id = int(row["id"])
+        roi_id = int(row["roi_id"] or record_id)
+        roi_meta = _deserialize_roi_meta_for_export(row["roi_meta"])
+        manual_added = bool(roi_meta.get("manual_added")) if roi_meta else False
+        file_stem = (
+            f"{_sanitize_component(display_name, field='フォルダ名')}"
+            f"__{_sanitize_rel_for_dir(image_filename)}"
+            f"__roi{roi_id:04d}"
+            f"__rec{record_id:06d}.png"
+        )
+        relative_path = Path(f"class{manual_label}") / file_stem
+        files.append((relative_path.as_posix(), bytes(png_blob)))
+        rows.append(
+            [
+                relative_path.as_posix(),
+                manual_label,
+                display_name,
+                db_path.name,
+                image_filename,
+                record_id,
+                roi_id,
+                manual_label,
+                row["ai_label"],
+                row["ai_model_name"],
+                int(manual_added),
+                row["image_width_px"],
+                row["image_height_px"],
+                row["roi_start_x"],
+                row["roi_start_y"],
+                row["roi_end_x"],
+                row["roi_end_y"],
+            ]
+        )
+
+    return rows, files
+
+
 def _iter_project_result_files(folder_path: Path) -> list[Path]:
     candidates = [
         _db_path_for_folder(folder_path.name),
@@ -962,6 +1080,27 @@ async def export_project_archive(project_name: str) -> Path:
             archive_path.unlink()
 
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            training_manifest_rows: list[list[object]] = [
+                [
+                    "relative_path",
+                    "label",
+                    "source_folder",
+                    "db_name",
+                    "image_filename",
+                    "record_id",
+                    "roi_id",
+                    "manual_label",
+                    "ai_label",
+                    "ai_model_name",
+                    "manual_added",
+                    "image_width_px",
+                    "image_height_px",
+                    "roi_start_x",
+                    "roi_start_y",
+                    "roi_end_x",
+                    "roi_end_y",
+                ]
+            ]
             for folder_path in folders:
                 source_tiffs = sorted(_iter_source_tiff_files(folder_path), key=lambda path: str(path.relative_to(folder_path)).lower())
                 display_name = _project_export_display_name(folder_path.name, safe_project)
@@ -994,6 +1133,17 @@ async def export_project_archive(project_name: str) -> Path:
                     cell_count_csv = _build_cell_count_summary_csv(bulk_db_path)
                     if cell_count_csv:
                         zf.writestr((results_dir / "cell_count_summary.csv").as_posix(), cell_count_csv)
+                    dataset_rows, dataset_files = _build_training_dataset_entries(bulk_db_path, display_name=display_name)
+                    if len(dataset_rows) > 1:
+                        training_manifest_rows.extend(dataset_rows[1:])
+                        for relative_path, blob in dataset_files:
+                            zf.writestr((Path("_training_dataset") / relative_path).as_posix(), blob)
+
+            if len(training_manifest_rows) > 1:
+                zf.writestr(
+                    (Path("_training_dataset") / "labels.csv").as_posix(),
+                    _build_csv_text(training_manifest_rows),
+                )
 
         return archive_path
 

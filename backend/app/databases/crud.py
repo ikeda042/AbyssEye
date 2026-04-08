@@ -5,6 +5,7 @@ import gc
 import json
 import re
 import sqlite3
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,6 +27,8 @@ except ImportError:  # pragma: no cover - optional dependency
 
 DATABASE_DIR = Path(__file__).resolve().parent
 TIFF_STORAGE_DIR = Path(__file__).resolve().parents[1] / "tiff_manager"
+REALTIME_DATABASE_DIR = Path(__file__).resolve().parents[1] / "realtime_databases"
+TEMP_REALTIME_DATABASE_DIR = Path(tempfile.gettempdir()) / "abyss_eye" / "realtime_databases"
 RenderMode = Literal["raw", "normalized", "jet"]
 JET_COLORMAP = cm.get_cmap("jet") if cm else None
 
@@ -144,9 +147,22 @@ def _resolve_db_path(db_name: str) -> Path:
     return db_path
 
 
+def _resolve_annotation_db_path(db_name: str) -> Path:
+    safe_name = Path(db_name or "").name
+    if not safe_name or safe_name != db_name:
+        raise HTTPException(status_code=400, detail="不正なデータベース名です。")
+
+    for directory in (DATABASE_DIR, REALTIME_DATABASE_DIR, TEMP_REALTIME_DATABASE_DIR):
+        candidate = directory / safe_name
+        if candidate.is_file():
+            return candidate
+
+    raise HTTPException(status_code=404, detail=f"{safe_name} が見つかりません。")
+
+
 def get_database_file_path(db_name: str) -> Path:
-    """Return the absolute path for a given `.db` file."""
-    return _resolve_db_path(db_name)
+    """Return the absolute path for a given `.db` file, including realtime DBs."""
+    return _resolve_annotation_db_path(db_name)
 
 
 def _get_database_image_stem_count(conn: sqlite3.Connection) -> int:
@@ -590,7 +606,7 @@ def update_manual_label(db_name: str, record_id: int, manual_label: Optional[str
     if record_id <= 0:
         raise HTTPException(status_code=400, detail="record_id は1以上で指定してください。")
 
-    db_path = _resolve_db_path(db_name)
+    db_path = get_database_file_path(db_name)
     try:
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row

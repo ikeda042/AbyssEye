@@ -17,6 +17,7 @@ import {
   DialogTitle,
   Link,
   Button,
+  IconButton,
   ToggleButton,
   ToggleButtonGroup,
   Stack,
@@ -29,13 +30,16 @@ import {
 } from "@mui/material";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 import DownloadIcon from "@mui/icons-material/Download";
+import CloseIcon from "@mui/icons-material/Close";
 import { useTheme } from "@mui/material/styles";
 import { API_BASE_URL } from "../config";
 import { getInferenceClassDescription } from "../constants/inference";
 import { useI18n } from "../i18n";
 import { PAGE_CONTAINER_SX } from "../ui/layout";
 import {
+  buildRealtimeWatchMacCommandFileName,
   buildRealtimeWatchPowerShellFileName,
+  getRealtimeWatchMacCommandScript,
   getRealtimeWatchProject,
   getRealtimeWatchPowerShellScript,
   saveRealtimeWatchProject,
@@ -110,6 +114,19 @@ const storageKeys = {
   previewLabelMode: "realtime:previewLabelMode",
 };
 const PROJECT_STORAGE_KEY = "abyssEye:data-projects:v1";
+const getFloatingPreviewWidth = (viewportWidth: number) => {
+  if (viewportWidth < 600) return 210;
+  if (viewportWidth < 900) return 232;
+  return 264;
+};
+const getFloatingPreviewMargin = (viewportWidth: number) => (viewportWidth < 600 ? 12 : viewportWidth < 900 ? 16 : 24);
+const getFloatingPreviewMaxWidth = (viewportWidth: number) => {
+  if (viewportWidth < 600) return Math.max(220, viewportWidth - 32);
+  if (viewportWidth < 900) return 340;
+  return 420;
+};
+const clampFloatingPreviewWidth = (viewportWidth: number, width: number) =>
+  Math.min(getFloatingPreviewMaxWidth(viewportWidth), Math.max(180, width));
 
 type ProjectEntry = {
   name: string;
@@ -169,12 +186,6 @@ const getDefaultRealtimeCounters = (): RealtimeCounters => ({
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
 const overlayStaggerSeconds = 0.008;
 const overlayScanDelayOffset = overlayStaggerSeconds * 10;
-
-const drawFrame = keyframes`
-  0% { clip-path: inset(65% 65% 65% 65%); opacity: 0; transform: scale(0.96); }
-  25% { opacity: 0.92; }
-  100% { clip-path: inset(0 0 0 0); opacity: 1; transform: scale(1); }
-`;
 
 const overlayReveal = keyframes`
   0% { opacity: 0; transform: scale(0.97); }
@@ -379,6 +390,8 @@ const RealtimePage = () => {
       deepScanSummary: tt("Deep Scan 概要", "Deep Scan summary"),
       others: tt("その他", "Others"),
       selectedRoi: tt("選択 ROI", "Selected ROI"),
+      previewEmbed: tt("埋め込み", "Embed"),
+      previewRelease: tt("解除", "Release"),
       confidence: tt("信頼度", "Confidence"),
       noRoiSelected: tt("ROIが選択されていません。", "No ROI selected."),
       inferencePreview: tt("推論プレビュー表示モード", "Inference preview display mode"),
@@ -386,7 +399,7 @@ const RealtimePage = () => {
       updating: tt("更新中…", "Updating..."),
       noLabel: tt("ラベルなし", "No label"),
       manualHint: tt("ROIを選択するとmanual labelを設定できます。", "Select an ROI to set a manual label."),
-      manualFallbackWarning: tt("manual label が無いため AI ラベルを使用しています。", "Using AI label because manual label is missing."),
+      manualFallbackWarning: tt("manual label が無いため AI ラベルを使用", "Using AI label because manual label is missing."),
       manualUpdateFailed: tt("manual_label の更新に失敗しました。", "Failed to update manual label."),
       manualUpdateSuccess: tt("manual label を更新しました。", "Manual label updated."),
       manualRoiMode: tt("手動ROI追加", "Manual ROI add"),
@@ -404,8 +417,8 @@ const RealtimePage = () => {
       projectSelectFirst: t("projects.selectProjectFirst"),
       watchPathLabel: tt("監視フォルダのパス", "Watch folder path"),
       watchPathPlaceholder: tt(
-        "例: C:\\Users\\evident\\Desktop\\ABY\\aaaa",
-        "Example: C:\\Users\\evident\\Desktop\\ABY\\aaaa",
+        "例: C:\\Users\\YourUserName\\Desktop\\watch-folder",
+        "Example: C:\\Users\\YourUserName\\Desktop\\watch-folder",
       ),
       watchApiUrlLabel: tt("アップロード先 API URL", "Upload API URL"),
       watchApiUrlPlaceholder: tt(
@@ -419,16 +432,24 @@ const RealtimePage = () => {
       ),
       watchMissingPathError: tt("監視を有効にする場合はパスを入力してください。", "Enter a path before enabling the watcher."),
       watchCommandReadyHint: tt(
-        "監視フォルダのパスを入力して、PowerShell ファイル (.ps1) をダウンロードしてください。",
-        "Enter the watch folder path, then download the PowerShell script file (.ps1).",
+        "監視フォルダのパスを入力して、Windows は PowerShell ファイル (.ps1)、macOS は起動ファイル (.command) をダウンロードしてください。",
+        "Enter the watch folder path, then download the Windows PowerShell file (.ps1) or the macOS command file (.command).",
       ),
-      watchCreateAndCopy: tt(
-        "PowerShell ファイルをダウンロード",
-        "Download PowerShell file",
+      watchCreateWindows: tt(
+        "Windows (.ps1)",
+        "Windows (.ps1)",
+      ),
+      watchCreateMac: tt(
+        "macOS (.command)",
+        "macOS (.command)",
       ),
       watchCommandCopied: tt(
         "PowerShell ファイル (.ps1) をダウンロードしました。PowerShell で実行してください。",
         "Downloaded the PowerShell file (.ps1). Run it from PowerShell.",
+      ),
+      watchMacCommandDownloaded: tt(
+        "macOS 用ファイル (.command) をダウンロードしました。Terminal で `zsh ./ファイル名.command` のように実行してください。",
+        "Downloaded the macOS file (.command). Run it from Terminal, for example with `zsh ./filename.command`.",
       ),
       watchCreateFailed: tt(
         "プロジェクト作成または PowerShell ファイルの準備に失敗しました。",
@@ -473,6 +494,21 @@ const RealtimePage = () => {
   const [selectedOverlayRoiId, setSelectedOverlayRoiId] = useState<number | null>(null);
   const [selectedOverlayRoiSrc, setSelectedOverlayRoiSrc] = useState<string | null>(null);
   const [selectedOverlayRoiMeta, setSelectedOverlayRoiMeta] = useState<RealtimeROI | null>(null);
+  const [selectedOverlayPreviewOpen, setSelectedOverlayPreviewOpen] = useState(false);
+  const floatingPreviewRef = useRef<HTMLDivElement | null>(null);
+  const floatingPreviewDragStateRef = useRef<{ offsetX: number; offsetY: number; width: number; height: number } | null>(null);
+  const floatingPreviewResizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [viewportSize, setViewportSize] = useState(() => ({
+    width: typeof window === "undefined" ? 1280 : window.innerWidth,
+    height: typeof window === "undefined" ? 900 : window.innerHeight,
+  }));
+  const [floatingPreviewWidth, setFloatingPreviewWidth] = useState(() =>
+    clampFloatingPreviewWidth(typeof window === "undefined" ? 1280 : window.innerWidth, getFloatingPreviewWidth(typeof window === "undefined" ? 1280 : window.innerWidth)),
+  );
+  const [floatingPreviewPosition, setFloatingPreviewPosition] = useState<{ left: number; top: number } | null>(null);
+  const [floatingPreviewDragging, setFloatingPreviewDragging] = useState(false);
+  const [floatingPreviewResizing, setFloatingPreviewResizing] = useState(false);
+  const [floatingPreviewEmbedded, setFloatingPreviewEmbedded] = useState(false);
   const [usingCurrent, setUsingCurrent] = useState(false);
   const [discardingCurrent, setDiscardingCurrent] = useState(false);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
@@ -602,6 +638,27 @@ const RealtimePage = () => {
     window.localStorage.setItem(storageKeys.deepVision, deepVisionOverlayEnabled ? "1" : "0");
   }, [deepVisionOverlayEnabled]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleViewportResize = () => {
+      setViewportSize({ width: window.innerWidth, height: window.innerHeight });
+    };
+    window.addEventListener("resize", handleViewportResize);
+    return () => window.removeEventListener("resize", handleViewportResize);
+  }, []);
+
+  useEffect(() => {
+    setFloatingPreviewWidth((prev) => clampFloatingPreviewWidth(viewportSize.width, prev));
+  }, [viewportSize.width]);
+
+  const floatingPreviewMargin = useMemo(() => getFloatingPreviewMargin(viewportSize.width), [viewportSize.width]);
+  const getDefaultFloatingPreviewPosition = useCallback(() => {
+    return {
+      left: Math.max(12, viewportSize.width - floatingPreviewWidth - floatingPreviewMargin),
+      top: viewportSize.width < 900 ? 84 : 96,
+    };
+  }, [floatingPreviewMargin, floatingPreviewWidth, viewportSize.width]);
+
   const recomputeImageLayout = useCallback(() => {
     const container = imageContainerRef.current;
     if (!container || !imageNaturalSize) return;
@@ -677,9 +734,9 @@ const RealtimePage = () => {
     latestStatusRef.current = status;
   }, [status]);
 
-  const downloadTextFile = useCallback((filename: string, content: string) => {
-    const bomPrefixed = `\uFEFF${content}`;
-    const blob = new Blob([bomPrefixed], { type: "text/plain;charset=utf-8" });
+  const downloadTextFile = useCallback((filename: string, content: string, includeBom: boolean = true) => {
+    const fileContent = includeBom ? `\uFEFF${content}` : content;
+    const blob = new Blob([fileContent], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -698,6 +755,16 @@ const RealtimePage = () => {
     const handleResize = () => recomputeImageLayout();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
+  }, [recomputeImageLayout]);
+
+  useEffect(() => {
+    const container = imageContainerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      recomputeImageLayout();
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
   }, [recomputeImageLayout]);
 
   useEffect(() => {
@@ -730,14 +797,70 @@ const RealtimePage = () => {
     setSelectedOverlayRoiId(null);
     setSelectedOverlayRoiSrc(null);
     setSelectedOverlayRoiMeta(null);
+    setSelectedOverlayPreviewOpen(false);
     setManualLabelError(null);
     setManualLabelMessage(null);
     setManualRoiError(null);
   }, [status?.tif_name]);
 
   useEffect(() => {
+    if (!selectedOverlayPreviewOpen || floatingPreviewEmbedded) return;
+    const previewHeight = floatingPreviewRef.current?.getBoundingClientRect().height ?? floatingPreviewWidth;
+    const maxLeft = Math.max(floatingPreviewMargin, viewportSize.width - floatingPreviewWidth - floatingPreviewMargin);
+    const maxTop = Math.max(12, viewportSize.height - previewHeight - floatingPreviewMargin);
+    setFloatingPreviewPosition((prev) => {
+      const next = prev ?? getDefaultFloatingPreviewPosition();
+      return {
+        left: Math.min(Math.max(next.left, floatingPreviewMargin), maxLeft),
+        top: Math.min(Math.max(next.top, 12), maxTop),
+      };
+    });
+  }, [
+    floatingPreviewMargin,
+    floatingPreviewWidth,
+    floatingPreviewEmbedded,
+    getDefaultFloatingPreviewPosition,
+    selectedOverlayPreviewOpen,
+    viewportSize.height,
+    viewportSize.width,
+  ]);
+
+  useEffect(() => {
+    if (!floatingPreviewDragging && !floatingPreviewResizing) return;
+    const handlePointerMove = (event: PointerEvent) => {
+      const resizeState = floatingPreviewResizeStateRef.current;
+      if (resizeState) {
+        const nextWidth = clampFloatingPreviewWidth(viewportSize.width, resizeState.startWidth + (event.clientX - resizeState.startX));
+        setFloatingPreviewWidth(nextWidth);
+        return;
+      }
+      const dragState = floatingPreviewDragStateRef.current;
+      if (!dragState) return;
+      const margin = floatingPreviewMargin;
+      const maxLeft = Math.max(margin, viewportSize.width - dragState.width - margin);
+      const maxTop = Math.max(12, viewportSize.height - dragState.height - margin);
+      const nextLeft = Math.min(Math.max(event.clientX - dragState.offsetX, margin), maxLeft);
+      const nextTop = Math.min(Math.max(event.clientY - dragState.offsetY, 12), maxTop);
+      setFloatingPreviewPosition({ left: nextLeft, top: nextTop });
+    };
+    const handlePointerUp = () => {
+      floatingPreviewDragStateRef.current = null;
+      floatingPreviewResizeStateRef.current = null;
+      setFloatingPreviewDragging(false);
+      setFloatingPreviewResizing(false);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [floatingPreviewDragging, floatingPreviewMargin, floatingPreviewResizing, viewportSize.height, viewportSize.width]);
+
+  useEffect(() => {
     if (!status) {
       setRenderedTifSrc(null);
+      setRenderingTif(false);
       return;
     }
     const rawSrc = status.tif_png_url || status.tif_url;
@@ -954,6 +1077,43 @@ const RealtimePage = () => {
     projectWatchPath,
   ]);
 
+  const handleDownloadMacWatchScript = useCallback(async () => {
+    if (!activeProject) {
+      setProjectSetupError(labels.projectSelectFirst);
+      return;
+    }
+    if (!projectWatchPath.trim()) {
+      setProjectSetupError(labels.watchMissingPathError);
+      return;
+    }
+    setProjectSetupPending(true);
+    setProjectSetupError(null);
+    setProjectSetupMessage(null);
+    try {
+      await saveRealtimeWatchProject(activeProject, {
+        watch_path: projectWatchPath.trim(),
+        api_url: null,
+        enabled: true,
+        poll_interval_seconds: 1,
+      });
+      const script = await getRealtimeWatchMacCommandScript(activeProject);
+      downloadTextFile(buildRealtimeWatchMacCommandFileName(activeProject), script, false);
+      setProjectSetupMessage(labels.watchMacCommandDownloaded);
+    } catch (err) {
+      setProjectSetupError(err instanceof Error ? err.message : labels.watchCreateFailed);
+    } finally {
+      setProjectSetupPending(false);
+    }
+  }, [
+    activeProject,
+    downloadTextFile,
+    labels.projectSelectFirst,
+    labels.watchCreateFailed,
+    labels.watchMacCommandDownloaded,
+    labels.watchMissingPathError,
+    projectWatchPath,
+  ]);
+
   const handleUseCurrent = useCallback(async () => {
     if (!status) return;
     if (!activeProject) {
@@ -1092,6 +1252,55 @@ const RealtimePage = () => {
     }
   }, [discardingCurrent, fetchStatus, labels.discardDone, labels.discardDoneLast, labels.discardFailed, status]);
 
+  const handleSelectOverlayRoi = useCallback((roiId: number) => {
+    setSelectedOverlayRoiId(roiId);
+    setSelectedOverlayPreviewOpen(true);
+  }, []);
+
+  const handleFloatingPreviewPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || floatingPreviewEmbedded) return;
+    const card = floatingPreviewRef.current;
+    if (!card) return;
+    const rect = card.getBoundingClientRect();
+    floatingPreviewDragStateRef.current = {
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+    setFloatingPreviewDragging(true);
+  }, [floatingPreviewEmbedded]);
+
+  const handleFloatingPreviewResizePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    floatingPreviewResizeStateRef.current = {
+      startX: event.clientX,
+      startWidth: floatingPreviewRef.current?.getBoundingClientRect().width ?? floatingPreviewWidth,
+    };
+    setFloatingPreviewResizing(true);
+  }, [floatingPreviewWidth]);
+
+  const handleToggleFloatingPreviewEmbed = useCallback(() => {
+    const card = floatingPreviewRef.current;
+    if (!card) {
+      setFloatingPreviewEmbedded((prev) => !prev);
+      return;
+    }
+    const rect = card.getBoundingClientRect();
+    if (floatingPreviewEmbedded) {
+      setFloatingPreviewPosition({ left: rect.left, top: rect.top });
+      setFloatingPreviewEmbedded(false);
+      return;
+    }
+    setFloatingPreviewPosition({
+      left: rect.left + window.scrollX,
+      top: rect.top + window.scrollY,
+    });
+    setFloatingPreviewEmbedded(true);
+  }, [floatingPreviewEmbedded]);
+
   const handleImageClickForManualRoi = useCallback(
     async (event: React.MouseEvent<HTMLDivElement>) => {
       if (!manualRoiMode || !status?.db_name || !imageLayout || manualRoiSaving) return;
@@ -1135,7 +1344,7 @@ const RealtimePage = () => {
         }
         const nextRoi = payload as RealtimeROI;
         setStatus((prev) => (prev ? { ...prev, rois: [...(prev.rois ?? []), nextRoi] } : prev));
-        setSelectedOverlayRoiId(nextRoi.roi_id);
+        handleSelectOverlayRoi(nextRoi.roi_id);
         setManualLabelMessage(labels.manualRoiAdded);
       } catch (err) {
         setManualRoiError(err instanceof Error ? err.message : labels.manualRoiAddFailed);
@@ -1149,6 +1358,7 @@ const RealtimePage = () => {
       imageNaturalSize?.width,
       labels.manualRoiAddFailed,
       labels.manualRoiAdded,
+      handleSelectOverlayRoi,
       manualRoiMode,
       manualRoiSaving,
       status,
@@ -1425,15 +1635,24 @@ const RealtimePage = () => {
                 <Typography variant="body2" color="text.secondary">
                   {labels.watchCommandReadyHint}
                 </Typography>
-                <Button
-                  variant="outlined"
-                  startIcon={<DownloadIcon />}
-                  onClick={() => void handleDownloadWatchScript()}
-                  disabled={projectSetupPending || !projectWatchPath.trim()}
-                  sx={{ alignSelf: "flex-start" }}
-                >
-                  {projectSetupPending ? labels.saveInProgress : labels.watchCreateAndCopy}
-                </Button>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ alignSelf: "flex-start" }}>
+                  <Button
+                    variant="outlined"
+                    startIcon={<DownloadIcon />}
+                    onClick={() => void handleDownloadWatchScript()}
+                    disabled={projectSetupPending || !projectWatchPath.trim()}
+                  >
+                    {projectSetupPending ? labels.saveInProgress : labels.watchCreateWindows}
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    startIcon={<DownloadIcon />}
+                    onClick={() => void handleDownloadMacWatchScript()}
+                    disabled={projectSetupPending || !projectWatchPath.trim()}
+                  >
+                    {projectSetupPending ? labels.saveInProgress : labels.watchCreateMac}
+                  </Button>
+                </Stack>
               </Stack>
             )}
           </CardContent>
@@ -1443,7 +1662,7 @@ const RealtimePage = () => {
           <Box display="flex" justifyContent="center" py={6}>
             <CircularProgress />
           </Box>
-        ) : status ? (
+        ) : (
           <Stack spacing={3}>
             <Card variant="outlined">
               <CardContent>
@@ -1541,26 +1760,56 @@ const RealtimePage = () => {
                         flex: 1,
                         position: "relative",
                         width: "100%",
-                        minHeight: { xs: 340, md: 460 },
+                        maxWidth: { xs: "100%", md: 1080, lg: 1140 },
+                        minHeight: { xs: 420, md: 630, lg: 705 },
                         backgroundColor: (theme) =>
                           theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
                         overflow: "hidden",
                         cursor: manualRoiMode ? "crosshair" : "default",
                       }}
                     >
-                      <Box
-                        component="img"
-                        src={renderedTifSrc || status.tif_png_url || status.tif_url}
-                        alt={status.tif_name}
-                        onLoad={handleImageLoad}
-                        sx={{
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "contain",
-                          display: "block",
-                        }}
-                      />
-                      {deepVisionOverlayEnabled && imageLayout && (status.rois?.length ?? 0) > 0 && (
+                      {status ? (
+                        <Box
+                          sx={{
+                            position: "absolute",
+                            inset: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            pointerEvents: "none",
+                          }}
+                        >
+                          <Box
+                            component="img"
+                            src={renderedTifSrc || status.tif_png_url || status.tif_url}
+                            alt={status.tif_name}
+                            onLoad={handleImageLoad}
+                            sx={{
+                              maxWidth: "100%",
+                              maxHeight: "100%",
+                              width: "auto",
+                              height: "auto",
+                              display: "block",
+                            }}
+                          />
+                        </Box>
+                      ) : (
+                        <Box
+                          sx={{
+                            position: "absolute",
+                            inset: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            px: 3,
+                          }}
+                        >
+                          <Typography variant="body2" color="text.secondary" textAlign="center">
+                            {labels.noRealtime}
+                          </Typography>
+                        </Box>
+                      )}
+                      {status && deepVisionOverlayEnabled && imageLayout && (status.rois?.length ?? 0) > 0 && (
                         <Box
                           sx={{
                             position: "absolute",
@@ -1605,22 +1854,12 @@ const RealtimePage = () => {
                                   overflow: "hidden",
                                   cursor: "pointer",
                                   boxShadow: isSelected
-                                    ? `0 0 0 2px ${isManualAdded ? "rgba(249,115,22,0.9)" : `${color}`}, 0 0 24px 6px ${isManualAdded ? "rgba(249,115,22,0.35)" : `${color}66`}`
+                                    ? `0 0 24px 6px ${isManualAdded ? "rgba(249,115,22,0.35)" : `${color}66`}`
                                     : "0 0 0 0.5px rgba(15,23,42,0.06)",
                                   transition: "box-shadow 160ms ease, background-color 160ms ease, transform 160ms ease, opacity 120ms ease",
                                   "&:hover": {
-                                    boxShadow: `0 0 0 1.4px ${color}9a, 0 0 0 7px ${color}16`,
+                                    boxShadow: `0 0 18px 4px ${color}33`,
                                     backgroundColor: `${color}16`,
-                                  },
-                                  "&::before": {
-                                    content: '""',
-                                    position: "absolute",
-                                    inset: 0,
-                                    borderRadius: "inherit",
-                                    border: `1.5px ${isManualAdded ? "dashed" : "solid"} ${color}`,
-                                    clipPath: "inset(65% 65% 65% 65%)",
-                                    opacity: 0,
-                                    animation: `${drawFrame} 0.6s cubic-bezier(0.18, 0.72, 0.25, 1) ${delay}s forwards`,
                                   },
                                   "&::after": {
                                     content: '""',
@@ -1635,7 +1874,7 @@ const RealtimePage = () => {
                                 }}
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  setSelectedOverlayRoiId(roi.roi_id);
+                                  handleSelectOverlayRoi(roi.roi_id);
                                 }}
                               >
                                 <Box
@@ -1657,7 +1896,7 @@ const RealtimePage = () => {
                           })}
                         </Box>
                       )}
-                      {renderingTif && (
+                      {status && renderingTif && (
                         <Box
                           sx={{
                             position: "absolute",
@@ -1697,19 +1936,19 @@ const RealtimePage = () => {
                           {labels.latestTiff}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
-                          {status.tif_name}
+                          {status?.tif_name ?? "-"}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
                           {labels.projectName}: {activeProject || "-"}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
-                          {labels.savedAt}: {new Date(status.saved_at).toLocaleString()}
+                          {labels.savedAt}: {status ? new Date(status.saved_at).toLocaleString() : "-"}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
-                          {labels.size}: {formatBytes(status.size_bytes)}
+                          {labels.size}: {status ? formatBytes(status.size_bytes) : "-"}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
-                          {labels.waitingCount}: {status.pending_count ?? 0}
+                          {labels.waitingCount}: {status?.pending_count ?? 0}
                         </Typography>
                         <TextField
                           label={labels.sampleName}
@@ -1743,7 +1982,21 @@ const RealtimePage = () => {
                             },
                           }}
                         />
-                        {stackMode ? <Typography variant="caption" color="text.secondary">{labels.stackModeHint}</Typography> : null}
+                        <Box
+                          sx={{
+                            minHeight: { xs: 38, sm: 32 },
+                            display: "flex",
+                            alignItems: "flex-start",
+                          }}
+                        >
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ visibility: stackMode ? "visible" : "hidden" }}
+                          >
+                            {labels.stackModeHint}
+                          </Typography>
+                        </Box>
                         <Button
                           variant="contained"
                           onClick={handleUseCurrent}
@@ -1814,11 +2067,21 @@ const RealtimePage = () => {
                           label={labels.manualRoiMode}
                           sx={{ m: 0 }}
                         />
-                        {manualRoiMode && (
-                          <Typography variant="caption" color="text.secondary">
+                        <Box
+                          sx={{
+                            minHeight: 18,
+                            display: "flex",
+                            alignItems: "flex-start",
+                          }}
+                        >
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ visibility: manualRoiMode ? "visible" : "hidden" }}
+                          >
                             {labels.manualRoiHint}
                           </Typography>
-                        )}
+                        </Box>
                         <Button
                           variant="outlined"
                           size="small"
@@ -1885,88 +2148,19 @@ const RealtimePage = () => {
                         )}
                       </Stack>
                     </Box>
-                    <Box
-                      sx={{
-                        flex: 1,
-                        border: "1px dashed rgba(15,23,42,0.15)",
-                        borderRadius: 1,
-                        p: 1,
-                        backgroundColor: "rgba(15,23,42,0.02)",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 0.5,
-                      }}
-                    >
-                      <Box sx={{ mt: "auto" }}>
-                        <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" mb={0.5}>
-                          <Typography variant="subtitle2" fontWeight={500}>
-                            {labels.selectedRoi}
-                          </Typography>
-                          {selectedOverlayRoiMeta ? (
-                            <Stack direction="row" spacing={1} alignItems="center">
-                              <Box
-                                sx={{
-                                  width: 10,
-                                  height: 10,
-                                  borderRadius: "50%",
-                                  bgcolor: selectedRoiColor ?? "rgba(148,163,184,0.6)",
-                                }}
-                              />
-                              <Box>
-                                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
-                                  Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
-                                  {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}) / {labels.confidence}(AI):{" "}
-                                  {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
-                                </Typography>
-                                {frameLabelMode === "manual" && selectedOverlayLabelInfo?.source === "ai" && (
-                                  <Typography variant="caption" color="text.secondary">
-                                    {labels.manualFallbackWarning}
-                                  </Typography>
-                                )}
-                              </Box>
-                            </Stack>
-                          ) : (
-                            <Typography variant="body2" color="text.secondary">
-                              {labels.noRoiSelected}
-                            </Typography>
-                          )}
-                        </Stack>
-                        {selectedOverlayRoiSrc ? (
-                          <Box
-                            component="img"
-                            src={selectedOverlayRoiSrc}
-                            alt="Selected ROI"
-                            sx={{
-                              width: "100%",
-                              maxWidth: 260,
-                              borderRadius: 1,
-                              border: `3px solid ${selectedRoiColor ?? "rgba(15,23,42,0.12)"}`,
-                              backgroundColor: (theme) =>
-                                theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
-                              display: "block",
-                              marginLeft: "auto",
-                              marginRight: "auto",
-                            }}
-                          />
-                        ) : (
-                          <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ py: 1.25 }}>
-                            {labels.noRoiSelected}
-                          </Typography>
-                        )}
-                      </Box>
-                    </Box>
                   </Stack>
                 </Stack>
               </CardContent>
             </Card>
 
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" },
-                gap: 2,
-              }}
-            >
+            {status ? (
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" },
+                  gap: 2,
+                }}
+              >
               <Card variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, gridColumn: { xs: "1", lg: "1 / span 2" } }}>
                 <Stack spacing={0.5}>
                   <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "flex-start", sm: "center" }} spacing={1} justifyContent="space-between">
@@ -2095,7 +2289,7 @@ const RealtimePage = () => {
                               onDragEnd={handleRoiDragEnd}
                               onClick={(event) => {
                                 event.stopPropagation();
-                                setSelectedOverlayRoiId(roi.roi_id);
+                                handleSelectOverlayRoi(roi.roi_id);
                               }}
                             >
                               <Box
@@ -2117,10 +2311,9 @@ const RealtimePage = () => {
                   </Card>
                 );
               })}
-            </Box>
+              </Box>
+            ) : null}
           </Stack>
-        ) : (
-          <Alert severity="info">{labels.noRealtime}</Alert>
         )}
         <Dialog open={discardConfirmOpen} onClose={() => !discardingCurrent && setDiscardConfirmOpen(false)} maxWidth="xs" fullWidth>
           <DialogTitle>{labels.discardConfirmTitle}</DialogTitle>
@@ -2138,6 +2331,155 @@ const RealtimePage = () => {
         </Dialog>
       </Stack>
       </Container>
+      {selectedOverlayPreviewOpen && selectedOverlayRoiMeta && (
+        <Card
+          ref={floatingPreviewRef}
+          elevation={10}
+          sx={{
+            position: floatingPreviewEmbedded ? "absolute" : "fixed",
+            top: floatingPreviewPosition?.top ?? getDefaultFloatingPreviewPosition().top,
+            left: floatingPreviewPosition?.left ?? getDefaultFloatingPreviewPosition().left,
+            width: floatingPreviewWidth,
+            zIndex: (theme) => theme.zIndex.appBar - 1,
+            borderRadius: 2,
+            border: "1px solid rgba(148,163,184,0.32)",
+            overflow: "hidden",
+            boxShadow: "0 18px 36px rgba(15,23,42,0.18)",
+            backgroundColor: (theme) => theme.palette.background.paper,
+          }}
+        >
+          <IconButton
+            size="small"
+            aria-label="Close selected ROI preview"
+            onClick={() => setSelectedOverlayPreviewOpen(false)}
+            sx={{
+              position: "absolute",
+              top: 8,
+              right: 8,
+              zIndex: 2,
+              minWidth: 0,
+              width: 18,
+              height: 18,
+              p: 0,
+              color: "rgba(248,250,252,0.92)",
+              bgcolor: "transparent",
+              border: "none",
+              boxShadow: "none",
+              "&:hover": { bgcolor: "transparent", color: "white" },
+            }}
+          >
+            <CloseIcon fontSize="small" />
+          </IconButton>
+          <Stack spacing={1.1} sx={{ p: 1.5 }}>
+            <Box
+              onPointerDown={handleFloatingPreviewPointerDown}
+              sx={{
+                pt: 0.25,
+                pr: 3,
+                minHeight: 74,
+                display: "grid",
+                gridTemplateRows: "auto auto auto",
+                alignContent: "start",
+                cursor: floatingPreviewEmbedded ? "default" : floatingPreviewDragging ? "grabbing" : "grab",
+                userSelect: "none",
+              }}
+            >
+              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 0.4, pr: 1.5 }}>
+                <Typography variant="subtitle2" fontWeight={600}>
+                  {labels.selectedRoi}
+                </Typography>
+                <Button
+                  size="small"
+                  variant={floatingPreviewEmbedded ? "contained" : "outlined"}
+                  onClick={handleToggleFloatingPreviewEmbed}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  sx={{ minWidth: 0, px: 1, py: 0.2, fontSize: 11, lineHeight: 1.4, whiteSpace: "nowrap" }}
+                >
+                  {floatingPreviewEmbedded ? labels.previewRelease : labels.previewEmbed}
+                </Button>
+              </Stack>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", lineHeight: 1.45, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+              >
+                Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
+                {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}) / {labels.confidence}(AI):{" "}
+                {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{
+                  display: "block",
+                  mt: 0.45,
+                  lineHeight: 1.45,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  minHeight: 18,
+                  visibility: frameLabelMode === "manual" && selectedOverlayLabelInfo?.source === "ai" ? "visible" : "hidden",
+                }}
+              >
+                {labels.manualFallbackWarning}
+              </Typography>
+            </Box>
+            <Box
+              sx={{
+                width: "100%",
+                aspectRatio: "1 / 1",
+                borderRadius: 1.5,
+                border: `2px solid ${selectedRoiColor ?? "rgba(148,163,184,0.6)"}`,
+                backgroundColor: (theme) =>
+                  theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
+                overflow: "hidden",
+                display: "block",
+              }}
+            >
+              {selectedOverlayRoiSrc ? (
+                <Box
+                  component="img"
+                  src={selectedOverlayRoiSrc}
+                  alt="Selected ROI"
+                  sx={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    display: "block",
+                  }}
+                />
+              ) : (
+                <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ px: 2 }}>
+                  {labels.noRoiSelected}
+                </Typography>
+              )}
+            </Box>
+          </Stack>
+          <Box
+            onPointerDown={handleFloatingPreviewResizePointerDown}
+            sx={{
+              position: "absolute",
+              right: 7,
+              bottom: 7,
+              width: 16,
+              height: 16,
+              cursor: "nwse-resize",
+              zIndex: 2,
+              "&::before": {
+                content: '""',
+                position: "absolute",
+                right: 1,
+                bottom: 1,
+                width: 11,
+                height: 11,
+                borderRight: "2px solid rgba(148,163,184,0.9)",
+                borderBottom: "2px solid rgba(148,163,184,0.9)",
+                borderBottomRightRadius: 1,
+              },
+            }}
+          />
+        </Card>
+      )}
     </ThemeProvider>
   );
 };

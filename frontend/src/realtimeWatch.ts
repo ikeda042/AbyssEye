@@ -108,10 +108,33 @@ export const getRealtimeWatchPowerShellScript = async (projectName: string): Pro
   return script;
 };
 
+export const buildRealtimeWatchMacCommandUrl = (projectName: string): string =>
+  endpoint(`realtime/watch-projects/${encodeURIComponent(projectName)}/macos-command`);
+
+export const getRealtimeWatchMacCommandScript = async (projectName: string): Promise<string> => {
+  const response = await fetch(buildRealtimeWatchMacCommandUrl(projectName), {
+    headers: { Accept: "text/plain" },
+    cache: "no-store",
+  });
+  const script = await response.text();
+  if (!response.ok || !script.trim()) {
+    throw new Error(script || "Failed to load realtime watcher macOS command script.");
+  }
+  return script;
+};
+
 export const buildRealtimeWatchPowerShellFileName = (projectName: string): string => {
   const base = (projectName || "")
     .trim()
     .replace(/[^a-zA-Z0-9._-]+/g, "_")
     .replace(/^_+|_+$/g, "");
   return `${base || "realtime-watcher"}-watcher.ps1`;
+};
+
+export const buildRealtimeWatchMacCommandFileName = (projectName: string): string => {
+  const base = (projectName || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `${base || "realtime-watcher"}-watcher.command`;
 };

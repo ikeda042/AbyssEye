@@ -14,6 +14,7 @@ from .dev.router import router as dev_router
 from .inference.router import router as inference_router
 from .realtime.router import router as realtime_router
 from .realtime import watch_projects as realtime_watch_projects
+from .retraining.router import router as retraining_router
 from .roi_extract.router import router as roi_router
 from .tiff_manager.router import router as tiff_router
 from .tiff_manager_buld.router import router as tiff_bulk_router
@@ -61,6 +62,7 @@ app.include_router(roi_router, prefix=API_PREFIX)
 app.include_router(databases_router, prefix=API_PREFIX)
 app.include_router(inference_router, prefix=API_PREFIX)
 app.include_router(realtime_router, prefix=API_PREFIX)
+app.include_router(retraining_router, prefix=API_PREFIX)
 app.include_router(deepscan_router, prefix=API_PREFIX)
 app.include_router(dev_router, prefix=API_PREFIX)
 

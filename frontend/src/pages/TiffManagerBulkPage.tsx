@@ -36,6 +36,7 @@ import AutoGraphIcon from "@mui/icons-material/AutoGraph";
 
 import { API_BASE_URL } from "../config";
 import { type Language, useI18n } from "../i18n";
+import { deleteRealtimeWatchProject } from "../realtimeWatch";
 import { buildDataTableSx, ELLIPSIS_TEXT_SX, PAGE_CONTAINER_SX, TABLE_CONTAINER_SX } from "../ui/layout";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
@@ -394,7 +395,20 @@ const TiffManagerBulkPage = () => {
     setInfo(null);
   };
 
-  const createProject = () => {
+  const purgeProjectArtifacts = useCallback(async (projectName: string) => {
+    const response = await fetch(endpoint(`tiff-bulk/projects/${encodeURIComponent(projectName)}`), {
+      method: "DELETE",
+    });
+    const payload: { deleted_project?: string; detail?: string } = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.deleted_project) {
+      throw new Error(payload.detail || t("projects.deleteError"));
+    }
+    await deleteRealtimeWatchProject(projectName).catch(() => {
+      // Watch settings cleanup is best-effort here.
+    });
+  }, [t]);
+
+  const createProject = async () => {
     const name = normalizeProjectName(projectName);
     if (!name) {
       setError(t("projects.createError"));
@@ -404,13 +418,20 @@ const TiffManagerBulkPage = () => {
       setError(t("projects.alreadyExists"));
       return;
     }
-    const next = [...projects, { name, createdAt: Date.now() }];
-    syncProjects(next);
-    setProjectName("");
-    setProjectSearch("");
-    setError(null);
-    setInfo(t("projects.created", { name }));
-    handleOpenProject(name);
+    try {
+      await purgeProjectArtifacts(name);
+      const next = [...projects, { name, createdAt: Date.now() }];
+      syncProjects(next);
+      setProjectName("");
+      setProjectSearch("");
+      setFolders([]);
+      setResult(null);
+      setError(null);
+      setInfo(t("projects.created", { name }));
+      handleOpenProject(name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("projects.createError"));
+    }
   };
 
   const handleDeleteProject = useCallback(
@@ -437,6 +458,9 @@ const TiffManagerBulkPage = () => {
         }
 
         const target = payload.deleted_project;
+        await deleteRealtimeWatchProject(target).catch(() => {
+          // Realtime watcher settings are best-effort to delete.
+        });
         const nextProjects = projects.filter((project) => project.name !== target);
         syncProjects(nextProjects);
         setInfo(t("projects.deleteSuccess", { name: target }));
@@ -954,7 +978,7 @@ const TiffManagerBulkPage = () => {
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     event.preventDefault();
-                    createProject();
+                    void createProject();
                   }
                 }}
                 InputProps={{
@@ -969,7 +993,7 @@ const TiffManagerBulkPage = () => {
               <Button
                 variant="contained"
                 startIcon={<AddCircleOutlineIcon />}
-                onClick={createProject}
+                onClick={() => void createProject()}
                 disabled={!normalizeProjectName(projectName)}
               >
                 {tt("プロジェクトを保存", "Save project")}

@@ -4,6 +4,7 @@ import { Breadcrumbs, Paper, Typography, useTheme } from "@mui/material";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import Inventory2Icon from "@mui/icons-material/Inventory2";
 import ApiIcon from "@mui/icons-material/Api";
+import AutoGraphIcon from "@mui/icons-material/AutoGraph";
 import { API_BASE_URL } from "./config";
 import { useI18n } from "./i18n";
 import PageShell from "./ui/PageShell";
@@ -11,8 +12,6 @@ import EntryCardGrid from "./ui/EntryCardGrid";
 import { APP_TEXT_VARIANTS, PAGE_BREADCRUMBS_SX } from "./ui/layout";
 
 const HEALTHCHECK_URL = API_BASE_URL;
-const SWAGGER_DOCS_URL = new URL("docs", API_BASE_URL).toString();
-
 const TopPage = () => {
   const navigate = useNavigate();
   const { t, language } = useI18n();
@@ -44,12 +43,22 @@ const TopPage = () => {
         icon: <ModelTrainingIcon />,
       },
       {
+        title: tt("再学習", "Retraining"),
+        description: tt(
+          "再学習に使うプロジェクトを選ぶか、保存済みデータをアップロードして学習用データソースを準備します。",
+          "Choose a project for retraining or upload saved data to prepare the training data source.",
+        ),
+        path: "/retraining",
+        accent,
+        icon: <AutoGraphIcon />,
+      },
+      {
         title: "Swagger",
         description: tt(
           "バックエンドAPIの一覧を確認し、その場で各APIを実行できます。",
           "Review the backend API list and execute each endpoint from the docs page.",
         ),
-        href: SWAGGER_DOCS_URL,
+        path: "/swagger",
         accent,
         icon: <ApiIcon />,
       },

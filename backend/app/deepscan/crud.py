@@ -1321,11 +1321,8 @@ def add_manual_roi(
                     """
                 ).fetchone()
 
-            if template_row is None:
-                raise HTTPException(status_code=400, detail="ROIレコードが存在しないDBには手動ROIを追加できません。")
-
-            processed_w = _safe_int(template_row["image_width_px"], tif_w) if "image_width_px" in columns else tif_w
-            processed_h = _safe_int(template_row["image_height_px"], tif_h) if "image_height_px" in columns else tif_h
+            processed_w = _safe_int(template_row["image_width_px"], tif_w) if template_row is not None and "image_width_px" in columns else tif_w
+            processed_h = _safe_int(template_row["image_height_px"], tif_h) if template_row is not None and "image_height_px" in columns else tif_h
             processed_w = max(8, processed_w)
             processed_h = max(8, processed_h)
 
@@ -1352,11 +1349,12 @@ def add_manual_roi(
             next_roi_id = int(max_row["max_roi_id"] or 0) + 1
             current_count = int(max_row["image_count"] or 0)
             if has_num_rois:
-                next_num_rois = max(current_count + 1, _safe_int(template_row["num_rois"], 0) + 1)
+                template_num_rois = _safe_int(template_row["num_rois"], 0) if template_row is not None else 0
+                next_num_rois = max(current_count + 1, template_num_rois + 1)
             else:
                 next_num_rois = current_count + 1
 
-            raw_meta = template_row["roi_meta"] if "roi_meta" in columns else None
+            raw_meta = template_row["roi_meta"] if template_row is not None and "roi_meta" in columns else None
             meta = _deserialize_roi_meta(raw_meta)
             if not isinstance(meta, dict):
                 meta = {}
@@ -1406,13 +1404,13 @@ def add_manual_roi(
                 insert_values.append(image_relative_path)
             if has_folder_name:
                 insert_columns.append("folder_name")
-                insert_values.append(str(template_row["folder_name"] or ""))
+                insert_values.append(str(template_row["folder_name"] or "") if template_row is not None else "")
             if has_image_stem:
                 insert_columns.append("image_stem")
                 insert_values.append(Path(image_relative_path).stem)
             if has_scale:
                 insert_columns.append("scale")
-                insert_values.append(float(template_row["scale"] if template_row["scale"] is not None else 1.0))
+                insert_values.append(float(template_row["scale"] if template_row is not None and template_row["scale"] is not None else 1.0))
             if has_num_rois:
                 insert_columns.append("num_rois")
                 insert_values.append(int(next_num_rois))

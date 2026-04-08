@@ -11,6 +11,7 @@ router = APIRouter(prefix="/inference", tags=["inference"])
 class ModelInfo(BaseModel):
     name: str = Field(..., description="models/ 配下での表示名")
     relative_path: str = Field(..., description="models/ からの相対パス")
+    absolute_path: str = Field(..., description="使用中の実体パス")
     kind: str = Field(..., description="モデル形式 (saved_model, h5 など)")
     is_active: bool = Field(False, description="現在選択中のモデルかどうか")
 
@@ -59,6 +60,7 @@ def _serialize_model(model: crud.AvailableModel) -> ModelInfo:
     return ModelInfo(
         name=model.name,
         relative_path=model.relative_path,
+        absolute_path=str(model.absolute_path),
         kind=model.kind,
         is_active=model.is_active,
     )

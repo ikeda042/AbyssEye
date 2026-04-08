@@ -76,6 +76,7 @@ export const ENTRY_CARD_SX: SxProps<Theme> = {
       ? "0 10px 30px rgba(15,23,42,0.35)"
       : "0 10px 30px rgba(15,23,42,0.08)",
   height: "100%",
+  minHeight: { xs: 190, md: 206 },
   display: "flex",
   flexDirection: "column",
   width: "100%",

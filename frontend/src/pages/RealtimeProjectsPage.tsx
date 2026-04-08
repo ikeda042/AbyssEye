@@ -36,8 +36,10 @@ import { API_BASE_URL } from "../config";
 import { useI18n } from "../i18n";
 import { buildDataTableSx, ELLIPSIS_TEXT_SX, PAGE_CONTAINER_SX, TABLE_CONTAINER_SX } from "../ui/layout";
 import {
+  buildRealtimeWatchMacCommandFileName,
   buildRealtimeWatchPowerShellFileName,
   deleteRealtimeWatchProject,
+  getRealtimeWatchMacCommandScript,
   getRealtimeWatchPowerShellScript,
   listRealtimeWatchProjects,
   saveRealtimeWatchProject,
@@ -311,13 +313,20 @@ const RealtimeProjectsPage = () => {
       watchCommandTitle: tt("Windows PowerShell スクリプト", "Windows PowerShell script"),
       watchCommandDownload: tt("PowerShell ファイルをダウンロード", "Download PowerShell file"),
       watchCommandDownloaded: tt("PowerShell ファイルをダウンロードしました。", "Downloaded the PowerShell file."),
+      watchMacCommandDownload: tt("macOS 起動ファイルをダウンロード", "Download macOS command file"),
+      watchMacCommandDownloaded: tt("macOS 起動ファイル (.command) をダウンロードしました。", "Downloaded the macOS command file (.command)."),
       watchCommandCopy: tt("PowerShell スクリプトをコピー", "Copy PowerShell script"),
       watchCommandCopied: tt("PowerShell スクリプトをコピーしました。", "Copied the PowerShell script."),
       watchCommandCopyError: tt("PowerShell スクリプトのコピーに失敗しました。", "Failed to copy the PowerShell script."),
       watchCommandDownloadError: tt("PowerShell ファイルのダウンロードに失敗しました。", "Failed to download the PowerShell file."),
+      watchMacCommandDownloadError: tt("macOS 起動ファイルのダウンロードに失敗しました。", "Failed to download the macOS command file."),
       watchCommandRunHint: tt(
         "保存した .ps1 を PowerShell から実行してください。",
         "Run the saved .ps1 from PowerShell.",
+      ),
+      watchMacCommandRunHint: tt(
+        "保存した .command は Terminal で `zsh ./ファイル名.command` のように実行してください。",
+        "Run the saved .command from Terminal, for example with `zsh ./filename.command`.",
       ),
       watchCommandLocalhostHint: tt(
         "このスクリプトに localhost が含まれている場合は、カメラ PC から到達できるバックエンドの IP またはホスト名に置き換えてください。",
@@ -515,9 +524,9 @@ const RealtimeProjectsPage = () => {
     }
   }, []);
 
-  const downloadTextFile = useCallback((filename: string, content: string) => {
-    const bomPrefixed = `\uFEFF${content}`;
-    const blob = new Blob([bomPrefixed], { type: "text/plain;charset=utf-8" });
+  const downloadTextFile = useCallback((filename: string, content: string, includeBom: boolean = true) => {
+    const fileContent = includeBom ? `\uFEFF${content}` : content;
+    const blob = new Blob([fileContent], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -544,6 +553,24 @@ const RealtimeProjectsPage = () => {
     downloadTextFile,
     labels.watchCommandDownloadError,
     labels.watchCommandDownloaded,
+    projectNameParam,
+  ]);
+
+  const handleDownloadMacWatchScript = useCallback(async () => {
+    if (!projectNameParam) return;
+    try {
+      const script = await getRealtimeWatchMacCommandScript(projectNameParam);
+      downloadTextFile(buildRealtimeWatchMacCommandFileName(projectNameParam), script, false);
+      setWatchError(null);
+      setWatchInfo(labels.watchMacCommandDownloaded);
+    } catch {
+      setWatchInfo(null);
+      setWatchError(labels.watchMacCommandDownloadError);
+    }
+  }, [
+    downloadTextFile,
+    labels.watchMacCommandDownloadError,
+    labels.watchMacCommandDownloaded,
     projectNameParam,
   ]);
 
@@ -621,6 +648,16 @@ const RealtimeProjectsPage = () => {
     }
     setCreatingProject(true);
     try {
+      const deleteResponse = await fetch(endpoint(`tiff-bulk/projects/${encodeURIComponent(name)}`), {
+        method: "DELETE",
+      });
+      const deletePayload: { deleted_project?: string; detail?: string } = await deleteResponse.json().catch(() => ({}));
+      if (!deleteResponse.ok || !deletePayload.deleted_project) {
+        throw new Error(deletePayload.detail || t("projects.deleteError"));
+      }
+      await deleteRealtimeWatchProject(name).catch(() => {
+        // Watch settings cleanup is best-effort here.
+      });
       const next = [...projects, { name, createdAt: Date.now() }];
       syncProjects(next);
       const savedWatchProject = await saveRealtimeWatchProject(name, {
@@ -1459,6 +1496,9 @@ const RealtimeProjectsPage = () => {
                 <Typography variant="caption" color="text.secondary">
                   {labels.watchCommandRunHint}
                 </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {labels.watchMacCommandRunHint}
+                </Typography>
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ alignSelf: "flex-start" }}>
                   <Button
                     variant="contained"
@@ -1466,6 +1506,13 @@ const RealtimeProjectsPage = () => {
                     onClick={() => void handleDownloadWatchScript()}
                   >
                     {labels.watchCommandDownload}
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    startIcon={<DownloadIcon />}
+                    onClick={() => void handleDownloadMacWatchScript()}
+                  >
+                    {labels.watchMacCommandDownload}
                   </Button>
                   <Button
                     variant="outlined"

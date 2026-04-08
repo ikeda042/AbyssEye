@@ -11,12 +11,34 @@ cd AbyssEye
 
 ## 2. 開発者の更新を取り込む
 
-すでに clone 済みの利用者が、開発者の新しい commit を取り込むときは次を実行してください。
+すでに clone 済みの利用者が、開発者の新しい commit を取り込む方法は 2 つあります。
+
+### 方法1. ターミナルで更新する
 
 ```bash
 git checkout AbyssEye-Neo
 git pull --ff-only origin AbyssEye-Neo
 ```
+
+### 方法2. Swagger から更新する
+
+`AbyssEye` を起動済みなら、Swagger から `git pull` を実行することもできます。
+
+1. ブラウザで `http://localhost:8000/api/v1/docs` を開く
+2. `POST /api/v1/dev/git/pull` を開く
+3. `Try it out` を押す
+4. 必要なら body を次のように入れる
+
+```json
+{
+  "branch": "AbyssEye-Neo",
+  "remote": "origin"
+}
+```
+
+5. `Execute` を押す
+
+`branch` を省略した場合も、既定では `AbyssEye-Neo` を更新します。
 
 依存関係も更新されている可能性があるので、必要に応じて手動で入れ直してください。
 
@@ -34,7 +56,7 @@ cd frontend
 npm install
 ```
 
-`git pull --ff-only` で止まった場合は、ローカルに未コミット変更や独自の commit がある可能性があります。その場合はいったん変更を退避するか commit してから実行してください。
+`git pull --ff-only` や Swagger の `dev/git/pull` が止まった場合は、ローカルに未コミット変更や独自の commit がある可能性があります。その場合はいったん変更を退避するか commit してから実行してください。
 
 ## 3. 前提
 
