@@ -1,4 +1,4 @@
-# AbyssEye
+# AbyssEye-Neo
 
 ## 1. 新しいAbyssEyeのインストール
 
