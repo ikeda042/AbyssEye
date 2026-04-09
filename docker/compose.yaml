@@ -46,10 +46,12 @@ services:
     volumes:
       - backend-databases:/app/backend/app/databases
       - tiff-storage:/app/backend/app/tiff_manager
+      - bulk-tiff-storage:/app/backend/app/tiff_manager_buld
       - models:/app/models
       - realtime-databases:/app/backend/app/realtime_databases
       - realtime-tiff:/app/backend/app/realtime_tiff
       - realtime-cache:/app/backend/app/realtime_cache
+      - retraining-uploads:/app/backend/app/retraining_uploads
     restart: unless-stopped
 
   frontend:
@@ -75,7 +77,9 @@ networks:
 volumes:
   backend-databases:
   tiff-storage:
+  bulk-tiff-storage:
   models:
   realtime-databases:
   realtime-tiff:
   realtime-cache:
+  retraining-uploads:

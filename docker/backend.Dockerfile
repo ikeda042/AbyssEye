@@ -19,6 +19,6 @@ ENV APP_HOST=0.0.0.0 \
     APP_PORT=3000 \
     APP_RELOAD=false
 
-EXPOSE 8000
+EXPOSE 3000
 
 CMD ["python", "backend/main.py"]
