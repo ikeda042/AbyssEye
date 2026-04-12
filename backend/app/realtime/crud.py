@@ -783,7 +783,7 @@ def _roi_cache_path(tif_path: Path) -> Path:
 
 
 def _invalidate_roi_cache(tif_path: Path) -> None:
-    _roi_cache_path(tif_path).unlink(missing_ok=True)
+    _unlink_file_best_effort(_roi_cache_path(tif_path))
 
 
 def _load_roi_inference_cache(tif_path: Path, db_path: Path) -> dict[int, dict[str, object]] | None:
