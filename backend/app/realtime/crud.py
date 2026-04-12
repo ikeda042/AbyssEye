@@ -436,26 +436,31 @@ def _read_tiff_unchanged(path: Path) -> np.ndarray | None:
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is not None:
         return image
+
+    def _read_with_pil_rgb() -> np.ndarray | None:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                with Image.open(path) as pil_img:
+                    rgb_img = pil_img.convert("RGB")
+                    return np.array(rgb_img)
+        except Exception:
+            return None
+
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             with Image.open(path) as pil_img:
-                pil_img.load()
                 if pil_img.mode in {"I;16", "I;16B", "I;16L", "I", "F"}:
                     return np.array(pil_img)
                 if pil_img.mode in {"L", "P"}:
                     return np.array(pil_img.convert("L"))
                 return cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
     except Exception:
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
-                with Image.open(path) as pil_img:
-                    rgb_img = pil_img.convert("RGB")
-                    rgb_img.load()
-                    return cv2.cvtColor(np.array(rgb_img), cv2.COLOR_RGB2BGR)
-        except Exception:
+        rgb = _read_with_pil_rgb()
+        if rgb is None:
             return None
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
 
 def _read_tiff_color_bgr(path: Path) -> np.ndarray | None:
@@ -470,6 +475,14 @@ def _read_tiff_color_bgr(path: Path) -> np.ndarray | None:
     if fallback.ndim == 3 and fallback.shape[2] >= 3:
         return fallback[:, :, :3]
     return None
+
+
+def _pending_db_placeholder_path(tif_path: Path) -> Path:
+    existing = _find_existing_db(tif_path)
+    if existing is not None:
+        return existing
+    stem = _sanitize_stem(tif_path.stem)
+    return REALTIME_DB_DIR / f"{stem}.db"
 
 
 def _is_dir_writable(path: Path) -> bool:
@@ -1154,6 +1167,21 @@ def _replace_runtime_tif_from_source(src: Path, dest_dir: Path, *, dest_name: st
     return target_path
 
 
+def _is_duplicate_runtime_enqueue_unlocked(tif_name: str, source_size: int | None = None) -> bool:
+    if tif_name != _current_tif_name and tif_name not in _queued_tif_names:
+        return False
+    try:
+        existing_path = _resolve_runtime_tif_path_unlocked(tif_name)
+    except HTTPException:
+        return False
+    if source_size is None:
+        return existing_path.exists()
+    try:
+        return existing_path.stat().st_size == source_size
+    except OSError:
+        return False
+
+
 def _build_pending_realtime_status(
     target_path: Path,
     *,
@@ -1171,7 +1199,7 @@ def _build_pending_realtime_status(
         tif_path=target_path,
         saved_at=saved_at,
         size_bytes=size_bytes,
-        db_path=_expected_realtime_db_path(target_path),
+        db_path=_pending_db_placeholder_path(target_path),
         inference=_mock_inference(target_path.name),
         rois=[],
         focus_profile=None,
@@ -1617,14 +1645,19 @@ async def _finalize_saved_realtime_tif(
     )
     inference = _build_inference_summary(rois, target_path.name)
     try:
-        saved_ts = max(target_path.stat().st_mtime, db_path.stat().st_mtime)
+        target_stat = target_path.stat()
+    except FileNotFoundError:
+        await asyncio.to_thread(_delete_runtime_artifacts, target_path)
+        return target_path
+    try:
+        saved_ts = max(target_stat.st_mtime, db_path.stat().st_mtime)
     except OSError:
-        saved_ts = target_path.stat().st_mtime
+        saved_ts = target_stat.st_mtime
 
     next_status = RealtimeStatus(
         tif_path=target_path,
         saved_at=datetime.fromtimestamp(saved_ts),
-        size_bytes=target_path.stat().st_size,
+        size_bytes=int(target_stat.st_size),
         db_path=db_path,
         inference=inference,
         rois=rois,
@@ -1659,6 +1692,10 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
     data = await upload_file.read()
     if not data:
         raise HTTPException(status_code=400, detail="空のファイルは保存できません。")
+
+    async with _status_lock:
+        if _is_duplicate_runtime_enqueue_unlocked(safe_name, source_size=len(data)):
+            return _resolve_runtime_tif_path_unlocked(safe_name)
 
     async with _status_lock:
         _remove_runtime_name_from_state_unlocked(safe_name)
@@ -1696,6 +1733,14 @@ async def save_realtime_tif_from_path(source_path: Path) -> Path:
 
     safe_name = _sanitize_filename(source_path.name)
     _validate_extension(safe_name)
+    try:
+        source_size = source_path.stat().st_size
+    except OSError:
+        source_size = None
+
+    async with _status_lock:
+        if _is_duplicate_runtime_enqueue_unlocked(safe_name, source_size=source_size):
+            return _resolve_runtime_tif_path_unlocked(safe_name)
 
     async with _status_lock:
         _remove_runtime_name_from_state_unlocked(safe_name)
@@ -1832,9 +1877,11 @@ async def get_latest_status(
                 _status_cache[current_name] = next_status
                 _latest_status = next_status
                 return _attach_queue_meta(next_status, pending_count=len(_queued_tif_names))
-        except HTTPException:
+        except HTTPException as exc:
             if not current_name:
                 raise
+            if exc.status_code == 404 and latest_local is not None and not latest_local.exists():
+                continue
             logger.exception("Realtime TIFF %s could not be loaded; skipping it.", current_name)
             await _skip_realtime_tif(current_name, tif_path=latest_local)
         except Exception:
@@ -1968,11 +2015,13 @@ async def render_tif_as_png_bytes(tif_path: Path, max_edge: int = 1400) -> bytes
         raise HTTPException(status_code=404, detail=f"{tif_path.name} が見つかりませんでした。")
 
     def _task() -> bytes:
-        with Image.open(tif_path) as img:
-            img = img.convert("RGB")
-            img.thumbnail((max_edge, max_edge))
-            buf = BytesIO()
-            img.save(buf, format="PNG")
-            return buf.getvalue()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with Image.open(tif_path) as img:
+                img = img.convert("RGB")
+                img.thumbnail((max_edge, max_edge))
+                buf = BytesIO()
+                img.save(buf, format="PNG")
+                return buf.getvalue()
 
     return await asyncio.to_thread(_task)
