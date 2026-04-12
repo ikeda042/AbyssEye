@@ -680,7 +680,7 @@ const RealtimePage = () => {
   }, []);
 
   const fetchStatus = useCallback(
-    async (options?: { silent?: boolean }) => {
+    async (options?: { silent?: boolean }): Promise<RealtimeStatus | null | undefined> => {
       const silent = Boolean(options?.silent);
       if (!silent) {
         setLoading(true);
@@ -696,7 +696,7 @@ const RealtimePage = () => {
           if (response.status === 404) {
             setStatus(null);
             setError(null);
-            return;
+            return null;
           }
           throw new Error(detail || labels.fetchFailed);
         }
@@ -719,8 +719,10 @@ const RealtimePage = () => {
           setStatus(json);
           setError(null);
         }
+        return json;
       } catch (err) {
         setError(err instanceof Error ? err.message : labels.unexpected);
+        return undefined;
       } finally {
         if (!silent) {
           setLoading(false);
@@ -728,6 +730,25 @@ const RealtimePage = () => {
       }
     },
     [labels.fetchFailed, labels.unexpected],
+  );
+
+  const waitForNextStatus = useCallback(
+    async (currentTifName?: string) => {
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const nextStatus = await fetchStatus({ silent: true });
+        if (nextStatus === null) {
+          return true;
+        }
+        if (nextStatus && (!currentTifName || nextStatus.tif_name !== currentTifName)) {
+          return true;
+        }
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, attempt < 3 ? 250 : 500);
+        });
+      }
+      return false;
+    },
+    [fetchStatus],
   );
 
   useEffect(() => {
@@ -1163,7 +1184,7 @@ const RealtimePage = () => {
         const detail = (await response.json().catch(() => null))?.detail;
         throw new Error(detail || labels.copyFailed);
       }
-      const json = (await response.json()) as { tif_name: string; db_name: string };
+      const json = (await response.json()) as { tif_name: string; db_name: string; consumed_tif_name?: string };
       setUseCurrentMessage(labels.copyDone(json.tif_name, json.db_name));
       if (activeProject) {
         upsertProject(activeProject);
@@ -1192,7 +1213,7 @@ const RealtimePage = () => {
         };
       });
       previousStatusRef.current = null;
-      await fetchStatus({ silent: true });
+      await waitForNextStatus(json.consumed_tif_name);
     } catch (err) {
       if (previousStatusRef.current) {
         setStatus(previousStatusRef.current);
@@ -1207,7 +1228,6 @@ const RealtimePage = () => {
     }
   }, [
     activeProject,
-    fetchStatus,
     labels.copyDone,
     labels.copyFailed,
     labels.projectSelectFirst,
@@ -1217,6 +1237,7 @@ const RealtimePage = () => {
     nextStackFieldName,
     sampleName,
     status,
+    waitForNextStatus,
   ]);
 
   const handleDiscardCurrentRequest = useCallback(() => {
@@ -1243,14 +1264,14 @@ const RealtimePage = () => {
         throw new Error(payload?.detail || labels.discardFailed);
       }
       setUseCurrentMessage(payload?.next_tif_name ? labels.discardDone : labels.discardDoneLast);
-      await fetchStatus({ silent: true });
+      await waitForNextStatus(status.tif_name);
     } catch (err) {
       setUseCurrentError(err instanceof Error ? err.message : labels.discardFailed);
     } finally {
       setDiscardingCurrent(false);
       saveInProgressRef.current = false;
     }
-  }, [discardingCurrent, fetchStatus, labels.discardDone, labels.discardDoneLast, labels.discardFailed, status]);
+  }, [discardingCurrent, labels.discardDone, labels.discardDoneLast, labels.discardFailed, status, waitForNextStatus]);
 
   const handleSelectOverlayRoi = useCallback((roiId: number) => {
     setSelectedOverlayRoiId(roiId);

@@ -17,6 +17,7 @@ from typing import Any, Iterable, Sequence
 
 import cv2
 import numpy as np
+from PIL import Image
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import Column, Float, Integer, LargeBinary, String, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -38,6 +39,35 @@ REALTIME_FOLDER_MODE_SINGLE = "single"
 REALTIME_FOLDER_MODE_STACK = "stack"
 FOLDER_SOURCE_REALTIME = "realtime"
 FOLDER_SOURCE_UPLOAD = "upload"
+
+
+def _read_tiff_unchanged(path: Path) -> np.ndarray | None:
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is not None:
+        return image
+    try:
+        with Image.open(path) as pil_img:
+            if pil_img.mode in {"I;16", "I;16B", "I;16L", "I", "F"}:
+                return np.array(pil_img)
+            if pil_img.mode in {"L", "P"}:
+                return np.array(pil_img.convert("L"))
+            return cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+    except Exception:
+        return None
+
+
+def _read_tiff_color_bgr(path: Path) -> np.ndarray | None:
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is not None:
+        return image
+    fallback = _read_tiff_unchanged(path)
+    if fallback is None:
+        return None
+    if fallback.ndim == 2:
+        return cv2.cvtColor(fallback, cv2.COLOR_GRAY2BGR)
+    if fallback.ndim == 3 and fallback.shape[2] >= 3:
+        return fallback[:, :, :3]
+    return None
 
 Base = declarative_base()
 
@@ -427,7 +457,7 @@ def _merge_focus_stack(tiff_paths: list[Path]) -> tuple[np.ndarray, tuple[int, i
         raise HTTPException(status_code=400, detail="マージ対象画像が見つかりません。")
 
     first_path = tiff_paths[0]
-    first_img = cv2.imread(str(first_path), cv2.IMREAD_UNCHANGED)
+    first_img = _read_tiff_unchanged(first_path)
     if first_img is None:
         raise HTTPException(status_code=400, detail=f"{first_path.name} の読み込みに失敗しました。")
 
@@ -448,7 +478,7 @@ def _merge_focus_stack(tiff_paths: list[Path]) -> tuple[np.ndarray, tuple[int, i
     score_maps: list[np.ndarray] = []
 
     for path in tiff_paths:
-        image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        image = _read_tiff_unchanged(path)
         if image is None:
             continue
 
@@ -1178,7 +1208,7 @@ def _extract_rois_from_tiff(
     disallow_overlap = int(folder_tuning.get("disallow_overlap", roi_profile.get("disallow_overlap", 1))) > 0
     nms_iou_threshold = float(folder_tuning.get("nms_iou_threshold", roi_profile.get("nms_iou_threshold", 0.15)))
 
-    img_bgr = cv2.imread(str(tif_path), cv2.IMREAD_COLOR)
+    img_bgr = _read_tiff_color_bgr(tif_path)
     if img_bgr is None:
         raise HTTPException(status_code=400, detail=f"{tif_path.name} の読み込みに失敗しました。")
 
@@ -2702,7 +2732,7 @@ async def optimize_extraction_params(folder_name: str, project_name: str | None 
             tif_path = folder_path / rel
             if not tif_path.exists():
                 continue
-            img_bgr = cv2.imread(str(tif_path), cv2.IMREAD_COLOR)
+            img_bgr = _read_tiff_color_bgr(tif_path)
             if img_bgr is None:
                 continue
             h, w = img_bgr.shape[:2]

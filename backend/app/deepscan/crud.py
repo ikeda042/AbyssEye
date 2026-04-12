@@ -11,6 +11,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image
 from fastapi import HTTPException
 
 from ..databases import crud as databases_crud
@@ -531,8 +532,37 @@ def _shape_from_meta(meta: object, key: str) -> tuple[int, int] | None:
     return None
 
 
-def _read_shape_from_tif(path: Path) -> tuple[int, int] | None:
+def _read_tiff_unchanged(path: Path) -> np.ndarray | None:
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is not None:
+        return image
+    try:
+        with Image.open(path) as pil_img:
+            if pil_img.mode in {"I;16", "I;16B", "I;16L", "I", "F"}:
+                return np.array(pil_img)
+            if pil_img.mode in {"L", "P"}:
+                return np.array(pil_img.convert("L"))
+            return cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+    except Exception:
+        return None
+
+
+def _read_tiff_color_bgr(path: Path) -> np.ndarray | None:
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is not None:
+        return image
+    fallback = _read_tiff_unchanged(path)
+    if fallback is None:
+        return None
+    if fallback.ndim == 2:
+        return cv2.cvtColor(fallback, cv2.COLOR_GRAY2BGR)
+    if fallback.ndim == 3 and fallback.shape[2] >= 3:
+        return fallback[:, :, :3]
+    return None
+
+
+def _read_shape_from_tif(path: Path) -> tuple[int, int] | None:
+    image = _read_tiff_unchanged(path)
     if image is None:
         return None
     if image.ndim < 2:
@@ -565,7 +595,7 @@ def _minmax(values: list[float]) -> list[float]:
 
 
 def _load_focus_gray(path: Path, max_side: int = 640) -> np.ndarray | None:
-    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    img = _read_tiff_unchanged(path)
     if img is None:
         return None
     if img.ndim == 3:
@@ -1283,7 +1313,7 @@ def add_manual_roi(
     tif_path, _, current_image, _ = _resolve_tif_path(db_path, tif_name=tif_name)
     image_relative_path = current_image.relative_path if current_image else tif_path.name
 
-    img_bgr = cv2.imread(str(tif_path), cv2.IMREAD_COLOR)
+    img_bgr = _read_tiff_color_bgr(tif_path)
     if img_bgr is None:
         raise HTTPException(status_code=400, detail="TIFF画像の読み込みに失敗しました。")
     tif_h, tif_w = img_bgr.shape[:2]

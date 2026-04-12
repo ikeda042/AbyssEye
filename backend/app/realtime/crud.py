@@ -158,7 +158,7 @@ def _minmax(values: list[float]) -> list[float]:
 
 
 def _load_focus_gray(path: Path, max_side: int = 640) -> np.ndarray | None:
-    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    img = _read_tiff_unchanged(path)
     if img is None:
         return None
     if img.ndim == 3:
@@ -420,6 +420,35 @@ def _ensure_storage_dir() -> None:
     REALTIME_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     PRIMARY_TIFF_DIR.mkdir(parents=True, exist_ok=True)
     PRIMARY_DB_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _read_tiff_unchanged(path: Path) -> np.ndarray | None:
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is not None:
+        return image
+    try:
+        with Image.open(path) as pil_img:
+            if pil_img.mode in {"I;16", "I;16B", "I;16L", "I", "F"}:
+                return np.array(pil_img)
+            if pil_img.mode in {"L", "P"}:
+                return np.array(pil_img.convert("L"))
+            return cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+    except Exception:
+        return None
+
+
+def _read_tiff_color_bgr(path: Path) -> np.ndarray | None:
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is not None:
+        return image
+    fallback = _read_tiff_unchanged(path)
+    if fallback is None:
+        return None
+    if fallback.ndim == 2:
+        return cv2.cvtColor(fallback, cv2.COLOR_GRAY2BGR)
+    if fallback.ndim == 3 and fallback.shape[2] >= 3:
+        return fallback[:, :, :3]
+    return None
 
 
 def _is_dir_writable(path: Path) -> bool:
@@ -1143,7 +1172,7 @@ def _create_db_from_tif(tif_path: Path) -> Path:
             raise HTTPException(status_code=500, detail=f"{db_path.name} の削除に失敗しました: {exc}") from exc
 
     try:
-        img_bgr = cv2.imread(str(tif_path), cv2.IMREAD_COLOR)
+        img_bgr = _read_tiff_color_bgr(tif_path)
         if img_bgr is None:
             raise HTTPException(status_code=400, detail="TIFFファイルの読み込みに失敗しました。")
 
@@ -1695,7 +1724,10 @@ async def use_current_realtime_assets(
     async with _status_lock:
         _advance_runtime_queue_unlocked(consumed_name)
     await asyncio.to_thread(_delete_runtime_artifacts, status.tif_path)
-    await _ensure_current_realtime_status_ready()
+    try:
+        await _ensure_current_realtime_status_ready()
+    except Exception:
+        logger.exception("Failed to prepare the next realtime TIFF after saving %s.", consumed_name)
     return tif_path, db_path, consumed_name
 
 
@@ -1706,7 +1738,10 @@ async def discard_current_realtime_asset() -> tuple[str, str | None]:
         _advance_runtime_queue_unlocked(consumed_name)
         next_name = _current_tif_name
     await asyncio.to_thread(_delete_runtime_artifacts, status.tif_path)
-    await _ensure_current_realtime_status_ready()
+    try:
+        await _ensure_current_realtime_status_ready()
+    except Exception:
+        logger.exception("Failed to prepare the next realtime TIFF after discarding %s.", consumed_name)
     return consumed_name, next_name
 
 

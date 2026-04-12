@@ -6,6 +6,8 @@ from pathlib import Path
 from datetime import datetime
 
 import cv2
+import numpy as np
+from PIL import Image
 from fastapi import HTTPException
 
 from ..inference import crud as inference_crud
@@ -15,6 +17,20 @@ APP_DIR = Path(__file__).resolve().parents[1]
 TIFF_STORAGE_DIR = APP_DIR / "tiff_manager"
 DATABASE_DIR = APP_DIR / "databases"
 ALLOWED_EXTENSIONS = {".tif", ".tiff"}
+
+
+def _read_tiff_color_bgr(path: Path) -> np.ndarray | None:
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is not None:
+        return image
+    try:
+        with Image.open(path) as pil_img:
+            rgb = np.array(pil_img.convert("RGB"))
+    except Exception:
+        return None
+    if rgb.ndim != 3 or rgb.shape[2] < 3:
+        return None
+    return cv2.cvtColor(rgb[:, :, :3], cv2.COLOR_RGB2BGR)
 
 
 @dataclass
@@ -77,7 +93,7 @@ async def create_database_from_tif(tif_name: str) -> ROIExtractionResult:
             ) from exc
 
     def _task() -> ROIExtractionResult:
-        img_bgr = cv2.imread(str(tif_path), cv2.IMREAD_COLOR)
+        img_bgr = _read_tiff_color_bgr(tif_path)
         if img_bgr is None:
             raise ValueError("TIFFファイルの読み込みに失敗しました。")
 
