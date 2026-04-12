@@ -101,6 +101,7 @@ _latest_status: Optional[RealtimeStatus] = None
 _latest_status_revision = 0
 _status_lock = asyncio.Lock()
 _pending_finalize_tasks: set[asyncio.Task[None]] = set()
+_pending_finalize_tasks_by_name: dict[str, asyncio.Task[None]] = {}
 _current_tif_name: str | None = None
 _queued_tif_names: list[str] = []
 _status_cache: dict[str, RealtimeStatus] = {}
@@ -979,6 +980,34 @@ def _build_pending_realtime_status(
     )
 
 
+def _status_matches_current_files(
+    status: RealtimeStatus | None,
+    tif_path: Path,
+    *,
+    db_path: Path | None,
+) -> bool:
+    if status is None or status.tif_path != tif_path:
+        return False
+
+    try:
+        tif_stat = tif_path.stat()
+    except OSError:
+        return False
+
+    if status.size_bytes != int(tif_stat.st_size):
+        return False
+
+    if db_path is None:
+        return False
+
+    try:
+        latest_status_ts = max(tif_stat.st_mtime, db_path.stat().st_mtime)
+    except OSError:
+        return False
+
+    return status.saved_at.timestamp() >= latest_status_ts
+
+
 async def _finalize_saved_realtime_tif_background(
     target_path: Path,
     *,
@@ -1009,7 +1038,11 @@ def _schedule_realtime_finalize(
     source_filename: str,
     source_is_uploaded: bool,
     status_revision: int,
-) -> None:
+) -> asyncio.Task[None]:
+    existing = _pending_finalize_tasks_by_name.get(target_path.name)
+    if existing is not None and not existing.done():
+        return existing
+
     task = asyncio.create_task(
         _finalize_saved_realtime_tif_background(
             target_path,
@@ -1019,7 +1052,42 @@ def _schedule_realtime_finalize(
         )
     )
     _pending_finalize_tasks.add(task)
-    task.add_done_callback(_pending_finalize_tasks.discard)
+    _pending_finalize_tasks_by_name[target_path.name] = task
+
+    def _cleanup(done_task: asyncio.Task[None]) -> None:
+        _pending_finalize_tasks.discard(done_task)
+        if _pending_finalize_tasks_by_name.get(target_path.name) is done_task:
+            _pending_finalize_tasks_by_name.pop(target_path.name, None)
+
+    task.add_done_callback(_cleanup)
+    return task
+
+
+async def _ensure_current_realtime_status_ready() -> None:
+    async with _status_lock:
+        _sync_runtime_queue_unlocked()
+        current_name = _current_tif_name
+        if not current_name:
+            return
+
+        tif_path = _resolve_runtime_tif_path_unlocked(current_name)
+        cached_status = _status_cache.get(current_name)
+        existing_db = _find_existing_db(tif_path)
+        if _status_matches_current_files(cached_status, tif_path, db_path=existing_db):
+            return
+
+        finalize_task = _pending_finalize_tasks_by_name.get(current_name)
+        if finalize_task is None or finalize_task.done():
+            source_filename = cached_status.source_filename if cached_status else tif_path.name
+            source_is_uploaded = cached_status.source_is_uploaded if cached_status else False
+            finalize_task = _schedule_realtime_finalize(
+                tif_path,
+                source_filename=source_filename or tif_path.name,
+                source_is_uploaded=source_is_uploaded,
+                status_revision=_latest_status_revision,
+            )
+
+    await finalize_task
 
 
 def _create_db_from_tif(tif_path: Path) -> Path:
@@ -1569,6 +1637,7 @@ async def use_current_realtime_assets(
     async with _status_lock:
         _advance_runtime_queue_unlocked(consumed_name)
     await asyncio.to_thread(_delete_runtime_artifacts, status.tif_path)
+    await _ensure_current_realtime_status_ready()
     return tif_path, db_path, consumed_name
 
 
@@ -1579,6 +1648,7 @@ async def discard_current_realtime_asset() -> tuple[str, str | None]:
         _advance_runtime_queue_unlocked(consumed_name)
         next_name = _current_tif_name
     await asyncio.to_thread(_delete_runtime_artifacts, status.tif_path)
+    await _ensure_current_realtime_status_ready()
     return consumed_name, next_name
 
 

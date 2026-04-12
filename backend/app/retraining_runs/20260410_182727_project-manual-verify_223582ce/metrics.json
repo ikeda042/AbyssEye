@@ -1,0 +1,125 @@
+{
+  "dataset": {
+    "all": {
+      "count": 100,
+      "class_counts": {
+        "0": 25,
+        "1": 25,
+        "2": 25,
+        "3": 25
+      }
+    },
+    "train": {
+      "count": 68,
+      "class_counts": {
+        "0": 17,
+        "1": 17,
+        "2": 17,
+        "3": 17
+      }
+    },
+    "val": {
+      "count": 16,
+      "class_counts": {
+        "0": 4,
+        "1": 4,
+        "2": 4,
+        "3": 4
+      }
+    },
+    "test": {
+      "count": 16,
+      "class_counts": {
+        "0": 4,
+        "1": 4,
+        "2": 4,
+        "3": 4
+      }
+    },
+    "manifests_dir": "/Users/gashu/Desktop/AbyssEye/backend/app/retraining_runs/20260410_182727_project-manual-verify_223582ce/split_manifests"
+  },
+  "training": {
+    "epochs_requested": 1,
+    "epochs_completed": 1,
+    "batch_size": 16,
+    "learning_rate": 0.0001,
+    "best_epoch": 1,
+    "best_metric_name": "val_accuracy",
+    "best_metric_value": 1.0,
+    "history_keys": [
+      "accuracy",
+      "loss",
+      "val_accuracy",
+      "val_loss"
+    ]
+  },
+  "evaluation": {
+    "train": {
+      "loss": 0.19720694422721863,
+      "accuracy": 1.0
+    },
+    "val": {
+      "loss": 0.19131934642791748,
+      "accuracy": 1.0
+    },
+    "test": {
+      "loss": 0.19922445714473724,
+      "accuracy": 1.0
+    }
+  },
+  "comparison": {
+    "baseline": {
+      "train": {
+        "accuracy": 1.0
+      },
+      "val": {
+        "accuracy": 1.0
+      },
+      "test": {
+        "accuracy": 1.0
+      }
+    },
+    "retrained": {
+      "train": {
+        "loss": 0.19720694422721863,
+        "accuracy": 1.0
+      },
+      "val": {
+        "loss": 0.19131934642791748,
+        "accuracy": 1.0
+      },
+      "test": {
+        "loss": 0.19922445714473724,
+        "accuracy": 1.0
+      }
+    },
+    "delta": {
+      "train": {
+        "accuracy": 0.0
+      },
+      "val": {
+        "accuracy": 0.0
+      },
+      "test": {
+        "accuracy": 0.0
+      }
+    },
+    "prediction_changes": {
+      "test": {
+        "count": 0,
+        "ratio": 0.0
+      }
+    }
+  },
+  "artifacts": {
+    "model_relative_path": "retrained/project-manual-verify/model.keras",
+    "model_absolute_path": "/Users/gashu/Desktop/AbyssEye/models/retrained/project-manual-verify/model.keras",
+    "history_csv_path": "/Users/gashu/Desktop/AbyssEye/backend/app/retraining_runs/20260410_182727_project-manual-verify_223582ce/training_history.csv",
+    "confusion_matrix_csv_path": "/Users/gashu/Desktop/AbyssEye/backend/app/retraining_runs/20260410_182727_project-manual-verify_223582ce/confusion_matrix.csv"
+  },
+  "initialization": {
+    "mode": "fine_tune_active_model",
+    "note": "SavedModel checkpoint から重みを読み込み、継続学習を開始しました。",
+    "active_model_path": "/Users/gashu/Desktop/AbyssEye/models/MyResNet18_model_best_four_class"
+  }
+}

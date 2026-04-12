@@ -1,0 +1,155 @@
+{
+  "job_id": "20260410_182908_recheck-activate_999ee72c",
+  "source_name": "CodexRecheckProject",
+  "source_type": "project",
+  "status": "completed",
+  "phase": null,
+  "created_at": "2026-04-10T18:29:08.294638",
+  "started_at": "2026-04-10T18:29:08.295242",
+  "finished_at": "2026-04-10T18:29:17.588184",
+  "run_name": "recheck-activate",
+  "epochs": 1,
+  "batch_size": 16,
+  "learning_rate": 0.0001,
+  "activate_on_complete": true,
+  "active_model_relative_path": "MyResNet18_model_best_four_class",
+  "active_model_absolute_path": "/Users/gashu/Desktop/AbyssEye/models/MyResNet18_model_best_four_class",
+  "labeled_roi_count": 100,
+  "has_training_dataset": true,
+  "output_model_name": "model.keras",
+  "output_model_relative_path": "retrained/recheck-activate/model.keras",
+  "output_model_absolute_path": "/Users/gashu/Desktop/AbyssEye/models/retrained/recheck-activate/model.keras",
+  "activated_model": true,
+  "initialization_mode": "fine_tune_active_model",
+  "initialization_note": "SavedModel checkpoint から重みを読み込み、継続学習を開始しました。",
+  "metrics_json_path": "/Users/gashu/Desktop/AbyssEye/backend/app/retraining_runs/20260410_182908_recheck-activate_999ee72c/metrics.json",
+  "history_csv_path": "/Users/gashu/Desktop/AbyssEye/backend/app/retraining_runs/20260410_182908_recheck-activate_999ee72c/training_history.csv",
+  "confusion_matrix_csv_path": "/Users/gashu/Desktop/AbyssEye/backend/app/retraining_runs/20260410_182908_recheck-activate_999ee72c/confusion_matrix.csv",
+  "run_dir": "/Users/gashu/Desktop/AbyssEye/backend/app/retraining_runs/20260410_182908_recheck-activate_999ee72c",
+  "summary": {
+    "dataset": {
+      "all": {
+        "count": 100,
+        "class_counts": {
+          "0": 25,
+          "1": 25,
+          "2": 25,
+          "3": 25
+        }
+      },
+      "train": {
+        "count": 68,
+        "class_counts": {
+          "0": 17,
+          "1": 17,
+          "2": 17,
+          "3": 17
+        }
+      },
+      "val": {
+        "count": 16,
+        "class_counts": {
+          "0": 4,
+          "1": 4,
+          "2": 4,
+          "3": 4
+        }
+      },
+      "test": {
+        "count": 16,
+        "class_counts": {
+          "0": 4,
+          "1": 4,
+          "2": 4,
+          "3": 4
+        }
+      },
+      "manifests_dir": "/Users/gashu/Desktop/AbyssEye/backend/app/retraining_runs/20260410_182908_recheck-activate_999ee72c/split_manifests"
+    },
+    "training": {
+      "epochs_requested": 1,
+      "epochs_completed": 1,
+      "batch_size": 16,
+      "learning_rate": 0.0001,
+      "best_epoch": 1,
+      "best_metric_name": "val_accuracy",
+      "best_metric_value": 1.0,
+      "history_keys": [
+        "accuracy",
+        "loss",
+        "val_accuracy",
+        "val_loss"
+      ]
+    },
+    "evaluation": {
+      "train": {
+        "loss": 0.19720694422721863,
+        "accuracy": 1.0
+      },
+      "val": {
+        "loss": 0.19131934642791748,
+        "accuracy": 1.0
+      },
+      "test": {
+        "loss": 0.19922445714473724,
+        "accuracy": 1.0
+      }
+    },
+    "comparison": {
+      "baseline": {
+        "train": {
+          "accuracy": 1.0
+        },
+        "val": {
+          "accuracy": 1.0
+        },
+        "test": {
+          "accuracy": 1.0
+        }
+      },
+      "retrained": {
+        "train": {
+          "loss": 0.19720694422721863,
+          "accuracy": 1.0
+        },
+        "val": {
+          "loss": 0.19131934642791748,
+          "accuracy": 1.0
+        },
+        "test": {
+          "loss": 0.19922445714473724,
+          "accuracy": 1.0
+        }
+      },
+      "delta": {
+        "train": {
+          "accuracy": 0.0
+        },
+        "val": {
+          "accuracy": 0.0
+        },
+        "test": {
+          "accuracy": 0.0
+        }
+      },
+      "prediction_changes": {
+        "test": {
+          "count": 0,
+          "ratio": 0.0
+        }
+      }
+    },
+    "artifacts": {
+      "model_relative_path": "retrained/recheck-activate/model.keras",
+      "model_absolute_path": "/Users/gashu/Desktop/AbyssEye/models/retrained/recheck-activate/model.keras",
+      "history_csv_path": "/Users/gashu/Desktop/AbyssEye/backend/app/retraining_runs/20260410_182908_recheck-activate_999ee72c/training_history.csv",
+      "confusion_matrix_csv_path": "/Users/gashu/Desktop/AbyssEye/backend/app/retraining_runs/20260410_182908_recheck-activate_999ee72c/confusion_matrix.csv"
+    },
+    "initialization": {
+      "mode": "fine_tune_active_model",
+      "note": "SavedModel checkpoint から重みを読み込み、継続学習を開始しました。",
+      "active_model_path": "/Users/gashu/Desktop/AbyssEye/models/MyResNet18_model_best_four_class"
+    }
+  },
+  "error": null
+}

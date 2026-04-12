@@ -201,13 +201,33 @@ DeepScan は、単一画像と同じく ROI 抽出と推論が終わるまでは
 
 リアルタイムエンジン画面では、監視フォルダを設定して監視スクリプトをダウンロードできます。
 
+監視フォルダのパス入力は OS によって書き方が異なります。
+
 #### Windows
 
 - `.ps1` をダウンロードして実行します。
+- パスはドライブ名から入力します。
+  例: `C:\Users\YourUserName\Desktop\ABY\watch_folder`
+- `C:` や `D:` のようなドライブ名を先頭に付けてください。
+- 区切りは `\` を使います。
+- 実行例:
+  1. PowerShell を開く
+  2. ダウンロード先へ移動する
+  3. 次を実行する
+     `powershell -ExecutionPolicy Bypass -File .\your-project-watcher.ps1`
 
 #### macOS
 
 - `.command` をダウンロードして実行します。
+- パスは `/Users/...` などの絶対パスで入力します。
+  例: `/Users/yourname/Desktop/ABY/watch_folder`
+- 区切りは `/` を使います。
+- Finder 上の見た目では同じフォルダでも、Windows 形式の `C:\...` は使えません。
+- 実行例:
+  1. Terminal を開く
+  2. ダウンロード先へ移動する
+  3. 次を実行する
+     `zsh ./your-project-watcher.command`
 
 ### 6-3. 基本の流れ
 

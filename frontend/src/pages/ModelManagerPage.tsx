@@ -8,6 +8,10 @@ import {
   Chip,
   CircularProgress,
   Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Link,
   Paper,
   Stack,
@@ -38,6 +42,29 @@ type ModelEntry = {
   is_active: boolean;
 };
 
+type RetrainingHistoryRow = {
+  epoch: number;
+  metrics: Record<string, number | string>;
+};
+
+type RetrainingConfusionMatrix = {
+  headers: string[];
+  rows: Array<{ label: string; values: number[] }>;
+};
+
+type RetrainingModelArtifacts = {
+  job_id: string;
+  run_name: string | null;
+  created_at: string;
+  output_model_relative_path: string;
+  metrics_json_path: string | null;
+  history_csv_path: string | null;
+  confusion_matrix_csv_path: string | null;
+  summary: Record<string, unknown> | null;
+  history_preview: RetrainingHistoryRow[];
+  confusion_matrix: RetrainingConfusionMatrix | null;
+};
+
 type FileWithRelativePath = File & { webkitRelativePath?: string };
 
 const isModelEntry = (value: unknown): value is ModelEntry =>
@@ -48,6 +75,28 @@ const isModelEntry = (value: unknown): value is ModelEntry =>
   typeof (value as Record<string, unknown>).kind === "string" &&
   typeof (value as Record<string, unknown>).is_active === "boolean";
 
+const getNestedRecord = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+
+const formatMetricValue = (value: unknown) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  return `${(value * 100).toFixed(1)}%`;
+};
+
+const formatMetricDelta = (value: unknown) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  const points = value * 100;
+  const sign = points > 0 ? "+" : "";
+  return `${sign}${points.toFixed(1)} pt`;
+};
+
+const formatDateTime = (value: string | null | undefined, language: string) => {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return parsed.toLocaleString(language === "ja" ? "ja-JP" : "en-US", { hour12: false });
+};
+
 const ModelManagerPage = () => {
   const { t, language } = useI18n();
   const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
@@ -55,6 +104,10 @@ const ModelManagerPage = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [isActivating, setIsActivating] = useState(false);
+  const [artifactDialogOpen, setArtifactDialogOpen] = useState(false);
+  const [artifactLoading, setArtifactLoading] = useState(false);
+  const [artifactError, setArtifactError] = useState<string | null>(null);
+  const [artifactInfo, setArtifactInfo] = useState<RetrainingModelArtifacts | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -186,6 +239,42 @@ const ModelManagerPage = () => {
     }
   };
 
+  const handleOpenArtifacts = useCallback(
+    async (relativePath: string) => {
+      setArtifactDialogOpen(true);
+      setArtifactLoading(true);
+      setArtifactError(null);
+      setArtifactInfo(null);
+      try {
+        const response = await fetch(
+          `${endpoint("retraining/models/artifacts")}?relative_path=${encodeURIComponent(relativePath)}`,
+          {
+            headers: { Accept: "application/json" },
+            cache: "no-store",
+          },
+        );
+        const payload: RetrainingModelArtifacts | { detail?: string } | null = await response.json().catch(() => null);
+        if (!response.ok || !payload || !("job_id" in payload)) {
+          const detail = (payload as { detail?: string } | null)?.detail ?? tt("学習情報の取得に失敗しました。", "Failed to load training details.");
+          throw new Error(detail);
+        }
+        setArtifactInfo(payload);
+      } catch (err) {
+        setArtifactError(err instanceof Error ? err.message : tt("学習情報の取得に失敗しました。", "Failed to load training details."));
+      } finally {
+        setArtifactLoading(false);
+      }
+    },
+    [tt],
+  );
+
+  const handleCloseArtifacts = useCallback(() => {
+    setArtifactDialogOpen(false);
+    setArtifactLoading(false);
+    setArtifactError(null);
+    setArtifactInfo(null);
+  }, []);
+
   return (
     <Container
       maxWidth={false}
@@ -316,14 +405,25 @@ const ModelManagerPage = () => {
                         </Typography>
                       </TableCell>
                       <TableCell align="right">
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          disabled={model.is_active || isActivating}
-                          onClick={() => handleSetActive(model.relative_path)}
-                        >
-                          {t("models.activate")}
-                        </Button>
+                        <Stack direction="row" spacing={1} justifyContent="flex-end">
+                          {model.relative_path.startsWith("retrained/") ? (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={() => void handleOpenArtifacts(model.relative_path)}
+                            >
+                              {tt("学習を確認", "View training")}
+                            </Button>
+                          ) : null}
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            disabled={model.is_active || isActivating}
+                            onClick={() => handleSetActive(model.relative_path)}
+                          >
+                            {t("models.activate")}
+                          </Button>
+                        </Stack>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -332,6 +432,172 @@ const ModelManagerPage = () => {
             </TableContainer>
           )}
         </Paper>
+
+        <Dialog
+          open={artifactDialogOpen}
+          onClose={handleCloseArtifacts}
+          fullWidth
+          maxWidth="md"
+        >
+          <DialogTitle>{tt("再学習の確認", "Retraining details")}</DialogTitle>
+          <DialogContent dividers>
+            {artifactLoading ? (
+              <Box display="flex" justifyContent="center" py={4}>
+                <CircularProgress />
+              </Box>
+            ) : artifactError ? (
+              <Alert severity="error">{artifactError}</Alert>
+            ) : artifactInfo ? (
+              <Stack spacing={2}>
+                <Box>
+                  <Typography variant="subtitle1" fontWeight={600}>
+                    {artifactInfo.run_name || artifactInfo.job_id}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {tt("モデル", "Model")}: {artifactInfo.output_model_relative_path}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {tt("作成日時", "Created at")}: {formatDateTime(artifactInfo.created_at, language)}
+                  </Typography>
+                </Box>
+
+                <Paper variant="outlined" sx={{ p: 1.5 }}>
+                  <Stack spacing={0.75}>
+                    <Typography variant="subtitle2" fontWeight={600}>
+                      {tt("学習結果の概要", "Training summary")}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {tt("Test精度 比較", "Test accuracy comparison")}: {(() => {
+                        const comparison = getNestedRecord(getNestedRecord(artifactInfo.summary)?.comparison);
+                        const evaluation = getNestedRecord(getNestedRecord(artifactInfo.summary)?.evaluation);
+                        const baseline = getNestedRecord(getNestedRecord(comparison?.baseline)?.test);
+                        const retrained =
+                          getNestedRecord(getNestedRecord(comparison?.retrained)?.test) ??
+                          getNestedRecord(evaluation?.test);
+                        const delta = getNestedRecord(getNestedRecord(comparison?.delta)?.test);
+                        return `${formatMetricValue(baseline?.accuracy)} -> ${formatMetricValue(retrained?.accuracy)} (${formatMetricDelta(delta?.accuracy)})`;
+                      })()}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {tt("予測変更数", "Prediction changes")}: {(() => {
+                        const comparison = getNestedRecord(getNestedRecord(artifactInfo.summary)?.comparison);
+                        const changes = getNestedRecord(getNestedRecord(comparison?.prediction_changes)?.test);
+                        const count = typeof changes?.count === "number" ? `${changes.count}` : "-";
+                        const ratio = formatMetricValue(changes?.ratio);
+                        return `${count} / ${ratio}`;
+                      })()}
+                    </Typography>
+                  </Stack>
+                </Paper>
+
+                <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "flex-start" }}>
+                  <Paper variant="outlined" sx={{ p: 1.5, flex: 1, minWidth: 0 }}>
+                    <Stack spacing={1}>
+                      <Typography variant="subtitle2" fontWeight={600}>
+                        {tt("Training History", "Training history")}
+                      </Typography>
+                      {artifactInfo.history_preview.length === 0 ? (
+                        <Typography variant="body2" color="text.secondary">
+                          {tt("表示できる履歴はありません。", "No training history available.")}
+                        </Typography>
+                      ) : (
+                        <Table size="small">
+                          <TableHead>
+                            <TableRow>
+                              <TableCell>Epoch</TableCell>
+                              {Object.keys(artifactInfo.history_preview[0]?.metrics ?? {}).map((key) => (
+                                <TableCell key={key} align="right">{key}</TableCell>
+                              ))}
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {artifactInfo.history_preview.map((row) => (
+                              <TableRow key={row.epoch}>
+                                <TableCell>{row.epoch}</TableCell>
+                                {Object.entries(row.metrics).map(([key, value]) => (
+                                  <TableCell key={key} align="right">
+                                    {typeof value === "number" ? value.toFixed(4) : String(value)}
+                                  </TableCell>
+                                ))}
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </Stack>
+                  </Paper>
+
+                  <Paper variant="outlined" sx={{ p: 1.5, width: { xs: "100%", md: 320 } }}>
+                    <Stack spacing={1}>
+                      <Typography variant="subtitle2" fontWeight={600}>
+                        {tt("混同行列", "Confusion matrix")}
+                      </Typography>
+                      {artifactInfo.confusion_matrix ? (
+                        <Table size="small">
+                          <TableHead>
+                            <TableRow>
+                              <TableCell>{tt("真値/予測", "True/Pred")}</TableCell>
+                              {artifactInfo.confusion_matrix.headers.map((header) => (
+                                <TableCell key={header} align="right">{header}</TableCell>
+                              ))}
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {artifactInfo.confusion_matrix.rows.map((row) => (
+                              <TableRow key={row.label}>
+                                <TableCell>{row.label}</TableCell>
+                                {row.values.map((value, index) => (
+                                  <TableCell key={`${row.label}-${index}`} align="right">{value}</TableCell>
+                                ))}
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      ) : (
+                        <Typography variant="body2" color="text.secondary">
+                          {tt("混同行列はありません。", "No confusion matrix available.")}
+                        </Typography>
+                      )}
+                    </Stack>
+                  </Paper>
+                </Stack>
+              </Stack>
+            ) : null}
+          </DialogContent>
+          <DialogActions>
+            {artifactInfo?.metrics_json_path ? (
+              <Button
+                component="a"
+                href={endpoint(`retraining/jobs/${encodeURIComponent(artifactInfo.job_id)}/artifacts/metrics`)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                metrics.json
+              </Button>
+            ) : null}
+            {artifactInfo?.history_csv_path ? (
+              <Button
+                component="a"
+                href={endpoint(`retraining/jobs/${encodeURIComponent(artifactInfo.job_id)}/artifacts/history`)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                training_history.csv
+              </Button>
+            ) : null}
+            {artifactInfo?.confusion_matrix_csv_path ? (
+              <Button
+                component="a"
+                href={endpoint(`retraining/jobs/${encodeURIComponent(artifactInfo.job_id)}/artifacts/confusion`)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                confusion_matrix.csv
+              </Button>
+            ) : null}
+            <Button onClick={handleCloseArtifacts}>{tt("閉じる", "Close")}</Button>
+          </DialogActions>
+        </Dialog>
       </Stack>
     </Container>
   );
