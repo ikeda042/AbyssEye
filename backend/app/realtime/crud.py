@@ -10,6 +10,7 @@ import sqlite3
 import shutil
 import re
 import tempfile
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime
 from io import BytesIO
@@ -906,7 +907,18 @@ def _sync_runtime_queue_unlocked() -> None:
     global _latest_status
 
     _normalize_on_disk_tif_names()
-    disk_paths = _list_runtime_tiff_paths()
+    all_disk_paths = _list_runtime_tiff_paths()
+    all_disk_names = {path.name for path in all_disk_paths}
+    visible_disk_paths: list[Path] = []
+    visible_disk_names: set[str] = set()
+    for path in all_disk_paths:
+        if path.name in _discarded_tif_names:
+            _delete_runtime_artifacts(path)
+            continue
+        visible_disk_paths.append(path)
+        visible_disk_names.add(path.name)
+    _discarded_tif_names.intersection_update(all_disk_names | set(_queued_tif_names) | ({_current_tif_name} if _current_tif_name else set()))
+    disk_paths = visible_disk_paths
     disk_names = [path.name for path in disk_paths]
     disk_name_set = set(disk_names)
 
@@ -967,10 +979,29 @@ def _advance_runtime_queue_unlocked(consumed_tif_name: str) -> None:
 def _delete_runtime_artifacts(tif_path: Path) -> None:
     for directory in _candidate_tiff_dirs():
         candidate = directory / tif_path.name
-        candidate.unlink(missing_ok=True)
+        _unlink_file_best_effort(candidate)
     for candidate in _expected_db_locations(_sanitize_stem(tif_path.stem)):
-        candidate.unlink(missing_ok=True)
-    _roi_cache_path(tif_path).unlink(missing_ok=True)
+        _unlink_file_best_effort(candidate)
+    _unlink_file_best_effort(_roi_cache_path(tif_path))
+
+
+def _unlink_file_best_effort(path: Path, retries: int = 5, sleep_seconds: float = 0.12) -> None:
+    for attempt in range(retries):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == retries - 1:
+                logger.warning("Skipping locked file during realtime cleanup: %s", path)
+                return
+            time.sleep(sleep_seconds)
+        except OSError:
+            if attempt == retries - 1:
+                logger.warning("Failed to delete realtime artifact: %s", path, exc_info=True)
+                return
+            time.sleep(sleep_seconds)
 
 
 def _write_bytes_with_dedup(data: bytes, dest_dir: Path, filename: str) -> Path:
