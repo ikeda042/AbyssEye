@@ -11,6 +11,7 @@ import shutil
 import re
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
 from io import BytesIO
@@ -39,6 +40,7 @@ ALLOWED_EXTENSIONS = {".tif", ".tiff"}
 ROI_CACHE_VERSION = 1
 REALTIME_STACK_DB_SUFFIX = "_bulk.db"
 MAX_PENDING_QUEUE_IMAGES = 10
+REALTIME_TEMP_DB_MARKER = "__rt_tmp__"
 # fmt: on
 
 logger = logging.getLogger(__name__)
@@ -463,12 +465,22 @@ def _is_dir_writable(path: Path) -> bool:
         return False
 
 
-def _resolve_db_path(stem: str, *, prefer_temporary: bool = False) -> Path:
+def _resolve_db_path(
+    stem: str,
+    *,
+    prefer_temporary: bool = False,
+    unique_suffix: str | None = None,
+) -> Path:
     tmp_dir = Path(tempfile.gettempdir()) / "abyss_eye" / "realtime_databases"
     candidates = (tmp_dir, REALTIME_DB_DIR) if prefer_temporary else (REALTIME_DB_DIR, tmp_dir)
+    filename = (
+        f"{stem}.db"
+        if not unique_suffix
+        else f"{stem}{REALTIME_TEMP_DB_MARKER}{unique_suffix}.db"
+    )
     for base in candidates:
         if _is_dir_writable(base):
-            return base / f"{stem}.db"
+            return base / filename
     raise HTTPException(status_code=500, detail="DBの保存先に書き込めませんでした。権限を確認してください。")
 
 
@@ -480,18 +492,82 @@ def _is_sqlite_readonly_error(exc: Exception) -> bool:
 def _expected_db_locations(stem: str) -> list[Path]:
     """Return potential DB files for a given TIFF stem (primary + temp fallback)."""
     tmp_dir = Path(tempfile.gettempdir()) / "abyss_eye" / "realtime_databases"
-    return [
+    candidates = [
         REALTIME_DB_DIR / f"{stem}.db",
         tmp_dir / f"{stem}.db",
     ]
+    dynamic_matches: list[Path] = []
+    pattern = f"{stem}{REALTIME_TEMP_DB_MARKER}*.db"
+    for directory in (REALTIME_DB_DIR, tmp_dir):
+        if not directory.exists():
+            continue
+        try:
+            dynamic_matches.extend(directory.glob(pattern))
+        except OSError:
+            continue
+    dynamic_matches.sort(
+        key=lambda path: path.stat().st_mtime if path.exists() else 0.0,
+        reverse=True,
+    )
+    return candidates + dynamic_matches
+
+
+def _reserve_realtime_db_path(
+    stem: str,
+    *,
+    prefer_temporary: bool = False,
+    exclude: set[Path] | None = None,
+) -> Path:
+    exclude = exclude or set()
+    candidate_paths = [
+        _resolve_db_path(stem, prefer_temporary=prefer_temporary),
+        _resolve_db_path(stem, prefer_temporary=not prefer_temporary),
+    ]
+
+    seen: set[Path] = set()
+    for candidate in candidate_paths:
+        if candidate in exclude or candidate in seen:
+            continue
+        seen.add(candidate)
+        if not candidate.exists():
+            return candidate
+        try:
+            candidate.unlink()
+            return candidate
+        except OSError:
+            logger.warning(
+                "Realtime DB path is locked; falling back to a temporary DB path: %s",
+                candidate,
+            )
+
+    while True:
+        unique_candidate = _resolve_db_path(
+            stem,
+            prefer_temporary=True,
+            unique_suffix=uuid.uuid4().hex[:8],
+        )
+        if unique_candidate in exclude:
+            continue
+        if unique_candidate.exists():
+            _unlink_file_best_effort(unique_candidate)
+            if unique_candidate.exists():
+                continue
+        return unique_candidate
 
 
 def _find_existing_db(tif_path: Path) -> Path | None:
     stem = _sanitize_stem(tif_path.stem)
+    best_candidate: Path | None = None
+    best_mtime = -1.0
     for candidate in _expected_db_locations(stem):
-        if candidate.exists():
-            return candidate
-    return None
+        try:
+            candidate_mtime = candidate.stat().st_mtime
+        except OSError:
+            continue
+        if candidate_mtime >= best_mtime:
+            best_candidate = candidate
+            best_mtime = candidate_mtime
+    return best_candidate
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -1195,12 +1271,7 @@ def _create_db_from_tif(tif_path: Path) -> Path:
     _invalidate_roi_cache(tif_path)
 
     stem = _sanitize_stem(tif_path.stem)
-    db_path = _resolve_db_path(stem)
-    if db_path.exists():
-        try:
-            db_path.unlink()
-        except OSError as exc:
-            raise HTTPException(status_code=500, detail=f"{db_path.name} の削除に失敗しました: {exc}") from exc
+    db_path = _reserve_realtime_db_path(stem)
 
     try:
         img_bgr = _read_tiff_color_bgr(tif_path)
@@ -1241,9 +1312,11 @@ def _create_db_from_tif(tif_path: Path) -> Path:
         except (SAOperationalError, sqlite3.OperationalError) as exc:
             if not _is_sqlite_readonly_error(exc):
                 raise
-            fallback_db_path = _resolve_db_path(stem, prefer_temporary=True)
-            if fallback_db_path.exists():
-                fallback_db_path.unlink(missing_ok=True)
+            fallback_db_path = _reserve_realtime_db_path(
+                stem,
+                prefer_temporary=True,
+                exclude={db_path},
+            )
             ROIExtractor.save_rois_to_db(
                 img_rgb,
                 rois,
