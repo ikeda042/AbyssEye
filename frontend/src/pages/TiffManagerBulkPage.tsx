@@ -53,6 +53,8 @@ type FolderEntry = {
   manual_added_roi_count?: number;
 };
 
+type SingleImageOrigin = "realtime" | "upload";
+
 type Dimensions = {
   width: number;
   height: number;
@@ -174,6 +176,9 @@ const formatDateTime = (iso?: string, language: Language = "ja") => {
   return date.toLocaleString(locale, { hour12: false });
 };
 
+const resolveSingleImageOrigin = (folder: FolderEntry): SingleImageOrigin =>
+  folder.source_origin === "realtime" ? "realtime" : "upload";
+
 const TiffManagerBulkPage = () => {
   const { t, language } = useI18n();
   const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
@@ -189,10 +194,12 @@ const TiffManagerBulkPage = () => {
   const [batchInferRunning, setBatchInferRunning] = useState(false);
   const [batchCellCountRunning, setBatchCellCountRunning] = useState(false);
   const [completedInferenceFolders, setCompletedInferenceFolders] = useState<string[]>([]);
+  const [singleImageOriginFilter, setSingleImageOriginFilter] = useState<SingleImageOrigin>("upload");
   const [openingSingleImageFolder, setOpeningSingleImageFolder] = useState<string | null>(null);
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
   const [singleImageDeleteMode, setSingleImageDeleteMode] = useState(false);
   const [selectedSingleImageFolders, setSelectedSingleImageFolders] = useState<string[]>([]);
+  const [selectedSingleImageExtractionFolders, setSelectedSingleImageExtractionFolders] = useState<string[]>([]);
   const [deletingSelectedSingleImages, setDeletingSelectedSingleImages] = useState(false);
   const [multiImageDeleteMode, setMultiImageDeleteMode] = useState(false);
   const [selectedMultiImageFolders, setSelectedMultiImageFolders] = useState<string[]>([]);
@@ -501,13 +508,73 @@ const TiffManagerBulkPage = () => {
     [filteredFolders],
   );
 
+  const uploadSingleImageFolders = useMemo(
+    () => singleImageFolders.filter((folder) => resolveSingleImageOrigin(folder) === "upload"),
+    [singleImageFolders],
+  );
+
+  const realtimeSingleImageFolders = useMemo(
+    () => singleImageFolders.filter((folder) => resolveSingleImageOrigin(folder) === "realtime"),
+    [singleImageFolders],
+  );
+
+  const showSingleImageOriginToggle = uploadSingleImageFolders.length > 0 && realtimeSingleImageFolders.length > 0;
+
   useEffect(() => {
-    const available = new Set(singleImageFolders.map((folder) => folder.name));
+    setSingleImageOriginFilter((current) => {
+      if (showSingleImageOriginToggle) {
+        if (current === "upload" && uploadSingleImageFolders.length > 0) return current;
+        if (current === "realtime" && realtimeSingleImageFolders.length > 0) return current;
+      }
+      if (uploadSingleImageFolders.length > 0) return "upload";
+      if (realtimeSingleImageFolders.length > 0) return "realtime";
+      return "upload";
+    });
+  }, [realtimeSingleImageFolders.length, showSingleImageOriginToggle, uploadSingleImageFolders.length]);
+
+  const currentSingleImageOrigin: SingleImageOrigin = showSingleImageOriginToggle
+    ? singleImageOriginFilter
+    : uploadSingleImageFolders.length > 0
+      ? "upload"
+      : "realtime";
+
+  const visibleSingleImageFolders = useMemo(
+    () => (currentSingleImageOrigin === "realtime" ? realtimeSingleImageFolders : uploadSingleImageFolders),
+    [currentSingleImageOrigin, realtimeSingleImageFolders, uploadSingleImageFolders],
+  );
+
+  const pendingUploadSingleImageFolders = useMemo(
+    () => uploadSingleImageFolders.filter((folder) => !folder.has_extraction_db),
+    [uploadSingleImageFolders],
+  );
+
+  const visiblePendingUploadSingleImageFolders = useMemo(
+    () => visibleSingleImageFolders.filter((folder) => !folder.has_extraction_db),
+    [visibleSingleImageFolders],
+  );
+
+  const allVisibleSingleImageFoldersExtracted = useMemo(
+    () => visibleSingleImageFolders.length > 0 && visibleSingleImageFolders.every((folder) => Boolean(folder.has_extraction_db)),
+    [visibleSingleImageFolders],
+  );
+
+  const allVisibleSingleImageFoldersReady = useMemo(
+    () => visibleSingleImageFolders.length > 0 && visibleSingleImageFolders.every((folder) => hasReadyInferenceResult(folder)),
+    [hasReadyInferenceResult, visibleSingleImageFolders],
+  );
+
+  useEffect(() => {
+    const available = new Set(visibleSingleImageFolders.map((folder) => folder.name));
     setSelectedSingleImageFolders((prev) => prev.filter((folderName) => available.has(folderName)));
-    if (singleImageFolders.length === 0) {
+    if (visibleSingleImageFolders.length === 0) {
       setSingleImageDeleteMode(false);
     }
-  }, [singleImageFolders]);
+  }, [visibleSingleImageFolders]);
+
+  useEffect(() => {
+    const available = new Set(pendingUploadSingleImageFolders.map((folder) => folder.name));
+    setSelectedSingleImageExtractionFolders((prev) => prev.filter((folderName) => available.has(folderName)));
+  }, [pendingUploadSingleImageFolders]);
 
   useEffect(() => {
     const sourceSingleImageFolders = folders.filter(
@@ -578,6 +645,12 @@ const TiffManagerBulkPage = () => {
 
   const toggleSingleImageDeleteSelection = useCallback((folderName: string) => {
     setSelectedSingleImageFolders((prev) =>
+      prev.includes(folderName) ? prev.filter((name) => name !== folderName) : [...prev, folderName],
+    );
+  }, []);
+
+  const toggleSingleImageExtractionSelection = useCallback((folderName: string) => {
+    setSelectedSingleImageExtractionFolders((prev) =>
       prev.includes(folderName) ? prev.filter((name) => name !== folderName) : [...prev, folderName],
     );
   }, []);
@@ -807,7 +880,11 @@ const TiffManagerBulkPage = () => {
       setOpeningSingleImageFolder(folder.name);
       try {
         if (!hasReadyInferenceResult(folder)) {
-          throw new Error(tt("先にROI抽出&推論を実行してください。", "Run ROI extraction & inference first."));
+          throw new Error(
+            folder.has_extraction_db
+              ? tt("先に推論を実行してください。", "Run inference first.")
+              : tt("先にROI抽出を実行してください。", "Run ROI extraction first."),
+          );
         }
         const dbName = `${folder.name}_bulk.db`;
         const params = new URLSearchParams({ db_name: dbName, source: "db" });
@@ -827,8 +904,8 @@ const TiffManagerBulkPage = () => {
     [activeProject, hasReadyInferenceResult, navigate, tt],
   );
 
-  const handleBatchExtractInferSingleImages = useCallback(async () => {
-    if (singleImageFolders.length === 0) return;
+  const handleSelectedSingleImageExtraction = useCallback(async () => {
+    if (selectedSingleImageExtractionFolders.length === 0) return;
     setError(null);
     setInfo(null);
     setResult(null);
@@ -836,37 +913,32 @@ const TiffManagerBulkPage = () => {
     setBatchInferRunning(true);
     try {
       let lastResult: ExtractionResult | null = null;
-      for (const folder of singleImageFolders) {
-        if (!folder.has_extraction_db) {
-          const extractResponse = await fetch(endpoint("tiff-bulk/extract"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ folder_name: folder.name, project_name: activeProject || null }),
-          });
-          const extractPayload: ExtractionResult & { detail?: string } = await extractResponse
-            .json()
-            .catch(() => ({} as ExtractionResult));
-          if (!extractResponse.ok || !extractPayload.folder_name) {
-            throw new Error(extractPayload.detail || t("bulk.extractError"));
-          }
-          lastResult = extractPayload;
+      const targets = visiblePendingUploadSingleImageFolders.filter((folder) =>
+        selectedSingleImageExtractionFolders.includes(folder.name),
+      );
+
+      for (const folder of targets) {
+        const extractResponse = await fetch(endpoint("tiff-bulk/extract"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ folder_name: folder.name, project_name: activeProject || null }),
+        });
+        const extractPayload: ExtractionResult & { detail?: string } = await extractResponse
+          .json()
+          .catch(() => ({} as ExtractionResult));
+        if (!extractResponse.ok || !extractPayload.folder_name) {
+          throw new Error(extractPayload.detail || t("bulk.extractError"));
         }
-        await runInferenceForFolder(folder.name);
+        lastResult = extractPayload;
       }
-      setCompletedInferenceFolders((prev) => {
-        const next = new Set(prev);
-        for (const folder of singleImageFolders) {
-          next.add(folder.name);
-        }
-        return Array.from(next);
-      });
       if (lastResult) {
         setResult(lastResult);
       }
+      setSelectedSingleImageExtractionFolders([]);
       setInfo(
         tt(
-          `単一画像 ${singleImageFolders.length} 件のROI抽出と推論を完了しました。`,
-          `Completed ROI extraction and inference for ${singleImageFolders.length} single-image entries.`,
+          `アップロード画像 ${targets.length} 件のROI抽出を完了しました。`,
+          `Completed ROI extraction for ${targets.length} uploaded image entries.`,
         ),
       );
       await fetchFolders();
@@ -875,13 +947,74 @@ const TiffManagerBulkPage = () => {
     } finally {
       setBatchInferRunning(false);
     }
-  }, [activeProject, fetchFolders, runInferenceForFolder, singleImageFolders, t, tt]);
+  }, [
+    activeProject,
+    fetchFolders,
+    selectedSingleImageExtractionFolders,
+    t,
+    tt,
+    visiblePendingUploadSingleImageFolders,
+  ]);
+
+  const handleBatchInferenceSingleImages = useCallback(async () => {
+    if (visibleSingleImageFolders.length === 0) return;
+    if (currentSingleImageOrigin === "upload" && !allVisibleSingleImageFoldersExtracted) {
+      setError(tt("先に未抽出画像のROI抽出を完了してください。", "Finish ROI extraction for new uploaded images first."));
+      return;
+    }
+    if (currentSingleImageOrigin === "realtime" && visibleSingleImageFolders.some((folder) => !folder.has_extraction_db)) {
+      setError(tt("リアルタイム画像のROI情報が未作成です。", "ROI data is not ready for some realtime images."));
+      return;
+    }
+
+    setError(null);
+    setInfo(null);
+    setResult(null);
+    setInferHintFolder(null);
+    setBatchInferRunning(true);
+    try {
+      for (const folder of visibleSingleImageFolders) {
+        await runInferenceForFolder(folder.name);
+      }
+      setCompletedInferenceFolders((prev) => {
+        const next = new Set(prev);
+        for (const folder of visibleSingleImageFolders) {
+          next.add(folder.name);
+        }
+        return Array.from(next);
+      });
+      setInfo(
+        currentSingleImageOrigin === "realtime"
+          ? tt(
+              `リアルタイム画像 ${visibleSingleImageFolders.length} 件の推論を完了しました。`,
+              `Completed inference for ${visibleSingleImageFolders.length} realtime image entries.`,
+            )
+          : tt(
+              `アップロード画像 ${visibleSingleImageFolders.length} 件の推論を完了しました。`,
+              `Completed inference for ${visibleSingleImageFolders.length} uploaded image entries.`,
+            ),
+      );
+      await fetchFolders();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("bulk.inferNeedsExtract"));
+    } finally {
+      setBatchInferRunning(false);
+    }
+  }, [
+    allVisibleSingleImageFoldersExtracted,
+    currentSingleImageOrigin,
+    fetchFolders,
+    runInferenceForFolder,
+    t,
+    tt,
+    visibleSingleImageFolders,
+  ]);
 
   const handleBatchCellCountSingleImages = useCallback(async () => {
-    if (singleImageFolders.length === 0) return;
+    if (visibleSingleImageFolders.length === 0) return;
     if (!activeProject) return;
-    if (!singleImageFolders.every((folder) => hasReadyInferenceResult(folder))) {
-      setError(tt("先にROI抽出&推論を実行してください。", "Run ROI extraction & inference first."));
+    if (!allVisibleSingleImageFoldersReady) {
+      setError(tt("先に推論を実行してください。", "Run inference first."));
       return;
     }
     setError(null);
@@ -898,7 +1031,7 @@ const TiffManagerBulkPage = () => {
         class3_total: 0,
       };
 
-      for (const folder of singleImageFolders) {
+      for (const folder of visibleSingleImageFolders) {
         const dbName = `${folder.name}_bulk.db`;
         const summaryResponse = await fetch(endpoint(`deepscan/${encodeURIComponent(dbName)}/cell-count-summary`), {
           headers: { Accept: "application/json" },
@@ -919,19 +1052,27 @@ const TiffManagerBulkPage = () => {
 
       setInfo(
         tt(
-          `単一画像 ${singleImageFolders.length} 件の細胞集計を完了しました。結果は結果ページで確認できます。`,
-          `Completed cell-count aggregation for ${singleImageFolders.length} single-image entries. Open the results page to inspect the details.`,
+          `${currentSingleImageOrigin === "realtime" ? "リアルタイム" : "アップロード"}画像 ${visibleSingleImageFolders.length} 件の細胞集計を完了しました。結果は結果ページで確認できます。`,
+          `Completed cell-count aggregation for ${visibleSingleImageFolders.length} ${currentSingleImageOrigin} image entries. Open the results page to inspect the details.`,
         ),
       );
       await fetchFolders();
-      const params = new URLSearchParams({ project: activeProject });
+      const params = new URLSearchParams({ project: activeProject, origin: currentSingleImageOrigin });
       navigate(`/tiff-manager-bulk/cell-count-results?${params.toString()}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : tt("細胞数集計に失敗しました。", "Failed to aggregate cell counts."));
     } finally {
       setBatchCellCountRunning(false);
     }
-  }, [activeProject, fetchFolders, hasReadyInferenceResult, navigate, singleImageFolders, t, tt]);
+  }, [
+    activeProject,
+    allVisibleSingleImageFoldersReady,
+    currentSingleImageOrigin,
+    fetchFolders,
+    navigate,
+    tt,
+    visibleSingleImageFolders,
+  ]);
 
   if (!activeProject) {
     return (
@@ -1277,6 +1418,27 @@ const TiffManagerBulkPage = () => {
                   </Typography>
                 </Box>
 
+                {showSingleImageOriginToggle ? (
+                  <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                    <Button
+                      variant={currentSingleImageOrigin === "realtime" ? "contained" : "outlined"}
+                      color={currentSingleImageOrigin === "realtime" ? "success" : "inherit"}
+                      onClick={() => setSingleImageOriginFilter("realtime")}
+                      sx={{ minWidth: 120 }}
+                    >
+                      {tt("リアルタイム", "Realtime")}
+                    </Button>
+                    <Button
+                      variant={currentSingleImageOrigin === "upload" ? "contained" : "outlined"}
+                      color={currentSingleImageOrigin === "upload" ? "primary" : "inherit"}
+                      onClick={() => setSingleImageOriginFilter("upload")}
+                      sx={{ minWidth: 120 }}
+                    >
+                      {tt("アップロード", "Upload")}
+                    </Button>
+                  </Stack>
+                ) : null}
+
                 <Stack
                   direction={{ xs: "column", md: "row" }}
                   spacing={1}
@@ -1284,17 +1446,38 @@ const TiffManagerBulkPage = () => {
                   alignItems={{ xs: "stretch", md: "center" }}
                 >
                   <Stack direction={{ xs: "column", sm: "row" }} spacing={0.75} flexWrap="wrap">
-                    <Button
-                      variant="contained"
-                      size="medium"
-                      startIcon={<ScienceIcon fontSize="small" />}
-                      onClick={() => void handleBatchExtractInferSingleImages()}
-                      disabled={singleImageFolders.length === 0 || batchInferRunning || batchCellCountRunning || singleImageDeleteMode}
-                      sx={{ px: 2.5, py: 0.9 }}
-                    >
-                      {batchInferRunning ? tt("処理中...", "Processing...") : tt("ROI抽出&推論", "ROI extraction & inference")}
-                    </Button>
-                    {activeProject && singleImageFolders.length > 0 && singleImageFolders.every((folder) => hasReadyInferenceResult(folder)) ? (
+                    {currentSingleImageOrigin === "upload" ? (
+                      <Button
+                        variant="contained"
+                        size="medium"
+                        startIcon={<ScienceIcon fontSize="small" />}
+                        onClick={() => void handleSelectedSingleImageExtraction()}
+                        disabled={
+                          visiblePendingUploadSingleImageFolders.length === 0 ||
+                          selectedSingleImageExtractionFolders.length === 0 ||
+                          batchInferRunning ||
+                          batchCellCountRunning ||
+                          singleImageDeleteMode
+                        }
+                        sx={{ px: 2.5, py: 0.9 }}
+                      >
+                        {batchInferRunning ? tt("処理中...", "Processing...") : tt("ROI抽出", "ROI extraction")}
+                      </Button>
+                    ) : null}
+                    {(currentSingleImageOrigin === "realtime" || allVisibleSingleImageFoldersExtracted) &&
+                    visibleSingleImageFolders.length > 0 ? (
+                      <Button
+                        variant="contained"
+                        size="medium"
+                        startIcon={<ScienceIcon fontSize="small" />}
+                        onClick={() => void handleBatchInferenceSingleImages()}
+                        disabled={batchInferRunning || batchCellCountRunning || singleImageDeleteMode}
+                        sx={{ px: 2.5, py: 0.9 }}
+                      >
+                        {batchInferRunning ? tt("処理中...", "Processing...") : tt("推論", "Inference")}
+                      </Button>
+                    ) : null}
+                    {activeProject && allVisibleSingleImageFoldersReady ? (
                       <Button
                         variant="outlined"
                         size="medium"
@@ -1343,7 +1526,7 @@ const TiffManagerBulkPage = () => {
                           setSingleImageDeleteMode(true);
                           setSelectedSingleImageFolders([]);
                         }}
-                        disabled={singleImageFolders.length === 0 || batchInferRunning || batchCellCountRunning || Boolean(deletingFolder)}
+                        disabled={visibleSingleImageFolders.length === 0 || batchInferRunning || batchCellCountRunning || Boolean(deletingFolder)}
                       >
                         {t("bulk.delete")}
                       </Button>
@@ -1351,10 +1534,23 @@ const TiffManagerBulkPage = () => {
                   </Stack>
                 </Stack>
 
-                {singleImageFolders.length === 0 ? (
+                {currentSingleImageOrigin === "upload" && !singleImageDeleteMode ? (
+                  <Typography variant="caption" color="text.secondary">
+                    {visiblePendingUploadSingleImageFolders.length > 0
+                      ? tt(
+                          "ROI抽出する画像だけ選択してください。抽出済み画像は再抽出できないよう薄く表示しています。",
+                          "Select only the images you want to extract. Already extracted images are dimmed and excluded.",
+                        )
+                      : tt("この種類の画像はすべてROI抽出済みです。", "All images in this view already have ROI extraction results.")}
+                  </Typography>
+                ) : null}
+
+                {visibleSingleImageFolders.length === 0 ? (
                   <Box textAlign="center" py={4}>
                     <Typography variant="body2" color="text.secondary">
-                      {tt("単一画像はありません。", "No single-image entries found.")}
+                      {currentSingleImageOrigin === "realtime"
+                        ? tt("リアルタイム画像はありません。", "No realtime image entries found.")
+                        : tt("アップロード画像はありません。", "No uploaded image entries found.")}
                     </Typography>
                   </Box>
                 ) : (
@@ -1363,6 +1559,9 @@ const TiffManagerBulkPage = () => {
                         <TableHead>
                         <TableRow>
                           {singleImageDeleteMode ? <TableCell padding="checkbox" align="center" /> : null}
+                          {!singleImageDeleteMode && currentSingleImageOrigin === "upload" ? (
+                            <TableCell align="center" sx={{ width: 96 }} />
+                          ) : null}
                           <TableCell>{tt("名前", "Name")}</TableCell>
                           <TableCell align="center" sx={{ width: 128 }}>{tt("ROI変更数", "ROI changes")}</TableCell>
                           <TableCell align="center" sx={{ width: 128 }}>{tt("ROI追加数", "ROI additions")}</TableCell>
@@ -1372,7 +1571,7 @@ const TiffManagerBulkPage = () => {
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {singleImageFolders.map((folder) => {
+                        {visibleSingleImageFolders.map((folder) => {
                           const isBusy =
                             openingSingleImageFolder === folder.name ||
                             deletingFolder === folder.name ||
@@ -1380,6 +1579,9 @@ const TiffManagerBulkPage = () => {
                             batchInferRunning ||
                             batchCellCountRunning;
                           const isSelectedForDelete = selectedSingleImageFolders.includes(folder.name);
+                          const isSelectedForExtraction = selectedSingleImageExtractionFolders.includes(folder.name);
+                          const isExtractionCompletedRow =
+                            currentSingleImageOrigin === "upload" && Boolean(folder.has_extraction_db);
                           return (
                             <TableRow
                               key={folder.name}
@@ -1403,9 +1605,29 @@ const TiffManagerBulkPage = () => {
                                   />
                                 </TableCell>
                               ) : null}
+                              {!singleImageDeleteMode && currentSingleImageOrigin === "upload" ? (
+                                <TableCell align="center">
+                                  {folder.has_extraction_db ? (
+                                    <Typography variant="caption" color="text.secondary" sx={{ opacity: 0.72, whiteSpace: "nowrap" }}>
+                                      {tt("抽出済み", "Extracted")}
+                                    </Typography>
+                                  ) : (
+                                    <Checkbox
+                                      checked={isSelectedForExtraction}
+                                      disabled={batchInferRunning || batchCellCountRunning}
+                                      onChange={() => toggleSingleImageExtractionSelection(folder.name)}
+                                    />
+                                  )}
+                                </TableCell>
+                              ) : null}
                               <TableCell sx={{ maxWidth: 560 }}>
                                 <Tooltip title={folder.name}>
-                                  <Typography noWrap fontWeight={500} sx={ELLIPSIS_TEXT_SX}>
+                                  <Typography
+                                    noWrap
+                                    fontWeight={500}
+                                    color={isExtractionCompletedRow ? "text.secondary" : "text.primary"}
+                                    sx={{ ...ELLIPSIS_TEXT_SX, opacity: isExtractionCompletedRow ? 0.72 : 1 }}
+                                  >
                                     {scopedFolderName(folder.name)}
                                   </Typography>
                                 </Tooltip>

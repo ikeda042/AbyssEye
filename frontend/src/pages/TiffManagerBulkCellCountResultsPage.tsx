@@ -40,7 +40,10 @@ type FolderEntry = {
   name: string;
   file_count: number;
   realtime_folder_mode?: "single" | "stack" | null;
+  source_origin?: "realtime" | "upload" | null;
 };
+
+type SingleImageOrigin = "realtime" | "upload";
 
 type ResultRoi = {
   roi_id: number;
@@ -104,6 +107,9 @@ const normalizeProjectName = (raw: string) => {
   return trimmed ? trimmed.split(/[\\/]/).at(-1)!.trim().replace("#", "").replace("__", "_") : "";
 };
 
+const resolveSingleImageOrigin = (folder: FolderEntry): SingleImageOrigin =>
+  folder.source_origin === "realtime" ? "realtime" : "upload";
+
 const compareText = (left: string, right: string) =>
   left.localeCompare(right, undefined, {
     numeric: true,
@@ -116,6 +122,9 @@ const TiffManagerBulkCellCountResultsPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const projectName = normalizeProjectName(searchParams.get("project") || "");
+  const requestedOrigin = searchParams.get("origin");
+  const originFilter: SingleImageOrigin | null =
+    requestedOrigin === "realtime" || requestedOrigin === "upload" ? requestedOrigin : null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<AggregatedResults | null>(null);
@@ -149,6 +158,12 @@ const TiffManagerBulkCellCountResultsPage = () => {
     [tt],
   );
 
+  const originFilterLabel = useMemo(() => {
+    if (originFilter === "realtime") return tt("リアルタイム", "Realtime");
+    if (originFilter === "upload") return tt("アップロード", "Upload");
+    return null;
+  }, [originFilter, tt]);
+
   const fetchResults = useCallback(async () => {
     if (!projectName) {
       setError(tt("project が指定されていません。", "project is required."));
@@ -172,6 +187,9 @@ const TiffManagerBulkCellCountResultsPage = () => {
       const singleImageFolders = folderPayload.folders.filter(
         (folder) => folder.realtime_folder_mode === "single" || (!folder.realtime_folder_mode && folder.file_count <= 1),
       );
+      const filteredSingleImageFolders = originFilter
+        ? singleImageFolders.filter((folder) => resolveSingleImageOrigin(folder) === originFilter)
+        : singleImageFolders;
 
       const counts: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0 };
       const classBuckets: Record<number, AggregatedRoi[]> = { 0: [], 1: [], 2: [], 3: [] };
@@ -179,7 +197,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
       const skippedSources: string[] = [];
 
       await Promise.all(
-        singleImageFolders.map(async (folder) => {
+        filteredSingleImageFolders.map(async (folder) => {
           const dbName = `${folder.name}_bulk.db`;
           const response = await fetch(endpoint(`deepscan/status?db_name=${encodeURIComponent(dbName)}`), {
             headers: { Accept: "application/json" },
@@ -235,7 +253,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
         counts,
         classBuckets,
         roiRows,
-        sourceCount: singleImageFolders.length,
+        sourceCount: filteredSingleImageFolders.length,
         skippedSources,
       });
     } catch (err) {
@@ -244,7 +262,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [projectName, scopedFolderName, tt]);
+  }, [originFilter, projectName, scopedFolderName, tt]);
 
   useEffect(() => {
     void fetchResults();
@@ -431,6 +449,11 @@ const TiffManagerBulkCellCountResultsPage = () => {
                 ? tt(`現在のプロジェクト: ${projectName}`, `Current project: ${projectName}`)
                 : tt("プロジェクトが選択されていません。", "No project selected.")}
             </Typography>
+            {originFilterLabel ? (
+              <Typography variant="body2" color="text.secondary">
+                {tt(`表示対象: ${originFilterLabel}`, `Showing: ${originFilterLabel}`)}
+              </Typography>
+            ) : null}
           </Box>
           <Stack direction="row" spacing={1}>
             <Button variant="contained" size="small" startIcon={<RefreshIcon fontSize="small" />} onClick={() => void fetchResults()}>

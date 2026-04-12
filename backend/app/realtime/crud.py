@@ -12,6 +12,7 @@ import re
 import tempfile
 import time
 import uuid
+import warnings
 from dataclasses import dataclass, replace
 from datetime import datetime
 from io import BytesIO
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import HTTPException, UploadFile
-from PIL import Image
+from PIL import Image, ImageFile
 from sqlalchemy.exc import OperationalError as SAOperationalError
 import cv2
 import numpy as np
@@ -44,6 +45,7 @@ REALTIME_TEMP_DB_MARKER = "__rt_tmp__"
 # fmt: on
 
 logger = logging.getLogger(__name__)
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 FOCUS_METRIC_ALIASES: dict[str, str] = {
     "ten": "ften",
@@ -435,14 +437,25 @@ def _read_tiff_unchanged(path: Path) -> np.ndarray | None:
     if image is not None:
         return image
     try:
-        with Image.open(path) as pil_img:
-            if pil_img.mode in {"I;16", "I;16B", "I;16L", "I", "F"}:
-                return np.array(pil_img)
-            if pil_img.mode in {"L", "P"}:
-                return np.array(pil_img.convert("L"))
-            return cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with Image.open(path) as pil_img:
+                pil_img.load()
+                if pil_img.mode in {"I;16", "I;16B", "I;16L", "I", "F"}:
+                    return np.array(pil_img)
+                if pil_img.mode in {"L", "P"}:
+                    return np.array(pil_img.convert("L"))
+                return cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
     except Exception:
-        return None
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                with Image.open(path) as pil_img:
+                    rgb_img = pil_img.convert("RGB")
+                    rgb_img.load()
+                    return cv2.cvtColor(np.array(rgb_img), cv2.COLOR_RGB2BGR)
+        except Exception:
+            return None
 
 
 def _read_tiff_color_bgr(path: Path) -> np.ndarray | None:
