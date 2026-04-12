@@ -291,6 +291,21 @@ def build_powershell_watch_script(project_name: str, api_url: str) -> str:
     interval_literal = f"{config.poll_interval_seconds:.3f}".rstrip("0").rstrip(".")
 
     lines = [
+        "$scriptPath = $PSCommandPath",
+        "if ([string]::IsNullOrWhiteSpace($scriptPath)) {",
+        "    $scriptPath = $MyInvocation.MyCommand.Path",
+        "}",
+        "if (-not $env:ABYSSEYE_WATCHER_BOOTSTRAPPED) {",
+        "    $processPolicy = Get-ExecutionPolicy -Scope Process",
+        "    if ($processPolicy -ne 'Bypass' -and -not [string]::IsNullOrWhiteSpace($scriptPath)) {",
+        "        $env:ABYSSEYE_WATCHER_BOOTSTRAPPED = '1'",
+        '        $escapedScriptPath = $scriptPath.Replace(\'"\', \'""\')',
+        '        Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$escapedScriptPath`""',
+        "        exit",
+        "    }",
+        "}",
+        "Remove-Item Env:ABYSSEYE_WATCHER_BOOTSTRAPPED -ErrorAction SilentlyContinue",
+        "",
         "# ============================================",
         "# 設定値（必要に応じて書き換えてください）",
         "# ============================================",

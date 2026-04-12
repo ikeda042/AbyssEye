@@ -1063,31 +1063,68 @@ def _schedule_realtime_finalize(
     return task
 
 
-async def _ensure_current_realtime_status_ready() -> None:
+async def _skip_realtime_tif(tif_name: str, *, tif_path: Path | None = None) -> None:
     async with _status_lock:
-        _sync_runtime_queue_unlocked()
-        current_name = _current_tif_name
-        if not current_name:
-            return
+        _advance_runtime_queue_unlocked(tif_name)
+    await asyncio.to_thread(_delete_runtime_artifacts, tif_path or Path(tif_name))
 
-        tif_path = _resolve_runtime_tif_path_unlocked(current_name)
-        cached_status = _status_cache.get(current_name)
-        existing_db = _find_existing_db(tif_path)
-        if _status_matches_current_files(cached_status, tif_path, db_path=existing_db):
-            return
 
-        finalize_task = _pending_finalize_tasks_by_name.get(current_name)
-        if finalize_task is None or finalize_task.done():
-            source_filename = cached_status.source_filename if cached_status else tif_path.name
-            source_is_uploaded = cached_status.source_is_uploaded if cached_status else False
-            finalize_task = _schedule_realtime_finalize(
+async def _ensure_current_realtime_status_ready() -> None:
+    while True:
+        current_name: str | None = None
+        tif_path: Path | None = None
+        finalize_task: asyncio.Task[None] | None = None
+        source_filename = ""
+        source_is_uploaded = False
+
+        try:
+            async with _status_lock:
+                _sync_runtime_queue_unlocked()
+                current_name = _current_tif_name
+                if not current_name:
+                    return
+
+                tif_path = _resolve_runtime_tif_path_unlocked(current_name)
+                cached_status = _status_cache.get(current_name)
+                existing_db = _find_existing_db(tif_path)
+                if _status_matches_current_files(cached_status, tif_path, db_path=existing_db):
+                    return
+
+                pending_task = _pending_finalize_tasks_by_name.get(current_name)
+                if pending_task is not None and not pending_task.done():
+                    finalize_task = pending_task
+                source_filename = cached_status.source_filename if cached_status else tif_path.name
+                source_is_uploaded = cached_status.source_is_uploaded if cached_status else False
+        except Exception:
+            if not current_name:
+                return
+            logger.exception("Realtime TIFF %s could not be prepared; skipping it.", current_name)
+            await _skip_realtime_tif(current_name, tif_path=tif_path)
+            continue
+
+        try:
+            if finalize_task is not None:
+                await finalize_task
+                async with _status_lock:
+                    _sync_runtime_queue_unlocked()
+                    if _current_tif_name != current_name:
+                        continue
+                    tif_path = _resolve_runtime_tif_path_unlocked(current_name)
+                    cached_status = _status_cache.get(current_name)
+                    existing_db = _find_existing_db(tif_path)
+                    if _status_matches_current_files(cached_status, tif_path, db_path=existing_db):
+                        return
+
+            await _finalize_saved_realtime_tif(
                 tif_path,
                 source_filename=source_filename or tif_path.name,
                 source_is_uploaded=source_is_uploaded,
                 status_revision=_latest_status_revision,
             )
-
-    await finalize_task
+            return
+        except Exception:
+            logger.exception("Realtime TIFF %s failed during next-image preparation; skipping it.", current_name)
+            await _skip_realtime_tif(current_name, tif_path=tif_path)
 
 
 def _create_db_from_tif(tif_path: Path) -> Path:
@@ -1470,74 +1507,95 @@ async def get_latest_status(
     global _latest_status
     _ensure_storage_dir()
     normalized_focus_metric = _normalize_focus_metric(focus_metric)
-    async with _status_lock:
-        _sync_runtime_queue_unlocked()
-        if not _current_tif_name:
-            raise HTTPException(status_code=404, detail="まだRealtime TIFFがアップロードされていません。")
+    while True:
+        current_name: str | None = None
+        latest_local: Path | None = None
 
-        latest_local = _resolve_runtime_tif_path_unlocked(_current_tif_name)
-        latest_mtime = latest_local.stat().st_mtime
-        latest_size = latest_local.stat().st_size
-        existing_db = _find_existing_db(latest_local)
-        latest_db_mtime = 0.0
-        if existing_db is not None:
-            try:
-                latest_db_mtime = existing_db.stat().st_mtime
-            except OSError:
-                latest_db_mtime = 0.0
-        latest_status_mtime = max(latest_mtime, latest_db_mtime)
-        cached_status = _status_cache.get(_current_tif_name)
-        if (
-            cached_status
-            and cached_status.tif_path == latest_local
-            and cached_status.size_bytes == latest_size
-            and (
-                existing_db is None
-                or cached_status.saved_at.timestamp() >= latest_status_mtime
-            )
-        ):
-            if cached_status.focus_metric != normalized_focus_metric:
-                focus_profile, focus_map = await asyncio.to_thread(
-                    _build_focus_snapshot,
-                    latest_local,
-                    normalized_focus_metric,
-                )
-                cached_status.focus_profile = focus_profile
-                cached_status.focus_map = focus_map
-                cached_status.focus_metric = normalized_focus_metric
-                _status_cache[_current_tif_name] = cached_status
-            _latest_status = cached_status
-            return _attach_queue_meta(cached_status, pending_count=len(_queued_tif_names))
-
-        if existing_db and existing_db.stat().st_mtime >= latest_mtime:
-            db_path = existing_db
-        else:
-            db_path = await asyncio.to_thread(_create_db_from_tif, latest_local)
-
-        rois, (focus_profile, focus_map) = await asyncio.gather(
-            asyncio.to_thread(_load_rois_with_inference, db_path, latest_local),
-            asyncio.to_thread(_build_focus_snapshot, latest_local, normalized_focus_metric),
-        )
         try:
-            status_saved_ts = max(latest_mtime, db_path.stat().st_mtime)
-        except OSError:
-            status_saved_ts = latest_mtime
-        next_status = RealtimeStatus(
-            tif_path=latest_local,
-            saved_at=datetime.fromtimestamp(status_saved_ts),
-            size_bytes=latest_local.stat().st_size,
-            db_path=db_path,
-            inference=_build_inference_summary(rois, latest_local.name),
-            rois=rois,
-            focus_profile=focus_profile,
-            focus_map=focus_map,
-            focus_metric=normalized_focus_metric,
-            source_filename=latest_local.name,
-            source_is_uploaded=False,
-        )
-        _status_cache[_current_tif_name] = next_status
-        _latest_status = next_status
-        return _attach_queue_meta(next_status, pending_count=len(_queued_tif_names))
+            async with _status_lock:
+                _sync_runtime_queue_unlocked()
+                current_name = _current_tif_name
+                if not current_name:
+                    raise HTTPException(status_code=404, detail="まだRealtime TIFFがアップロードされていません。")
+
+                latest_local = _resolve_runtime_tif_path_unlocked(current_name)
+                latest_mtime = latest_local.stat().st_mtime
+                latest_size = latest_local.stat().st_size
+                existing_db = _find_existing_db(latest_local)
+                latest_db_mtime = 0.0
+                if existing_db is not None:
+                    try:
+                        latest_db_mtime = existing_db.stat().st_mtime
+                    except OSError:
+                        latest_db_mtime = 0.0
+                latest_status_mtime = max(latest_mtime, latest_db_mtime)
+                cached_status = _status_cache.get(current_name)
+                if (
+                    cached_status
+                    and cached_status.tif_path == latest_local
+                    and cached_status.size_bytes == latest_size
+                    and (
+                        existing_db is None
+                        or cached_status.saved_at.timestamp() >= latest_status_mtime
+                    )
+                ):
+                    if cached_status.focus_metric != normalized_focus_metric:
+                        focus_profile, focus_map = await asyncio.to_thread(
+                            _build_focus_snapshot,
+                            latest_local,
+                            normalized_focus_metric,
+                        )
+                        cached_status.focus_profile = focus_profile
+                        cached_status.focus_map = focus_map
+                        cached_status.focus_metric = normalized_focus_metric
+                        _status_cache[current_name] = cached_status
+                    _latest_status = cached_status
+                    return _attach_queue_meta(cached_status, pending_count=len(_queued_tif_names))
+
+            if existing_db and existing_db.stat().st_mtime >= latest_mtime:
+                db_path = existing_db
+            else:
+                db_path = await asyncio.to_thread(_create_db_from_tif, latest_local)
+
+            rois, (focus_profile, focus_map) = await asyncio.gather(
+                asyncio.to_thread(_load_rois_with_inference, db_path, latest_local),
+                asyncio.to_thread(_build_focus_snapshot, latest_local, normalized_focus_metric),
+            )
+            try:
+                status_saved_ts = max(latest_mtime, db_path.stat().st_mtime)
+            except OSError:
+                status_saved_ts = latest_mtime
+
+            next_status = RealtimeStatus(
+                tif_path=latest_local,
+                saved_at=datetime.fromtimestamp(status_saved_ts),
+                size_bytes=latest_local.stat().st_size,
+                db_path=db_path,
+                inference=_build_inference_summary(rois, latest_local.name),
+                rois=rois,
+                focus_profile=focus_profile,
+                focus_map=focus_map,
+                focus_metric=normalized_focus_metric,
+                source_filename=latest_local.name,
+                source_is_uploaded=False,
+            )
+
+            async with _status_lock:
+                if _current_tif_name != current_name:
+                    continue
+                _status_cache[current_name] = next_status
+                _latest_status = next_status
+                return _attach_queue_meta(next_status, pending_count=len(_queued_tif_names))
+        except HTTPException:
+            if not current_name:
+                raise
+            logger.exception("Realtime TIFF %s could not be loaded; skipping it.", current_name)
+            await _skip_realtime_tif(current_name, tif_path=latest_local)
+        except Exception:
+            if not current_name:
+                raise
+            logger.exception("Realtime TIFF %s failed during status loading; skipping it.", current_name)
+            await _skip_realtime_tif(current_name, tif_path=latest_local)
 
 
 def get_realtime_tif_path(tif_name: str) -> Path:

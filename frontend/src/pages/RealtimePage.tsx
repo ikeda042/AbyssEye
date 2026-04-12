@@ -1588,12 +1588,6 @@ const RealtimePage = () => {
           {realtimeBackLabel}
         </Button>
 
-        {error && <Alert severity="error">{error}</Alert>}
-        {useCurrentError && <Alert severity="error">{useCurrentError}</Alert>}
-        {useCurrentMessage && <Alert severity="success">{useCurrentMessage}</Alert>}
-        {projectSetupError && <Alert severity="error">{projectSetupError}</Alert>}
-        {projectSetupMessage && <Alert severity="success">{projectSetupMessage}</Alert>}
-
         <Box>
           <Typography variant="h5" fontWeight={600}>
             DeepScan
@@ -1657,6 +1651,16 @@ const RealtimePage = () => {
             )}
           </CardContent>
         </Card>
+
+        {(error || useCurrentError || useCurrentMessage || projectSetupError || projectSetupMessage) ? (
+          <Stack spacing={1}>
+            {error && <Alert severity="error">{error}</Alert>}
+            {useCurrentError && <Alert severity="error">{useCurrentError}</Alert>}
+            {useCurrentMessage && <Alert severity="success">{useCurrentMessage}</Alert>}
+            {projectSetupError && <Alert severity="error">{projectSetupError}</Alert>}
+            {projectSetupMessage && <Alert severity="success">{projectSetupMessage}</Alert>}
+          </Stack>
+        ) : null}
 
         {loading ? (
           <Box display="flex" justifyContent="center" py={6}>
