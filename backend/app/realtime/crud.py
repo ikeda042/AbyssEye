@@ -109,6 +109,7 @@ _current_tif_name: str | None = None
 _queued_tif_names: list[str] = []
 _status_cache: dict[str, RealtimeStatus] = {}
 _discarded_tif_names: set[str] = set()
+_active_realtime_project_name: str | None = None
 
 
 def _deserialize_roi_meta(raw_meta: object) -> object:
@@ -425,6 +426,10 @@ def _ensure_storage_dir() -> None:
     PRIMARY_DB_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _temp_realtime_db_dir() -> Path:
+    return Path(tempfile.gettempdir()) / "abyss_eye" / "realtime_databases"
+
+
 def _read_tiff_unchanged(path: Path) -> np.ndarray | None:
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is not None:
@@ -471,7 +476,7 @@ def _resolve_db_path(
     prefer_temporary: bool = False,
     unique_suffix: str | None = None,
 ) -> Path:
-    tmp_dir = Path(tempfile.gettempdir()) / "abyss_eye" / "realtime_databases"
+    tmp_dir = _temp_realtime_db_dir()
     candidates = (tmp_dir, REALTIME_DB_DIR) if prefer_temporary else (REALTIME_DB_DIR, tmp_dir)
     filename = (
         f"{stem}.db"
@@ -491,7 +496,7 @@ def _is_sqlite_readonly_error(exc: Exception) -> bool:
 
 def _expected_db_locations(stem: str) -> list[Path]:
     """Return potential DB files for a given TIFF stem (primary + temp fallback)."""
-    tmp_dir = Path(tempfile.gettempdir()) / "abyss_eye" / "realtime_databases"
+    tmp_dir = _temp_realtime_db_dir()
     candidates = [
         REALTIME_DB_DIR / f"{stem}.db",
         tmp_dir / f"{stem}.db",
@@ -614,6 +619,17 @@ def _copy_with_dedup(src: Path, dest_dir: Path, *, dest_name: str | None = None)
     target = _deduplicate_target(dest_dir, target_name)
     shutil.copy2(src, target)
     return target
+
+
+def _iter_runtime_tif_files() -> list[Path]:
+    tif_paths: list[Path] = []
+    for directory in _candidate_tiff_dirs():
+        if not directory.exists():
+            continue
+        for tif_path in directory.iterdir():
+            if tif_path.is_file() and tif_path.suffix.lower() in ALLOWED_EXTENSIONS:
+                tif_paths.append(tif_path)
+    return tif_paths
 
 
 def _stack_db_path(stack_name: str) -> Path:
@@ -921,17 +937,12 @@ def _attach_queue_meta(status: RealtimeStatus, *, pending_count: int) -> Realtim
 def _list_runtime_tiff_paths() -> list[Path]:
     seen_names: set[str] = set()
     candidates: list[Path] = []
-    for directory in _candidate_tiff_dirs():
-        if not directory.exists():
+    for tif_path in _iter_runtime_tif_files():
+        local_path = _ensure_local_copy(tif_path)
+        if local_path.name in seen_names:
             continue
-        for tif_path in directory.iterdir():
-            if not tif_path.is_file() or tif_path.suffix.lower() not in ALLOWED_EXTENSIONS:
-                continue
-            local_path = _ensure_local_copy(tif_path)
-            if local_path.name in seen_names:
-                continue
-            seen_names.add(local_path.name)
-            candidates.append(local_path)
+        seen_names.add(local_path.name)
+        candidates.append(local_path)
 
     def _sort_key(path: Path) -> tuple[float, str]:
         try:
@@ -1061,6 +1072,24 @@ def _delete_runtime_artifacts(tif_path: Path) -> None:
     _unlink_file_best_effort(_roi_cache_path(tif_path))
 
 
+def _clear_runtime_artifacts_on_disk() -> set[str]:
+    stale_tif_names = {path.name for path in _iter_runtime_tif_files()}
+    for tif_name in stale_tif_names:
+        _delete_runtime_artifacts(Path(tif_name))
+
+    for db_dir in (REALTIME_DB_DIR, _temp_realtime_db_dir()):
+        if not db_dir.exists():
+            continue
+        for db_path in db_dir.glob("*.db"):
+            _unlink_file_best_effort(db_path)
+
+    if REALTIME_CACHE_DIR.exists():
+        for cache_path in REALTIME_CACHE_DIR.glob("*.json"):
+            _unlink_file_best_effort(cache_path)
+
+    return {path.name for path in _iter_runtime_tif_files()}
+
+
 def _unlink_file_best_effort(path: Path, retries: int = 5, sleep_seconds: float = 0.12) -> None:
     for attempt in range(retries):
         try:
@@ -1080,11 +1109,35 @@ def _unlink_file_best_effort(path: Path, retries: int = 5, sleep_seconds: float 
             time.sleep(sleep_seconds)
 
 
-def _write_bytes_with_dedup(data: bytes, dest_dir: Path, filename: str) -> Path:
+def _remove_runtime_name_from_state_unlocked(tif_name: str) -> None:
+    global _current_tif_name
+    global _latest_status
+
+    _status_cache.pop(tif_name, None)
+    _queued_tif_names[:] = [name for name in _queued_tif_names if name != tif_name]
+    if _current_tif_name == tif_name:
+        _current_tif_name = _queued_tif_names.pop(0) if _queued_tif_names else None
+    if _latest_status and _latest_status.tif_path.name == tif_name:
+        _latest_status = _status_cache.get(_current_tif_name) if _current_tif_name else None
+
+
+def _replace_runtime_tif_with_bytes(data: bytes, dest_dir: Path, filename: str) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     target_name = _sanitize_filename(filename)
-    target_path = _deduplicate_target(dest_dir, target_name)
+    target_path = dest_dir / target_name
+    _delete_runtime_artifacts(target_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_bytes(data)
+    return target_path
+
+
+def _replace_runtime_tif_from_source(src: Path, dest_dir: Path, *, dest_name: str | None = None) -> Path:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target_name = _sanitize_filename(dest_name or src.name)
+    target_path = dest_dir / target_name
+    _delete_runtime_artifacts(target_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, target_path)
     return target_path
 
 
@@ -1197,6 +1250,38 @@ def _schedule_realtime_finalize(
 
     task.add_done_callback(_cleanup)
     return task
+
+
+async def initialize_realtime_project_session(project_name: str | None) -> None:
+    global _latest_status
+    global _latest_status_revision
+    global _current_tif_name
+    global _active_realtime_project_name
+
+    normalized_project = tiff_bulk_crud._sanitize_component(project_name or "_", field="プロジェクト名")
+    async with _status_lock:
+        _latest_status_revision += 1
+        _active_realtime_project_name = normalized_project
+        pending_tasks = list(_pending_finalize_tasks_by_name.values())
+        for task in pending_tasks:
+            task.cancel()
+        _pending_finalize_tasks.clear()
+        _pending_finalize_tasks_by_name.clear()
+        stale_names = {path.name for path in _iter_runtime_tif_files()}
+        _discarded_tif_names.clear()
+        _discarded_tif_names.update(stale_names)
+        _status_cache.clear()
+        _queued_tif_names.clear()
+        _current_tif_name = None
+        _latest_status = None
+
+    if pending_tasks:
+        await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+    remaining_stale_names = await asyncio.to_thread(_clear_runtime_artifacts_on_disk)
+    async with _status_lock:
+        _discarded_tif_names.clear()
+        _discarded_tif_names.update(remaining_stale_names)
 
 
 async def _skip_realtime_tif(tif_name: str, *, tif_path: Path | None = None) -> None:
@@ -1562,7 +1647,11 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
     if not data:
         raise HTTPException(status_code=400, detail="空のファイルは保存できません。")
 
-    target_path = await asyncio.to_thread(_write_bytes_with_dedup, data, REALTIME_TIFF_DIR, safe_name)
+    async with _status_lock:
+        _remove_runtime_name_from_state_unlocked(safe_name)
+        _discarded_tif_names.discard(safe_name)
+
+    target_path = await asyncio.to_thread(_replace_runtime_tif_with_bytes, data, REALTIME_TIFF_DIR, safe_name)
     dropped_paths: list[Path]
     async with _status_lock:
         _latest_status_revision += 1
@@ -1595,8 +1684,12 @@ async def save_realtime_tif_from_path(source_path: Path) -> Path:
     safe_name = _sanitize_filename(source_path.name)
     _validate_extension(safe_name)
 
+    async with _status_lock:
+        _remove_runtime_name_from_state_unlocked(safe_name)
+        _discarded_tif_names.discard(safe_name)
+
     target_path = await asyncio.to_thread(
-        _copy_with_dedup,
+        _replace_runtime_tif_from_source,
         source_path,
         REALTIME_TIFF_DIR,
         dest_name=safe_name,
@@ -1698,11 +1791,18 @@ async def get_latest_status(
                 status_saved_ts = max(latest_mtime, db_path.stat().st_mtime)
             except OSError:
                 status_saved_ts = latest_mtime
+            try:
+                latest_local_stat = latest_local.stat()
+            except FileNotFoundError:
+                # The current TIFF may have been consumed by a concurrent
+                # save/discard request while we were building the next status.
+                # Treat it as a transient queue change instead of a broken file.
+                continue
 
             next_status = RealtimeStatus(
                 tif_path=latest_local,
                 saved_at=datetime.fromtimestamp(status_saved_ts),
-                size_bytes=latest_local.stat().st_size,
+                size_bytes=int(latest_local_stat.st_size),
                 db_path=db_path,
                 inference=_build_inference_summary(rois, latest_local.name),
                 rois=rois,

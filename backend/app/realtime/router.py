@@ -269,10 +269,12 @@ async def delete_watch_project(project_name: str) -> Response:
 @router.get("/watch-projects/{project_name}/powershell", response_class=PlainTextResponse)
 async def get_watch_project_powershell(project_name: str, request: Request) -> str:
     api_url = str(request.url_for("upload_realtime_tiff"))
+    await crud.initialize_realtime_project_session(project_name)
     return watch_projects.build_powershell_watch_script(project_name, api_url)
 
 
 @router.get("/watch-projects/{project_name}/macos-command", response_class=PlainTextResponse)
 async def get_watch_project_macos_command(project_name: str, request: Request) -> str:
     api_url = str(request.url_for("upload_realtime_tiff"))
+    await crud.initialize_realtime_project_session(project_name)
     return watch_projects.build_macos_watch_script(project_name, api_url)

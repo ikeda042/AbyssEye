@@ -832,6 +832,7 @@ async def upsert_watch_project(
         raise HTTPException(status_code=400, detail="監視を有効にする場合は監視パスを入力してください。")
 
     now = datetime.now()
+    existing: WatchProjectConfig | None = None
     try:
         existing = _load_config(safe_project)
         created_at = existing.created_at
@@ -850,6 +851,17 @@ async def upsert_watch_project(
         updated_at=now,
     )
     await asyncio.to_thread(_write_config, config)
+    should_initialize_session = bool(
+        enabled
+        and normalized_path
+        and (
+            existing is None
+            or not existing.enabled
+            or existing.watch_path != normalized_path
+        )
+    )
+    if should_initialize_session:
+        await realtime_crud.initialize_realtime_project_session(safe_project)
     await _restart_watch_task(safe_project)
     return await get_watch_project(safe_project)
 
