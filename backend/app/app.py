@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
+import os
+import socket
+import threading
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi_swagger import patch_fastapi
 
@@ -29,6 +33,10 @@ FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 logger = logging.getLogger(__name__)
 _inference_warmup_task: asyncio.Task[None] | None = None
+_frontend_client_lock = threading.Lock()
+_paired_frontend_ip: str | None = None
+FRONTEND_LOCK_ENV = "ABYSSEYE_FRONTEND_LOCK"
+FRONTEND_ALLOWED_IP_ENV = "ABYSSEYE_FRONTEND_CLIENT_IP"
 
 try:
     import cv2  # type: ignore
@@ -38,6 +46,30 @@ try:
         cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
 except Exception:
     pass
+
+
+def _detect_local_backend_ips() -> set[str]:
+    ips = {"127.0.0.1", "::1", "localhost"}
+    host_env = os.getenv("APP_HOST", "").strip()
+    if host_env:
+        ips.add(host_env)
+
+    try:
+        hostname = socket.gethostname()
+        ips.add(hostname)
+        for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+            if family not in {socket.AF_INET, socket.AF_INET6}:
+                continue
+            ip_value = sockaddr[0]
+            if ip_value:
+                ips.add(ip_value)
+    except Exception:
+        pass
+
+    return ips
+
+
+LOCAL_BACKEND_IPS = _detect_local_backend_ips()
 
 app = FastAPI(
     title="AbyssEye APIs",
@@ -60,6 +92,68 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _frontend_lock_enabled() -> bool:
+    return os.getenv(FRONTEND_LOCK_ENV, "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _is_local_backend_client(client_host: str) -> bool:
+    if client_host in LOCAL_BACKEND_IPS:
+        return True
+    try:
+        return ipaddress.ip_address(client_host).is_loopback
+    except ValueError:
+        return client_host == "localhost"
+
+
+def _should_bypass_frontend_lock(request: Request) -> bool:
+    # TIFF upload must remain reachable from the watcher PC even when
+    # the interactive frontend is paired to a different client.
+    return request.method.upper() == "POST" and request.url.path == f"{API_PREFIX}/realtime/tiff"
+
+
+@app.middleware("http")
+async def restrict_frontend_access_to_paired_client(request: Request, call_next):
+    global _paired_frontend_ip
+
+    if not _frontend_lock_enabled() or _should_bypass_frontend_lock(request):
+        return await call_next(request)
+
+    client_host = (request.client.host if request.client else "") or ""
+    if not client_host:
+        return JSONResponse(status_code=403, content={"detail": "クライアントIPを判定できませんでした。"})
+
+    configured_ip = os.getenv(FRONTEND_ALLOWED_IP_ENV, "").strip()
+    if configured_ip:
+        if client_host == configured_ip or _is_local_backend_client(client_host):
+            return await call_next(request)
+        return JSONResponse(
+            status_code=403,
+            content={"detail": f"このバックエンドは {configured_ip} のフロントエンド専用です。"},
+        )
+
+    if _is_local_backend_client(client_host):
+        return await call_next(request)
+
+    with _frontend_client_lock:
+        if _paired_frontend_ip is None:
+            _paired_frontend_ip = client_host
+            logger.info("Paired this backend with frontend client IP: %s", client_host)
+        paired_ip = _paired_frontend_ip
+
+    if client_host != paired_ip:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": (
+                    f"このバックエンドは {paired_ip} のフロントエンドに紐付いています。"
+                    " 別PCから使う場合はバックエンドを再起動してください。"
+                )
+            },
+        )
+
+    return await call_next(request)
 
 app.include_router(tiff_router, prefix=API_PREFIX)
 app.include_router(tiff_bulk_router, prefix=API_PREFIX)
