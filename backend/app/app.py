@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -11,6 +13,7 @@ from fastapi_swagger import patch_fastapi
 from .databases.router import router as databases_router
 from .deepscan.router import router as deepscan_router
 from .dev.router import router as dev_router
+from .inference import crud as inference_crud
 from .inference.router import router as inference_router
 from .realtime.router import router as realtime_router
 from .realtime import watch_projects as realtime_watch_projects
@@ -24,6 +27,8 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BACKEND_DIR.parent
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+logger = logging.getLogger(__name__)
+_inference_warmup_task: asyncio.Task[None] | None = None
 
 try:
     import cv2  # type: ignore
@@ -77,10 +82,31 @@ app.mount(
 @app.on_event("startup")
 async def start_realtime_watch_projects() -> None:
     await realtime_watch_projects.start_watch_projects()
+    global _inference_warmup_task
+
+    async def _warmup() -> None:
+        try:
+            await inference_crud.warmup_active_model()
+        except HTTPException:
+            # No active model yet, or model path is intentionally unavailable.
+            return
+        except Exception:
+            logger.exception("Inference model warmup failed.")
+
+    _inference_warmup_task = asyncio.create_task(_warmup(), name="inference-model-warmup")
 
 
 @app.on_event("shutdown")
 async def stop_realtime_watch_projects() -> None:
+    global _inference_warmup_task
+    task = _inference_warmup_task
+    _inference_warmup_task = None
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await realtime_watch_projects.stop_watch_projects()
 
 

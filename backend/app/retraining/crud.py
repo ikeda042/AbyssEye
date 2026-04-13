@@ -15,10 +15,8 @@ from typing import Any, Literal
 from uuid import uuid4
 
 import numpy as np
-import tensorflow as tf
 from fastapi import HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
-from tensorflow import keras
 
 from ..inference import crud as inference_crud
 from ..tiff_manager_buld import crud as tiff_bulk_crud
@@ -142,6 +140,10 @@ _jobs: dict[str, RetrainingJob] = {}
 _job_tasks: dict[str, asyncio.Task[None]] = {}
 _jobs_lock = asyncio.Lock()
 _training_execution_lock = asyncio.Lock()
+
+
+def _get_tensorflow_modules() -> tuple[Any, Any]:
+    return inference_crud._get_tensorflow_modules()
 
 
 def _ensure_upload_dir() -> Path:
@@ -948,6 +950,7 @@ def _legacy_residual_block(
     prefix: str,
     downsample: bool = False,
 ) -> tuple[keras.KerasTensor, keras.KerasTensor]:
+    _tf, keras = _get_tensorflow_modules()
     x = keras.layers.Conv2D(filters, 3, strides=stride, padding="same", use_bias=True, name=f"{prefix}_conv1")(conv_input)
     x = keras.layers.BatchNormalization(name=f"{prefix}_bn1")(x)
     x = keras.layers.Activation("relu", name=f"{prefix}_relu1")(x)
@@ -964,6 +967,7 @@ def _legacy_residual_block(
 
 
 def _build_resnet18_classifier(num_classes: int) -> keras.Model:
+    _tf, keras = _get_tensorflow_modules()
     inputs = keras.Input(shape=(inference_crud.IMG_SIZE[1], inference_crud.IMG_SIZE[0], 3), name="input_1")
     stem = keras.layers.Conv2D(64, 3, strides=1, padding="same", use_bias=True, name="conv2d")(inputs)
     x = keras.layers.BatchNormalization(name="batch_normalization")(stem)
@@ -996,6 +1000,7 @@ def _legacy_saved_model_checkpoint_prefix(saved_model_dir: Path) -> Path:
 
 
 def _load_legacy_saved_model_weights(model: keras.Model, saved_model_dir: Path) -> None:
+    tf, keras = _get_tensorflow_modules()
     checkpoint_prefix = _legacy_saved_model_checkpoint_prefix(saved_model_dir)
     checkpoint_index_path = checkpoint_prefix.with_suffix(".index")
     if not checkpoint_index_path.is_file():
@@ -1033,6 +1038,7 @@ def _load_legacy_saved_model_weights(model: keras.Model, saved_model_dir: Path) 
 
 
 def _build_training_model(active_model_path: str | None, num_classes: int) -> tuple[keras.Model, str, str | None]:
+    _tf, keras = _get_tensorflow_modules()
     if active_model_path:
         try:
             active_path = Path(active_model_path)
@@ -1149,6 +1155,7 @@ def _train_retraining_job_sync(
     learning_rate: float,
     active_model_path: str | None,
 ) -> dict[str, Any]:
+    tf, keras = _get_tensorflow_modules()
     tf.keras.utils.set_random_seed(RANDOM_SEED)
 
     examples = _load_dataset_examples(dataset_dir)

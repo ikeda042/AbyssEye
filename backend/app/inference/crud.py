@@ -4,22 +4,23 @@ import asyncio
 import base64
 import json
 import binascii
+import importlib
+import logging
 import os
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from typing import Iterable, Protocol, Sequence
+from typing import Any, Iterable, Protocol, Sequence
 from contextlib import nullcontext
 
 import numpy as np
 import cv2
 from fastapi import HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
-import tensorflow as tf
-from tensorflow import keras
 
 from ..databases import crud as databases_crud
 
@@ -54,6 +55,10 @@ DEFAULT_ROI_PROFILE: dict[str, int | float] = {
 _active_model_path: Path | None = None
 _active_model_relative_path: str | None = None
 _active_model_lock = threading.Lock()
+_tensorflow_module: Any | None = None
+_keras_module: Any | None = None
+_tensorflow_import_lock = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -73,8 +78,24 @@ class InferenceResult:
     model_path: str
 
 
+def _get_tensorflow_modules() -> tuple[Any, Any]:
+    global _tensorflow_module, _keras_module
+
+    if _tensorflow_module is not None and _keras_module is not None:
+        return _tensorflow_module, _keras_module
+
+    with _tensorflow_import_lock:
+        if _tensorflow_module is None or _keras_module is None:
+            tf_module = importlib.import_module("tensorflow")
+            keras_module = importlib.import_module("tensorflow.keras")
+            _tensorflow_module = tf_module
+            _keras_module = keras_module
+    return _tensorflow_module, _keras_module
+
+
 def _tf_device_scope():
     """Select TensorFlow device based on env var INFERENCE_DEVICE."""
+    tf, _ = _get_tensorflow_modules()
     value = os.getenv(INFERENCE_DEVICE_ENV, "").strip().lower()
     if value in {"", "auto", "default"}:
         return nullcontext()
@@ -515,6 +536,7 @@ class _SavedModelSession:
     def __init__(self, model_path: Path):
         from tensorflow.python.saved_model import signature_constants, tag_constants  # type: ignore
 
+        tf, _ = _get_tensorflow_modules()
         self._graph = tf.Graph()
         try:
             with self._graph.as_default():
@@ -561,12 +583,32 @@ class _SavedModelSession:
 @lru_cache(maxsize=1)
 def _load_model(model_path: str) -> _Predictor:
     path = Path(model_path)
+    _, keras = _get_tensorflow_modules()
     try:
         if _is_saved_model_dir(path):
             return _SavedModelSession(path)
         return keras.models.load_model(model_path, compile=False)
     except (OSError, ValueError) as exc:  # pragma: no cover - TF errors are runtime specific
         raise HTTPException(status_code=500, detail=f"モデルの読み込みに失敗しました: {exc}") from exc
+
+
+def warmup_active_model_sync() -> str | None:
+    active_model = get_active_model()
+    if active_model is None:
+        return None
+
+    started_at = time.perf_counter()
+    predictor = _load_model(str(active_model.absolute_path.resolve()))
+    warmup_batch = np.zeros((1, IMG_SIZE[1], IMG_SIZE[0], 3), dtype=np.float32)
+    with _tf_device_scope():
+        predictor.predict(warmup_batch, verbose=0)
+    elapsed = time.perf_counter() - started_at
+    logger.info("Inference model warmup completed in %.2f sec: %s", elapsed, active_model.relative_path)
+    return active_model.relative_path
+
+
+async def warmup_active_model() -> str | None:
+    return await asyncio.to_thread(warmup_active_model_sync)
 
 
 def _strip_data_url_prefix(value: str) -> str:
