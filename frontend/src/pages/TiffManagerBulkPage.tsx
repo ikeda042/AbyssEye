@@ -1407,8 +1407,60 @@ const TiffManagerBulkPage = () => {
           </Paper>
         ) : (
           <Stack spacing={2}>
-            <Paper variant="outlined" sx={{ p: { xs: 1, md: 1.5 } }}>
-              <Stack spacing={1.5}>
+            <Box sx={{ position: "relative", pt: showSingleImageOriginToggle ? "37px" : 0 }}>
+              {showSingleImageOriginToggle ? (
+                <Box
+                  sx={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    zIndex: 2,
+                    display: "flex",
+                    gap: 0.9,
+                    alignItems: "flex-end",
+                  }}
+                >
+                  <Button
+                    variant={currentSingleImageOrigin === "realtime" ? "contained" : "outlined"}
+                    color={currentSingleImageOrigin === "realtime" ? "success" : "inherit"}
+                    onClick={() => setSingleImageOriginFilter("realtime")}
+                    sx={{
+                      minWidth: 122,
+                      px: 2.2,
+                      py: 0,
+                      height: 37,
+                      borderRadius: 0,
+                      border: "1px solid",
+                      borderColor: "divider",
+                      borderBottomWidth: 0,
+                      boxShadow: currentSingleImageOrigin === "realtime" ? 3 : 0,
+                    }}
+                  >
+                    {tt("リアルタイム", "Realtime")}
+                  </Button>
+                  <Button
+                    variant={currentSingleImageOrigin === "upload" ? "contained" : "outlined"}
+                    color={currentSingleImageOrigin === "upload" ? "primary" : "inherit"}
+                    onClick={() => setSingleImageOriginFilter("upload")}
+                    sx={{
+                      minWidth: 122,
+                      px: 2.2,
+                      py: 0,
+                      height: 37,
+                      borderRadius: 0,
+                      border: "1px solid",
+                      borderColor: "divider",
+                      borderBottomWidth: 0,
+                      boxShadow: currentSingleImageOrigin === "upload" ? 3 : 0,
+                    }}
+                  >
+                    {tt("アップロード", "Upload")}
+                  </Button>
+                </Box>
+              ) : null}
+
+              <Paper variant="outlined" sx={{ p: { xs: 1, md: 1.5 }, overflow: "visible" }}>
+                <Stack spacing={1.5}>
                 <Box>
                   <Typography variant="h6" fontWeight={500}>
                     {tt("画像リスト", "Image list")}
@@ -1417,27 +1469,6 @@ const TiffManagerBulkPage = () => {
                     {tt("画像のみをここに表示します。", "Only image entries are listed here.")}
                   </Typography>
                 </Box>
-
-                {showSingleImageOriginToggle ? (
-                  <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-                    <Button
-                      variant={currentSingleImageOrigin === "realtime" ? "contained" : "outlined"}
-                      color={currentSingleImageOrigin === "realtime" ? "success" : "inherit"}
-                      onClick={() => setSingleImageOriginFilter("realtime")}
-                      sx={{ minWidth: 120 }}
-                    >
-                      {tt("リアルタイム", "Realtime")}
-                    </Button>
-                    <Button
-                      variant={currentSingleImageOrigin === "upload" ? "contained" : "outlined"}
-                      color={currentSingleImageOrigin === "upload" ? "primary" : "inherit"}
-                      onClick={() => setSingleImageOriginFilter("upload")}
-                      sx={{ minWidth: 120 }}
-                    >
-                      {tt("アップロード", "Upload")}
-                    </Button>
-                  </Stack>
-                ) : null}
 
                 <Stack
                   direction={{ xs: "column", md: "row" }}
@@ -1692,8 +1723,9 @@ const TiffManagerBulkPage = () => {
                     </Table>
                   </TableContainer>
                 )}
-              </Stack>
-            </Paper>
+                </Stack>
+              </Paper>
+            </Box>
 
             <Paper variant="outlined" sx={{ p: { xs: 1, md: 1.5 } }}>
               <Stack spacing={1.5}>
