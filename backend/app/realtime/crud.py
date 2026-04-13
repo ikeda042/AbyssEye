@@ -42,6 +42,7 @@ ROI_CACHE_VERSION = 1
 REALTIME_STACK_DB_SUFFIX = "_bulk.db"
 MAX_PENDING_QUEUE_IMAGES = 10
 REALTIME_TEMP_DB_MARKER = "__rt_tmp__"
+REALTIME_UPLOAD_CHUNK_SIZE = 1024 * 1024
 # fmt: on
 
 logger = logging.getLogger(__name__)
@@ -1157,6 +1158,42 @@ def _replace_runtime_tif_with_bytes(data: bytes, dest_dir: Path, filename: str) 
     return target_path
 
 
+async def _stream_upload_to_temp_file(
+    upload_file: UploadFile,
+    dest_dir: Path,
+    filename: str,
+) -> tuple[Path, int]:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target_name = _sanitize_filename(filename)
+    temp_path = dest_dir / f".{Path(target_name).stem}-{uuid.uuid4().hex}.upload"
+    total_size = 0
+
+    await upload_file.seek(0)
+    try:
+        with temp_path.open("wb") as handle:
+            while True:
+                chunk = await upload_file.read(REALTIME_UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                handle.write(chunk)
+    except Exception:
+        _unlink_file_best_effort(temp_path, retries=1, sleep_seconds=0.0)
+        raise
+
+    return temp_path, total_size
+
+
+def _replace_runtime_tif_with_temp_file(temp_path: Path, dest_dir: Path, filename: str) -> Path:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target_name = _sanitize_filename(filename)
+    target_path = dest_dir / target_name
+    _delete_runtime_artifacts(target_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path.replace(target_path)
+    return target_path
+
+
 def _replace_runtime_tif_from_source(src: Path, dest_dir: Path, *, dest_name: str | None = None) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     target_name = _sanitize_filename(dest_name or src.name)
@@ -1689,38 +1726,51 @@ async def save_realtime_tif(upload_file: UploadFile) -> Path:
     safe_name = _sanitize_filename(upload_file.filename)
     _validate_extension(safe_name)
 
-    data = await upload_file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="空のファイルは保存できません。")
+    temp_upload_path: Path | None = None
+    try:
+        temp_upload_path, upload_size = await _stream_upload_to_temp_file(upload_file, REALTIME_TIFF_DIR, safe_name)
+        if upload_size <= 0:
+            raise HTTPException(status_code=400, detail="空のファイルは保存できません。")
 
-    async with _status_lock:
-        if _is_duplicate_runtime_enqueue_unlocked(safe_name, source_size=len(data)):
-            return _resolve_runtime_tif_path_unlocked(safe_name)
+        async with _status_lock:
+            if _is_duplicate_runtime_enqueue_unlocked(safe_name, source_size=upload_size):
+                return _resolve_runtime_tif_path_unlocked(safe_name)
 
-    async with _status_lock:
-        _remove_runtime_name_from_state_unlocked(safe_name)
-        _discarded_tif_names.discard(safe_name)
+        async with _status_lock:
+            _remove_runtime_name_from_state_unlocked(safe_name)
+            _discarded_tif_names.discard(safe_name)
 
-    target_path = await asyncio.to_thread(_replace_runtime_tif_with_bytes, data, REALTIME_TIFF_DIR, safe_name)
-    dropped_paths: list[Path]
-    async with _status_lock:
-        _latest_status_revision += 1
-        revision = _latest_status_revision
-        pending_status = _build_pending_realtime_status(
+        target_path = await asyncio.to_thread(
+            _replace_runtime_tif_with_temp_file,
+            temp_upload_path,
+            REALTIME_TIFF_DIR,
+            safe_name,
+        )
+        temp_upload_path = None
+
+        dropped_paths: list[Path]
+        async with _status_lock:
+            _latest_status_revision += 1
+            revision = _latest_status_revision
+            pending_status = _build_pending_realtime_status(
+                target_path,
+                source_filename=upload_file.filename or safe_name,
+                source_is_uploaded=True,
+            )
+            dropped_paths = _enqueue_runtime_status_unlocked(pending_status)
+        for dropped_path in dropped_paths:
+            await asyncio.to_thread(_delete_runtime_artifacts, dropped_path)
+        _schedule_realtime_finalize(
             target_path,
             source_filename=upload_file.filename or safe_name,
             source_is_uploaded=True,
+            status_revision=revision,
         )
-        dropped_paths = _enqueue_runtime_status_unlocked(pending_status)
-    for dropped_path in dropped_paths:
-        await asyncio.to_thread(_delete_runtime_artifacts, dropped_path)
-    _schedule_realtime_finalize(
-        target_path,
-        source_filename=upload_file.filename or safe_name,
-        source_is_uploaded=True,
-        status_revision=revision,
-    )
-    return target_path
+        return target_path
+    finally:
+        if temp_upload_path is not None:
+            await asyncio.to_thread(_unlink_file_best_effort, temp_upload_path, 1, 0.0)
+        await upload_file.close()
 
 
 async def save_realtime_tif_from_path(source_path: Path) -> Path:
