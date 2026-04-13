@@ -32,7 +32,7 @@ import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import SearchIcon from "@mui/icons-material/Search";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
-import AutoGraphIcon from "@mui/icons-material/AutoGraph";
+import BiotechIcon from "@mui/icons-material/Biotech";
 
 import { API_BASE_URL } from "../config";
 import { type Language, useI18n } from "../i18n";
@@ -1319,7 +1319,7 @@ const TiffManagerBulkPage = () => {
                     variant="contained"
                     color="success"
                     size="large"
-                    startIcon={<AutoGraphIcon fontSize="small" />}
+                    startIcon={<BiotechIcon fontSize="small" />}
                     onClick={handleOpenRealtimeEngine}
                     sx={{
                       minWidth: { xs: "100%", md: 260 },

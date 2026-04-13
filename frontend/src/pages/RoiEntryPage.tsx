@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 import { Breadcrumbs, Link, Typography, useTheme } from "@mui/material";
 import Inventory2Icon from "@mui/icons-material/Inventory2";
-import AutoGraphIcon from "@mui/icons-material/AutoGraph";
+import BiotechIcon from "@mui/icons-material/Biotech";
 import { useI18n } from "../i18n";
 import EntryCardGrid from "../ui/EntryCardGrid";
 import PageShell from "../ui/PageShell";
@@ -35,7 +35,7 @@ const RoiEntryPage = () => {
         ),
         path: "/realtime",
         accent,
-        icon: <AutoGraphIcon />,
+        icon: <BiotechIcon />,
       },
     ],
     [accent, language],
