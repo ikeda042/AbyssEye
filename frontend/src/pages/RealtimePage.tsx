@@ -92,6 +92,7 @@ const formatSequenceNumber = (value: number) => String(Math.max(1, value)).padSt
 
 const statusEndpoint = new URL("realtime/latest", API_BASE_URL).toString();
 const statusStreamEndpoint = new URL("realtime/stream", API_BASE_URL).toString();
+const sessionInitEndpoint = new URL("realtime/session/init", API_BASE_URL).toString();
 const useCurrentEndpoint = new URL("realtime/use-current", API_BASE_URL).toString();
 const discardCurrentEndpoint = new URL("realtime/discard-current", API_BASE_URL).toString();
 const buildManualLabelEndpoint = (dbName: string, recordId: number) =>
@@ -732,6 +733,43 @@ const RealtimePage = () => {
     [labels.fetchFailed, labels.unexpected],
   );
 
+  const initializeRealtimeSession = useCallback(async (): Promise<boolean> => {
+    if (!activeProject) {
+      setStatus(null);
+      setLoading(false);
+      return false;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    setRenderedTifSrc(null);
+    setSelectedOverlayRoiId(null);
+    setSelectedOverlayRoiSrc(null);
+    setSelectedOverlayRoiMeta(null);
+    setSelectedOverlayPreviewOpen(false);
+
+    try {
+      const response = await fetch(sessionInitEndpoint, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ project_name: activeProject }),
+      });
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null))?.detail;
+        throw new Error(detail || labels.fetchFailed);
+      }
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : labels.unexpected);
+      setLoading(false);
+      return false;
+    }
+  }, [activeProject, labels.fetchFailed, labels.unexpected]);
+
   const waitForNextStatus = useCallback(
     async (currentTifName?: string) => {
       for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -982,14 +1020,12 @@ const RealtimePage = () => {
   }, [selectedOverlayRoiId, status?.tif_name, tifDisplayMode, status?.rois]);
 
   useEffect(() => {
-    // Initial fetch for immediate content while stream connects
-    void fetchStatus();
     let destroyed = false;
     let eventSource: EventSource | null = null;
     let reconnectTimer: number | null = null;
 
     const connect = () => {
-      if (destroyed) return;
+      if (destroyed || !activeProject) return;
       if (eventSource) {
         eventSource.close();
         eventSource = null;
@@ -1011,7 +1047,7 @@ const RealtimePage = () => {
       eventSource.onerror = () => {
         eventSource?.close();
         eventSource = null;
-        if (destroyed) return;
+        if (destroyed || !activeProject) return;
         if (reconnectTimer !== null) return;
         reconnectTimer = window.setTimeout(() => {
           reconnectTimer = null;
@@ -1020,7 +1056,19 @@ const RealtimePage = () => {
       };
     };
 
-    connect();
+    const bootstrap = async () => {
+      const initialized = await initializeRealtimeSession();
+      if (!initialized || destroyed) {
+        return;
+      }
+      await fetchStatus();
+      if (destroyed) {
+        return;
+      }
+      connect();
+    };
+
+    void bootstrap();
 
     return () => {
       destroyed = true;
@@ -1029,7 +1077,7 @@ const RealtimePage = () => {
         window.clearTimeout(reconnectTimer);
       }
     };
-  }, [fetchStatus]);
+  }, [activeProject, fetchStatus, initializeRealtimeSession]);
 
   useEffect(() => {
     if (!activeProject) return;

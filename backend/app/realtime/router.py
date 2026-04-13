@@ -108,10 +108,22 @@ class WatchProjectListResponse(BaseModel):
     projects: list[WatchProjectResponse]
 
 
+class RealtimeSessionInitRequest(BaseModel):
+    project_name: str | None = Field(default=None, description="リアルタイムセッションを初期化する対象プロジェクト名")
+
+
 @router.post("/tiff")
 async def upload_realtime_tiff(file: UploadFile = File(...)) -> dict:
     saved_path = await crud.save_realtime_tif(file)
     return {"saved_name": saved_path.name, "saved_path": str(saved_path)}
+
+
+@router.post("/session/init")
+async def initialize_realtime_session(
+    payload: RealtimeSessionInitRequest,
+) -> dict:
+    await crud.initialize_realtime_project_session(payload.project_name)
+    return {"project_name": payload.project_name, "initialized": True}
 
 
 @router.get("/latest")
