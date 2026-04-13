@@ -572,6 +572,146 @@ def write_realtime_folder_mode(
     )
 
 
+def import_realtime_image_db(
+    folder_name: str,
+    image_relative_path: str,
+    source_db_path: Path,
+) -> Path:
+    """Import one realtime image DB into the bulk DB without re-extracting the folder."""
+    _ensure_dirs()
+    if not source_db_path.is_file():
+        raise HTTPException(status_code=404, detail=f"{source_db_path.name} が見つかりません。")
+
+    safe_folder_name = _sanitize_component(folder_name, field="フォルダ名")
+    normalized_relative = Path(image_relative_path).as_posix().strip()
+    if not normalized_relative:
+        raise HTTPException(status_code=400, detail="保存先画像名が不正です。")
+
+    db_path = _db_path_for_folder(safe_folder_name)
+
+    source_columns = (
+        "scale",
+        "num_rois",
+        "roi_id",
+        "roi_start_x",
+        "roi_start_y",
+        "roi_end_x",
+        "roi_end_y",
+        "roi_center_x",
+        "roi_center_y",
+        "roi_meta",
+        "image_width_px",
+        "image_height_px",
+        "png_blob",
+        "manual_label",
+        "ai_label",
+        "ai_model_name",
+    )
+    insert_sql = """
+        INSERT INTO roi_records (
+            folder_name,
+            image_filename,
+            image_stem,
+            scale,
+            num_rois,
+            roi_id,
+            roi_start_x,
+            roi_start_y,
+            roi_end_x,
+            roi_end_y,
+            roi_center_x,
+            roi_center_y,
+            roi_meta,
+            image_width_px,
+            image_height_px,
+            png_blob,
+            manual_label,
+            ai_label,
+            ai_model_name
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    engine = create_engine(f"sqlite:///{db_path}", echo=False)
+    Base.metadata.create_all(engine)
+    engine.dispose()
+
+    try:
+        with sqlite3.connect(source_db_path) as source_conn, sqlite3.connect(db_path) as target_conn:
+            source_conn.row_factory = sqlite3.Row
+            target_conn.row_factory = sqlite3.Row
+
+            available_columns = {
+                row["name"] for row in source_conn.execute("PRAGMA table_info(roi_records)").fetchall()
+            }
+            required_columns = {
+                "roi_id",
+                "roi_start_x",
+                "roi_start_y",
+                "roi_end_x",
+                "roi_end_y",
+                "roi_center_x",
+                "roi_center_y",
+                "roi_meta",
+                "image_width_px",
+                "image_height_px",
+                "png_blob",
+            }
+            if not required_columns.issubset(available_columns):
+                raise HTTPException(status_code=500, detail=f"{source_db_path.name} の ROI スキーマが不正です。")
+
+            source_select = ", ".join(
+                f'"{column}"' if column in available_columns else f"NULL AS {column}"
+                for column in source_columns
+            )
+            rows = source_conn.execute(
+                f"SELECT {source_select} FROM roi_records ORDER BY id ASC"
+            ).fetchall()
+
+            image_stem = Path(normalized_relative).stem
+            target_conn.execute(
+                "DELETE FROM roi_records WHERE image_filename = ?",
+                (normalized_relative,),
+            )
+
+            payload = [
+                (
+                    safe_folder_name,
+                    normalized_relative,
+                    image_stem,
+                    float(row["scale"] or DEFAULT_SCALE),
+                    int(row["num_rois"] or 0),
+                    int(row["roi_id"]),
+                    int(row["roi_start_x"]),
+                    int(row["roi_start_y"]),
+                    int(row["roi_end_x"]),
+                    int(row["roi_end_y"]),
+                    int(row["roi_center_x"]),
+                    int(row["roi_center_y"]),
+                    row["roi_meta"],
+                    int(row["image_width_px"]),
+                    int(row["image_height_px"]),
+                    row["png_blob"],
+                    row["manual_label"],
+                    row["ai_label"],
+                    row["ai_model_name"],
+                )
+                for row in rows
+            ]
+
+            if not payload:
+                raise HTTPException(status_code=500, detail=f"{source_db_path.name} に ROI データがありません。")
+
+            target_conn.executemany(insert_sql, payload)
+            target_conn.commit()
+    except HTTPException:
+        raise
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=f"{db_path.name} への保存に失敗しました: {exc}") from exc
+
+    _inference_cache_path(db_path).unlink(missing_ok=True)
+    return db_path
+
+
 def _read_realtime_folder_meta(folder_path: Path) -> dict[str, str] | None:
     meta_path = _realtime_folder_meta_path(folder_path)
     if not meta_path.is_file():

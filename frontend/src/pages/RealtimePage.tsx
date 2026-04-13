@@ -1077,7 +1077,7 @@ const RealtimePage = () => {
       await saveRealtimeWatchProject(activeProject, {
         watch_path: projectWatchPath.trim(),
         api_url: null,
-        enabled: true,
+        enabled: false,
         poll_interval_seconds: 1,
       });
       const script = await getRealtimeWatchPowerShellScript(activeProject);
@@ -1114,7 +1114,7 @@ const RealtimePage = () => {
       await saveRealtimeWatchProject(activeProject, {
         watch_path: projectWatchPath.trim(),
         api_url: null,
-        enabled: true,
+        enabled: false,
         poll_interval_seconds: 1,
       });
       const script = await getRealtimeWatchMacCommandScript(activeProject);

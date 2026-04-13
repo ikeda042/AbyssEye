@@ -1911,7 +1911,7 @@ async def copy_latest_to_primary_locations(
     stack_mode: bool = False,
     status: RealtimeStatus | None = None,
 ) -> tuple[Path, Path]:
-    """Save latest realtime TIFF as a bulk-style folder, then run ROI抽出+推論."""
+    """Save latest realtime TIFF as a bulk-style folder using the current realtime ROI DB."""
     _ensure_storage_dir()
     current_status = status or await get_latest_status()
 
@@ -1952,19 +1952,12 @@ async def copy_latest_to_primary_locations(
         dest_name=target_filename,
     )
 
-    extract_result = await tiff_bulk_crud.extract_folder(
-        folder_name=scoped_folder_name,
-        project_name=project_name,
+    db_target = await asyncio.to_thread(
+        tiff_bulk_crud.import_realtime_image_db,
+        scoped_folder_name,
+        tif_target.relative_to(folder).as_posix(),
+        current_status.db_path,
     )
-    # 推論は可能な場合のみ試行し、失敗時でも保存自体は維持します（既存運用を中断しないため）
-    try:
-        infer_result = await tiff_bulk_crud.infer_folder(
-            folder_name=scoped_folder_name,
-            project_name=project_name,
-        )
-        db_target = infer_result.db_path
-    except HTTPException:
-        db_target = extract_result.db_path
 
     return tif_target, db_target
 
