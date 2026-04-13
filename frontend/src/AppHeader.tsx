@@ -80,7 +80,7 @@ const AppHeader = ({ mode, onToggleMode }: AppHeaderProps) => {
                 fontSize: { xs: "1.35rem", sm: "1.5rem" },
                 fontFamily: '"Bricolage Grotesque", "Noto Sans JP", "Inter", system-ui, -apple-system, sans-serif',
                 letterSpacing: "0.04em",
-                textTransform: "lowercase",
+                textTransform: "none",
                 cursor: isHome ? "default" : "pointer",
                 userSelect: "none",
               }}

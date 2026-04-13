@@ -1,6 +1,6 @@
 import { useMemo, useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Breadcrumbs, Paper, Typography, useTheme } from "@mui/material";
+import { Paper, Typography, useTheme } from "@mui/material";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import Inventory2Icon from "@mui/icons-material/Inventory2";
 import ApiIcon from "@mui/icons-material/Api";
@@ -9,7 +9,7 @@ import { API_BASE_URL } from "./config";
 import { useI18n } from "./i18n";
 import PageShell from "./ui/PageShell";
 import EntryCardGrid from "./ui/EntryCardGrid";
-import { APP_TEXT_VARIANTS, PAGE_BREADCRUMBS_SX } from "./ui/layout";
+import { APP_TEXT_VARIANTS } from "./ui/layout";
 
 const HEALTHCHECK_URL = API_BASE_URL;
 const TopPage = () => {
@@ -139,14 +139,8 @@ const TopPage = () => {
 
   return (
     <PageShell
-      breadcrumbs={
-        <Breadcrumbs aria-label="breadcrumb" separator="›" sx={PAGE_BREADCRUMBS_SX}>
-          <Typography color="text.primary" fontSize={14}>
-            {t("common.home")}
-          </Typography>
-        </Breadcrumbs>
-      }
-      title="AbyssEye"
+      breadcrumbs={null}
+      title="Home"
       description={tt("使いたい機能を選択してください。", "Choose the module you want to use.")}
       headerAside={headerAside}
     >
