@@ -162,7 +162,10 @@ const upsertProject = (projectName: string) => {
   const normalized = normalizeProjectName(projectName);
   if (!normalized) return;
   try {
-    const existing = loadProjects().filter((item) => item.name.toLowerCase() !== normalized.toLowerCase());
+    const existing = loadProjects();
+    if (existing.some((item) => item.name.toLowerCase() === normalized.toLowerCase())) {
+      return;
+    }
     existing.push({ name: normalized, createdAt: Date.now() });
     existing.sort((a, b) => a.createdAt - b.createdAt);
     window.localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(existing));

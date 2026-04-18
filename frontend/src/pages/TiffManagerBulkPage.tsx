@@ -10,7 +10,10 @@ import {
   CircularProgress,
   Collapse,
   Container,
-  InputAdornment,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Link,
   Paper,
   Stack,
@@ -30,7 +33,6 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
-import SearchIcon from "@mui/icons-material/Search";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import BiotechIcon from "@mui/icons-material/Biotech";
 
@@ -123,6 +125,8 @@ type FileWithRelativePath = File & { webkitRelativePath?: string };
 type ProjectEntry = {
   name: string;
   createdAt: number;
+  createdBy?: string;
+  notes?: string;
 };
 
 const PROJECT_STORAGE_KEY = "abyssEye:data-projects:v1";
@@ -139,15 +143,27 @@ const loadProjects = (): ProjectEntry[] => {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((entry) => {
+    const normalizedEntries = parsed
+      .map((entry): ProjectEntry | null => {
         if (!entry || typeof entry !== "object") return null;
         const name = normalizeProjectName(String((entry as { name?: unknown }).name || ""));
         const createdAt = Number((entry as { createdAt?: unknown }).createdAt);
         if (!name || Number.isNaN(createdAt)) return null;
-        return { name, createdAt };
+        const createdByRaw =
+          (entry as { createdBy?: unknown; creator?: unknown }).createdBy ??
+          (entry as { creator?: unknown }).creator;
+        const createdBy = typeof createdByRaw === "string" ? createdByRaw.trim() : "";
+        const notesRaw = (entry as { notes?: unknown }).notes;
+        const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
+        return {
+          name,
+          createdAt,
+          createdBy: createdBy || undefined,
+          notes: notes || undefined,
+        };
       })
-      .filter((entry): entry is ProjectEntry => entry !== null)
+      .filter((entry): entry is ProjectEntry => entry !== null);
+    return normalizedEntries
       .filter((entry, index, rows) => rows.findIndex((row) => row.name === entry.name) === index)
       .sort((a, b) => a.name.localeCompare(b.name));
   } catch {
@@ -186,9 +202,13 @@ const TiffManagerBulkPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedProject = normalizeProjectName(searchParams.get("project") || "");
   const [folders, setFolders] = useState<FolderEntry[]>([]);
-  const [projectSearch, setProjectSearch] = useState("");
-  const [projectName, setProjectName] = useState("");
   const [projects, setProjects] = useState<ProjectEntry[]>(() => loadProjects());
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [projectDialogError, setProjectDialogError] = useState<string | null>(null);
+  const [projectDraftName, setProjectDraftName] = useState("");
+  const [projectDraftCreator, setProjectDraftCreator] = useState("");
+  const [projectDraftNotes, setProjectDraftNotes] = useState("");
+  const [noteDialogProject, setNoteDialogProject] = useState<ProjectEntry | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [batchInferRunning, setBatchInferRunning] = useState(false);
@@ -233,7 +253,12 @@ const TiffManagerBulkPage = () => {
 
   const syncProjects = (updater: ProjectEntry[]) => {
     const normalized = updater
-      .map((entry) => ({ name: normalizeProjectName(entry.name), createdAt: entry.createdAt }))
+      .map((entry) => ({
+        name: normalizeProjectName(entry.name),
+        createdAt: entry.createdAt,
+        createdBy: entry.createdBy?.trim() || undefined,
+        notes: entry.notes?.trim() || undefined,
+      }))
       .filter((entry) => entry.name)
       .sort((a, b) => a.name.localeCompare(b.name));
     setProjects(normalized);
@@ -273,7 +298,6 @@ const TiffManagerBulkPage = () => {
 
   useEffect(() => {
     if (!activeProject) {
-      setProjectSearch("");
       setResult(null);
     }
     setSingleImageDeleteMode(false);
@@ -415,29 +439,56 @@ const TiffManagerBulkPage = () => {
     });
   }, [t]);
 
+  const resetProjectDialog = useCallback(() => {
+    setProjectDialogError(null);
+    setProjectDraftName("");
+    setProjectDraftCreator("");
+    setProjectDraftNotes("");
+  }, []);
+
+  const handleOpenCreateProjectDialog = useCallback(() => {
+    resetProjectDialog();
+    setProjectDialogOpen(true);
+  }, [resetProjectDialog]);
+
+  const handleCloseCreateProjectDialog = useCallback(() => {
+    setProjectDialogOpen(false);
+    setProjectDialogError(null);
+  }, []);
+
   const createProject = async () => {
-    const name = normalizeProjectName(projectName);
+    const name = normalizeProjectName(projectDraftName);
+    const createdBy = projectDraftCreator.trim();
+    const notes = projectDraftNotes.trim();
     if (!name) {
-      setError(t("projects.createError"));
+      setProjectDialogError(t("projects.createError"));
       return;
     }
     if (projects.some((project) => project.name.toLowerCase() === name.toLowerCase())) {
-      setError(t("projects.alreadyExists"));
+      setProjectDialogError(t("projects.alreadyExists"));
       return;
     }
     try {
       await purgeProjectArtifacts(name);
-      const next = [...projects, { name, createdAt: Date.now() }];
+      const next = [
+        ...projects,
+        {
+          name,
+          createdAt: Date.now(),
+          createdBy: createdBy || undefined,
+          notes: notes || undefined,
+        },
+      ];
       syncProjects(next);
-      setProjectName("");
-      setProjectSearch("");
       setFolders([]);
       setResult(null);
       setError(null);
+      setProjectDialogError(null);
       setInfo(t("projects.created", { name }));
-      handleOpenProject(name);
+      setProjectDialogOpen(false);
+      resetProjectDialog();
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("projects.createError"));
+      setProjectDialogError(err instanceof Error ? err.message : t("projects.createError"));
     }
   };
 
@@ -741,11 +792,7 @@ const TiffManagerBulkPage = () => {
     }
   }, [deleteFolderRequest, deletingSelectedMultiImages, fetchFolders, selectedMultiImageFolders, t, tt]);
 
-  const filteredProjects = useMemo(() => {
-    if (!projectSearch.trim()) return projects;
-    const query = projectSearch.trim().toLowerCase();
-    return projects.filter((project) => project.name.toLowerCase().includes(query));
-  }, [projectSearch, projects]);
+  const filteredProjects = useMemo(() => projects, [projects]);
 
   const getFolderOriginLabel = useCallback(
     (folder: FolderEntry) =>
@@ -1111,33 +1158,13 @@ const TiffManagerBulkPage = () => {
 
           <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 } }}>
             <Stack spacing={2}>
-              <TextField
-                size="small"
-                placeholder={t("projects.placeholder")}
-                value={projectName}
-                onChange={(event) => setProjectName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void createProject();
-                  }
-                }}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <AddCircleOutlineIcon fontSize="small" />
-                    </InputAdornment>
-                  ),
-                }}
-                sx={{ maxWidth: 520 }}
-              />
               <Button
                 variant="contained"
                 startIcon={<AddCircleOutlineIcon />}
-                onClick={() => void createProject()}
-                disabled={!normalizeProjectName(projectName)}
+                onClick={handleOpenCreateProjectDialog}
+                sx={{ alignSelf: "flex-start" }}
               >
-                {tt("プロジェクトを保存", "Save project")}
+                {tt("プロジェクトを作成", "Create project")}
               </Button>
             </Stack>
           </Paper>
@@ -1148,31 +1175,11 @@ const TiffManagerBulkPage = () => {
           </Stack>
 
           <Paper variant="outlined" sx={{ p: { xs: 1, md: 1.5 } }}>
-            <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
-              <TextField
-                size="small"
-                placeholder={t("projects.searchPlaceholder")}
-                value={projectSearch}
-                onChange={(event) => setProjectSearch(event.target.value)}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <SearchIcon fontSize="small" />
-                    </InputAdornment>
-                  ),
-                }}
-                sx={{ minWidth: { xs: "100%", md: 360 }, flexGrow: 1 }}
-              />
-              <Button variant="outlined" size="small" onClick={() => setProjectSearch("")} disabled={!projectSearch.trim()}>
-                {t("projects.clear")}
-              </Button>
-            </Stack>
-
-            <Box mt={2}>
+            <Box>
               {filteredProjects.length === 0 ? (
                 <Box textAlign="center" py={6}>
                   <Typography variant="h6" fontWeight={500}>
-                    {projectSearch.trim() ? t("projects.emptySearch") : t("projects.empty")}
+                    {t("projects.empty")}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
                     {t("projects.emptyDesc")}
@@ -1186,6 +1193,7 @@ const TiffManagerBulkPage = () => {
                         <TableCell>{t("projects.table.name")}</TableCell>
                         <TableCell align="right">{t("projects.table.createdAt")}</TableCell>
                         <TableCell align="center" sx={{ width: 100 }} />
+                        <TableCell align="center" sx={{ width: 100 }} />
                         <TableCell align="center" sx={{ width: 120 }} />
                         <TableCell align="center" sx={{ width: 120 }} />
                       </TableRow>
@@ -1194,9 +1202,16 @@ const TiffManagerBulkPage = () => {
                     {filteredProjects.map((project) => (
                       <TableRow key={project.name} hover>
                           <TableCell sx={{ maxWidth: 520 }}>
-                            <Typography noWrap fontWeight={500} sx={ELLIPSIS_TEXT_SX}>
-                              {project.name}
-                            </Typography>
+                            <Stack spacing={0.35}>
+                              <Typography noWrap fontWeight={500} sx={ELLIPSIS_TEXT_SX}>
+                                {project.name}
+                              </Typography>
+                              {project.createdBy ? (
+                                <Typography noWrap variant="body2" color="text.secondary" sx={ELLIPSIS_TEXT_SX}>
+                                  {project.createdBy}
+                                </Typography>
+                              ) : null}
+                            </Stack>
                           </TableCell>
                           <TableCell align="right">
                             <Typography color="text.secondary" variant="body2">
@@ -1204,6 +1219,13 @@ const TiffManagerBulkPage = () => {
                                 hour12: false,
                               })}
                             </Typography>
+                          </TableCell>
+                          <TableCell align="center">
+                            {project.notes ? (
+                              <Button variant="outlined" size="small" onClick={() => setNoteDialogProject(project)}>
+                                {tt("備考", "Notes")}
+                              </Button>
+                            ) : null}
                           </TableCell>
                           <TableCell align="center">
                             <Button variant="contained" size="small" onClick={() => handleOpenProject(project.name)}>
@@ -1241,6 +1263,78 @@ const TiffManagerBulkPage = () => {
             </Box>
           </Paper>
         </Stack>
+
+        <Dialog open={projectDialogOpen} onClose={handleCloseCreateProjectDialog} fullWidth maxWidth="sm">
+          <DialogTitle>{tt("プロジェクトを作成", "Create project")}</DialogTitle>
+          <DialogContent>
+            <Stack spacing={2} sx={{ pt: 0.5 }}>
+              {projectDialogError ? (
+                <Alert severity="error" variant="outlined">
+                  {projectDialogError}
+                </Alert>
+              ) : null}
+              <TextField
+                autoFocus
+                fullWidth
+                label={tt("プロジェクト名", "Project name")}
+                value={projectDraftName}
+                onChange={(event) => setProjectDraftName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void createProject();
+                  }
+                }}
+              />
+              <TextField
+                fullWidth
+                label={tt("作成者", "Creator")}
+                value={projectDraftCreator}
+                onChange={(event) => setProjectDraftCreator(event.target.value)}
+              />
+              <TextField
+                fullWidth
+                multiline
+                minRows={4}
+                label={tt("備考", "Notes")}
+                value={projectDraftNotes}
+                onChange={(event) => setProjectDraftNotes(event.target.value)}
+              />
+            </Stack>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2.5 }}>
+            <Button onClick={handleCloseCreateProjectDialog}>{tt("キャンセル", "Cancel")}</Button>
+            <Button
+              variant="contained"
+              onClick={() => void createProject()}
+              disabled={!normalizeProjectName(projectDraftName)}
+            >
+              {tt("作成", "Create")}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        <Dialog open={Boolean(noteDialogProject)} onClose={() => setNoteDialogProject(null)} fullWidth maxWidth="sm">
+          <DialogTitle>{tt("備考", "Notes")}</DialogTitle>
+          <DialogContent>
+            <Stack spacing={1.25} sx={{ pt: 0.5 }}>
+              <Typography variant="subtitle1" fontWeight={600}>
+                {noteDialogProject?.name}
+              </Typography>
+              {noteDialogProject?.createdBy ? (
+                <Typography variant="body2" color="text.secondary">
+                  {tt("作成者", "Creator")}: {noteDialogProject.createdBy}
+                </Typography>
+              ) : null}
+              <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {noteDialogProject?.notes}
+              </Typography>
+            </Stack>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2.5 }}>
+            <Button onClick={() => setNoteDialogProject(null)}>{tt("閉じる", "Close")}</Button>
+          </DialogActions>
+        </Dialog>
       </Container>
     );
   }

@@ -23,7 +23,7 @@ const TopPage = () => {
   const cards = useMemo(
     () => [
       {
-        title: tt("データベース", "Database"),
+        title: tt("プロジェクト", "Projects"),
         description: tt(
           "プロジェクトを作成して画像を整理し、画像リストやリアルタイムエンジンへ進みます。",
           "Create projects, organize images, and move on to image lists or the realtime engine.",
