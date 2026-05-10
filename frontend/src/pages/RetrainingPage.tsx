@@ -199,7 +199,7 @@ const RetrainingPage = () => {
   const [registeringJobId, setRegisteringJobId] = useState<string | null>(null);
   const [runName, setRunName] = useState("");
   const [epochs, setEpochs] = useState(8);
-  const [batchSize, setBatchSize] = useState(16);
+  const [batchSize, setBatchSize] = useState(32);
   const [learningRate, setLearningRate] = useState("0.0001");
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
