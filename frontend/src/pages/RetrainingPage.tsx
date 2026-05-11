@@ -256,13 +256,16 @@ const RetrainingPage = () => {
     }
   }, [isUnlocked, tt]);
 
-  const fetchJobs = useCallback(async () => {
+  const fetchJobs = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = Boolean(options?.silent);
     if (!isUnlocked) {
       setJobs([]);
       setJobsLoading(false);
       return;
     }
-    setJobsLoading(true);
+    if (!silent) {
+      setJobsLoading(true);
+    }
     try {
       const response = await fetch(endpoint("retraining/jobs"), {
         headers: { Accept: "application/json" },
@@ -275,9 +278,13 @@ const RetrainingPage = () => {
       setJobs(payload.jobs);
     } catch (err) {
       setError((prev) => prev ?? (err instanceof Error ? err.message : tt("再学習ジョブ一覧の取得に失敗しました。", "Failed to load retraining jobs.")));
-      setJobs([]);
+      if (!silent) {
+        setJobs([]);
+      }
     } finally {
-      setJobsLoading(false);
+      if (!silent) {
+        setJobsLoading(false);
+      }
     }
   }, [isUnlocked, tt]);
 
@@ -330,7 +337,7 @@ const RetrainingPage = () => {
   useEffect(() => {
     if (!isUnlocked) return undefined;
     const timer = window.setInterval(() => {
-      void fetchJobs();
+      void fetchJobs({ silent: true });
     }, 4000);
     return () => window.clearInterval(timer);
   }, [fetchJobs, isUnlocked]);
@@ -558,7 +565,7 @@ const RetrainingPage = () => {
       }
       upsertJob(payload);
       setInfo(tt("再学習ジョブを開始しました。", "Started the retraining job."));
-      void fetchJobs();
+      void fetchJobs({ silent: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : tt("再学習ジョブの開始に失敗しました。", "Failed to start the retraining job."));
     } finally {
@@ -749,7 +756,7 @@ const RetrainingPage = () => {
                 ) : sourceMetadata ? (
                   <Stack spacing={0.5}>
                     <Typography variant="body2" color="text.secondary">
-                      {tt("manual label 付き ROI 数", "Manual-labeled ROI count")}: {sourceMetadata.labeled_roi_count}
+                      {tt("再学習対象 ROI 数", "Retraining ROI count")}: {sourceMetadata.labeled_roi_count}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
                       {tt("クラス分布", "Class distribution")}: {classCountSummary}
@@ -770,8 +777,8 @@ const RetrainingPage = () => {
           {sourceMetadata && !sourceMetadata.has_training_dataset ? (
             <Alert severity="info">
               {tt(
-                "このデータソースには _training_dataset が見つかりませんでした。再学習に使うには manual label 付き ROI を含むプロジェクト保存 ZIP を用意してください。",
-                "This data source does not include _training_dataset. Prepare a saved project ZIP that contains manually labeled ROIs before retraining.",
+                "このデータソースには _training_dataset が見つかりませんでした。再学習に使うには manual label または DeepScan 確認済み ROI を含むプロジェクト保存 ZIP を用意してください。",
+                "This data source does not include _training_dataset. Prepare a saved project ZIP that contains manually labeled or DeepScan-reviewed ROIs before retraining.",
               )}
             </Alert>
           ) : null}

@@ -145,6 +145,10 @@ class ManualRoiDeleteResponse(BaseModel):
     deleted_roi_id: int
 
 
+class DeepScanReviewResponse(BaseModel):
+    reviewed_roi_count: int
+
+
 class DeepscanCellCountImageResponse(BaseModel):
     relative_path: str
     tif_name: str
@@ -202,6 +206,15 @@ async def remove_manual_roi(
 ) -> ManualRoiDeleteResponse:
     deleted = await asyncio.to_thread(crud.delete_manual_roi, db_name, record_id, tif_name=tif_name)
     return ManualRoiDeleteResponse(deleted_roi_id=deleted)
+
+
+@router.post("/{db_name}/review", response_model=DeepScanReviewResponse)
+async def mark_deepscan_reviewed(
+    db_name: str,
+    tif_name: str | None = Query(None, description="表示対象TIFF (相対パスまたはファイル名)"),
+) -> DeepScanReviewResponse:
+    reviewed = await asyncio.to_thread(crud.mark_image_reviewed, db_name, tif_name=tif_name)
+    return DeepScanReviewResponse(reviewed_roi_count=reviewed)
 
 
 @router.get("/{db_name}/cell-count-summary", response_model=DeepscanCellCountSummaryResponse)

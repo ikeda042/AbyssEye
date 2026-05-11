@@ -100,6 +100,8 @@ class TrainingExample:
     manual_label: str | None
     ai_label: str | None
     ai_model_name: str | None
+    reviewed_in_deepscan: bool
+    label_source: str | None
     manual_added: bool
     image_width_px: int | None
     image_height_px: int | None
@@ -200,10 +202,10 @@ def _build_retraining_quality(
     if not has_training_dataset:
         warnings.append("_training_dataset が見つかりません。")
     if labeled_roi_count <= 0:
-        warnings.append("manual label 付き ROI がありません。")
+        warnings.append("再学習対象 ROI がありません。")
     if labeled_roi_count > 0 and labeled_roi_count < MIN_RETRAIN_TOTAL_ROIS:
         warnings.append(
-            f"manual label 付き ROI が {labeled_roi_count} 件です。再学習は最低 {MIN_RETRAIN_TOTAL_ROIS} 件以上を推奨します。"
+            f"再学習対象 ROI が {labeled_roi_count} 件です。再学習は最低 {MIN_RETRAIN_TOTAL_ROIS} 件以上を推奨します。"
         )
     if present_class_count > 0 and present_class_count < MIN_RETRAIN_CLASS_COUNT:
         warnings.append(
@@ -213,7 +215,7 @@ def _build_retraining_quality(
         count = class_counts.get(str(label), 0)
         if 0 < count < RECOMMENDED_MIN_CLASS_SAMPLES:
             warnings.append(
-                f"Class {label} の manual label が {count} 件です。各クラス {RECOMMENDED_MIN_CLASS_SAMPLES} 件以上あると安定しやすくなります。"
+                f"Class {label} の再学習対象 ROI が {count} 件です。各クラス {RECOMMENDED_MIN_CLASS_SAMPLES} 件以上あると安定しやすくなります。"
             )
 
     can_retrain = (
@@ -261,18 +263,23 @@ def _collect_db_model_names(db_path: Path) -> tuple[int, list[str], dict[str, in
             if "manual_label" not in available_columns:
                 return 0, [], class_counts
             ai_model_select = "ai_model_name" if "ai_model_name" in available_columns else "NULL AS ai_model_name"
+            ai_label_select = "ai_label" if "ai_label" in available_columns else "NULL AS ai_label"
+            roi_meta_select = "roi_meta" if "roi_meta" in available_columns else "NULL AS roi_meta"
             rows = conn.execute(
                 f"""
-                SELECT manual_label, {ai_model_select}
+                SELECT manual_label, {ai_label_select}, {ai_model_select}, {roi_meta_select}
                 FROM roi_records
-                WHERE manual_label IS NOT NULL AND TRIM(manual_label) <> ''
                 """
             ).fetchall()
     except sqlite3.DatabaseError:
         return 0, [], class_counts
 
     for row in rows:
-        label = _parse_class_label(row["manual_label"])
+        label, _label_source, _reviewed = tiff_bulk_crud._resolve_training_label(
+            raw_manual_label=row["manual_label"],
+            raw_ai_label=row["ai_label"],
+            raw_roi_meta=row["roi_meta"],
+        )
         if label is None:
             continue
         labeled_roi_count += 1
@@ -737,9 +744,11 @@ def _load_dataset_examples(dataset_dir: Path) -> list[TrainingExample]:
                 image_filename=str(row.get("image_filename") or ""),
                 record_id=int(_parse_int(row.get("record_id")) or 0),
                 roi_id=int(_parse_int(row.get("roi_id")) or 0),
-                manual_label=str(row.get("manual_label") or label),
+                manual_label=(str(row.get("manual_label")) if row.get("manual_label") not in (None, "") else None),
                 ai_label=(str(row.get("ai_label")) if row.get("ai_label") not in (None, "") else None),
                 ai_model_name=_normalize_model_path(row.get("ai_model_name")),
+                reviewed_in_deepscan=bool(_parse_int(row.get("reviewed_in_deepscan")) or 0),
+                label_source=(str(row.get("label_source")) if row.get("label_source") not in (None, "") else None),
                 manual_added=bool(_parse_int(row.get("manual_added")) or 0),
                 image_width_px=_parse_int(row.get("image_width_px")),
                 image_height_px=_parse_int(row.get("image_height_px")),
@@ -752,7 +761,7 @@ def _load_dataset_examples(dataset_dir: Path) -> list[TrainingExample]:
         )
 
     if not examples:
-        raise HTTPException(status_code=400, detail="manual label 付き ROI が見つかりませんでした。")
+        raise HTTPException(status_code=400, detail="再学習対象 ROI が見つかりませんでした。")
     return examples
 
 
@@ -799,6 +808,8 @@ def _write_examples_manifest(path: Path, examples: list[TrainingExample]) -> Non
             "manual_label",
             "ai_label",
             "ai_model_name",
+            "reviewed_in_deepscan",
+            "label_source",
             "manual_added",
             "image_width_px",
             "image_height_px",
@@ -821,6 +832,8 @@ def _write_examples_manifest(path: Path, examples: list[TrainingExample]) -> Non
                 item.manual_label,
                 item.ai_label,
                 item.ai_model_name,
+                int(item.reviewed_in_deepscan),
+                item.label_source,
                 int(item.manual_added),
                 item.image_width_px,
                 item.image_height_px,

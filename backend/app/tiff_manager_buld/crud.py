@@ -39,6 +39,8 @@ REALTIME_FOLDER_MODE_SINGLE = "single"
 REALTIME_FOLDER_MODE_STACK = "stack"
 FOLDER_SOURCE_REALTIME = "realtime"
 FOLDER_SOURCE_UPLOAD = "upload"
+ROI_META_REVIEWED_IN_DEEPSCAN_KEY = "reviewed_in_deepscan"
+ROI_META_REVIEWED_IN_DEEPSCAN_AT_KEY = "reviewed_in_deepscan_at"
 
 
 def _read_tiff_unchanged(path: Path) -> np.ndarray | None:
@@ -1098,6 +1100,39 @@ def _deserialize_roi_meta_for_export(raw_meta: object) -> dict[str, object]:
     return {}
 
 
+def _is_roi_reviewed_in_deepscan(meta: dict[str, object] | None) -> bool:
+    if not isinstance(meta, dict):
+        return False
+    raw = meta.get(ROI_META_REVIEWED_IN_DEEPSCAN_KEY)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _resolve_training_label(
+    *,
+    raw_manual_label: object,
+    raw_ai_label: object,
+    raw_roi_meta: object,
+) -> tuple[int | None, str | None, bool]:
+    manual_label = _parse_cached_label(raw_manual_label)
+    if manual_label is not None and 0 <= manual_label <= 3:
+        return manual_label, "manual", _is_roi_reviewed_in_deepscan(_deserialize_roi_meta_for_export(raw_roi_meta))
+
+    roi_meta = _deserialize_roi_meta_for_export(raw_roi_meta)
+    reviewed_in_deepscan = _is_roi_reviewed_in_deepscan(roi_meta)
+    if reviewed_in_deepscan:
+        ai_label = _parse_cached_label(raw_ai_label)
+        if ai_label is not None and 0 <= ai_label <= 3:
+            return ai_label, "ai_reviewed", reviewed_in_deepscan
+
+    return None, None, reviewed_in_deepscan
+
+
 def _build_training_dataset_entries(
     db_path: Path,
     *,
@@ -1115,6 +1150,8 @@ def _build_training_dataset_entries(
             "manual_label",
             "ai_label",
             "ai_model_name",
+            "reviewed_in_deepscan",
+            "label_source",
             "manual_added",
             "image_width_px",
             "image_height_px",
@@ -1159,8 +1196,12 @@ def _build_training_dataset_entries(
         return rows, files
 
     for row in query_rows:
-        manual_label = _parse_cached_label(row["manual_label"])
-        if manual_label is None or manual_label < 0 or manual_label > 3:
+        effective_label, label_source, reviewed_in_deepscan = _resolve_training_label(
+            raw_manual_label=row["manual_label"],
+            raw_ai_label=row["ai_label"],
+            raw_roi_meta=row["roi_meta"],
+        )
+        if effective_label is None or label_source is None:
             continue
         png_blob = row["png_blob"]
         if png_blob is None:
@@ -1176,20 +1217,22 @@ def _build_training_dataset_entries(
             f"__roi{roi_id:04d}"
             f"__rec{record_id:06d}.png"
         )
-        relative_path = Path(f"class{manual_label}") / file_stem
+        relative_path = Path(f"class{effective_label}") / file_stem
         files.append((relative_path.as_posix(), bytes(png_blob)))
         rows.append(
             [
                 relative_path.as_posix(),
-                manual_label,
+                effective_label,
                 display_name,
                 db_path.name,
                 image_filename,
                 record_id,
                 roi_id,
-                manual_label,
+                row["manual_label"],
                 row["ai_label"],
                 row["ai_model_name"],
+                int(reviewed_in_deepscan),
+                label_source,
                 int(manual_added),
                 row["image_width_px"],
                 row["image_height_px"],
@@ -1262,6 +1305,8 @@ async def export_project_archive(project_name: str) -> Path:
                     "manual_label",
                     "ai_label",
                     "ai_model_name",
+                    "reviewed_in_deepscan",
+                    "label_source",
                     "manual_added",
                     "image_width_px",
                     "image_height_px",

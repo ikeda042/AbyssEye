@@ -232,6 +232,7 @@ const TiffManagerBulkPage = () => {
     (folder: FolderEntry) => Boolean(folder.has_inference_result || completedInferenceFolders.includes(folder.name)),
     [completedInferenceFolders],
   );
+  const hasDeepScanSource = useCallback((folder: FolderEntry) => Boolean(folder.has_extraction_db), []);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [result, setResult] = useState<ExtractionResult | null>(null);
@@ -926,12 +927,8 @@ const TiffManagerBulkPage = () => {
       setResult(null);
       setOpeningSingleImageFolder(folder.name);
       try {
-        if (!hasReadyInferenceResult(folder)) {
-          throw new Error(
-            folder.has_extraction_db
-              ? tt("先に推論を実行してください。", "Run inference first.")
-              : tt("先にROI抽出を実行してください。", "Run ROI extraction first."),
-          );
+        if (!hasDeepScanSource(folder)) {
+          throw new Error(tt("先にROI抽出を実行してください。", "Run ROI extraction first."));
         }
         const dbName = `${folder.name}_bulk.db`;
         const params = new URLSearchParams({ db_name: dbName, source: "db" });
@@ -948,7 +945,7 @@ const TiffManagerBulkPage = () => {
         setOpeningSingleImageFolder(null);
       }
     },
-    [activeProject, hasReadyInferenceResult, navigate, tt],
+    [activeProject, hasDeepScanSource, navigate, tt],
   );
 
   const handleSelectedSingleImageExtraction = useCallback(async () => {
@@ -1776,7 +1773,7 @@ const TiffManagerBulkPage = () => {
                                 </Typography>
                               </TableCell>
                               <TableCell align="right">
-                                {hasReadyInferenceResult(folder) ? (
+                                {hasDeepScanSource(folder) ? (
                                   <Button
                                     variant="outlined"
                                     size="small"

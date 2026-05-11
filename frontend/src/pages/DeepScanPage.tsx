@@ -184,6 +184,13 @@ const buildManualLabelEndpoint = (dbName: string, recordId: number) =>
   ).toString();
 const buildManualRoiAddEndpoint = (dbName: string) =>
   new URL(`deepscan/${encodeURIComponent(dbName)}/manual-rois`, API_BASE_URL).toString();
+const buildReviewEndpoint = (dbName: string, tifName?: string) => {
+  const url = new URL(`deepscan/${encodeURIComponent(dbName)}/review`, API_BASE_URL);
+  if (tifName) {
+    url.searchParams.set("tif_name", tifName);
+  }
+  return url.toString();
+};
 const buildManualRoiDeleteEndpoint = (dbName: string, recordId: number, tifName?: string) => {
   const url = new URL(`deepscan/${encodeURIComponent(dbName)}/manual-rois/${recordId}`, API_BASE_URL);
   if (tifName) {
@@ -698,6 +705,15 @@ const DeepScanPage = () => {
         }
         statusCacheRef.current.set(cacheKey, payload);
         setStatus(payload);
+        try {
+          const reviewTarget = payload.current_image_relative_path?.trim() || tifName;
+          await fetch(buildReviewEndpoint(targetDb, reviewTarget || undefined), {
+            method: "POST",
+            headers: { Accept: "application/json" },
+          });
+        } catch {
+          // Review persistence is best-effort and should not block DeepScan rendering.
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : labels.unexpected);
         if (!statusCacheRef.current.get(cacheKey)) {

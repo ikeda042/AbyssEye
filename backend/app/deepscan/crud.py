@@ -26,6 +26,8 @@ FOCUS_MERGED_FILENAME = "__focus_merged.tif"
 ROI_3D_IOU_THRESHOLD = 0.20
 ROI_3D_CENTER_DISTANCE = 0.08
 ROI_3D_AREA_RATIO_MAX = 8.0
+ROI_META_REVIEWED_IN_DEEPSCAN_KEY = "reviewed_in_deepscan"
+ROI_META_REVIEWED_IN_DEEPSCAN_AT_KEY = "reviewed_in_deepscan_at"
 
 FOCUS_METRIC_ALIASES: dict[str, str] = {
     "ten": "ften",
@@ -156,6 +158,65 @@ def _safe_class_label(raw: object) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def _mark_image_reviewed_in_deepscan(db_path: Path, image_relative_path: str | None) -> int:
+    updated_count = 0
+    reviewed_at = datetime.now().isoformat()
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            columns = _columns_for_table(conn, "roi_records")
+            if "roi_meta" not in columns:
+                return 0
+
+            if "image_filename" in columns and image_relative_path:
+                rows = conn.execute(
+                    """
+                    SELECT id, roi_meta
+                    FROM roi_records
+                    WHERE image_filename = ?
+                    ORDER BY id ASC
+                    """,
+                    (image_relative_path,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, roi_meta
+                    FROM roi_records
+                    ORDER BY id ASC
+                    """
+                ).fetchall()
+
+            payload: list[tuple[str, int]] = []
+            for row in rows:
+                meta = _deserialize_roi_meta(row["roi_meta"])
+                if not isinstance(meta, dict):
+                    meta = {}
+                if meta.get(ROI_META_REVIEWED_IN_DEEPSCAN_KEY) is True:
+                    continue
+                meta[ROI_META_REVIEWED_IN_DEEPSCAN_KEY] = True
+                meta[ROI_META_REVIEWED_IN_DEEPSCAN_AT_KEY] = reviewed_at
+                payload.append((json.dumps(meta, ensure_ascii=False), int(row["id"])))
+
+            if not payload:
+                return 0
+
+            conn.executemany("UPDATE roi_records SET roi_meta = ? WHERE id = ?", payload)
+            conn.commit()
+            updated_count = len(payload)
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=f"DeepScan確認状態の保存に失敗しました: {exc}") from exc
+
+    return updated_count
+
+
+def mark_image_reviewed(db_name: str, *, tif_name: str | None = None) -> int:
+    db_path = databases_crud.get_database_file_path(db_name)
+    _tif_path, _images, current_image, _current_index = _resolve_tif_path(db_path, tif_name=tif_name)
+    image_relative_path = current_image.relative_path if current_image else None
+    return _mark_image_reviewed_in_deepscan(db_path, image_relative_path)
 
 
 def _chunked(values: list[str], chunk_size: int = 500) -> list[list[str]]:
