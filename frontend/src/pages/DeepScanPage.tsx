@@ -224,6 +224,8 @@ const getFloatingPreviewMaxWidth = (viewportWidth: number) => {
 };
 const clampFloatingPreviewWidth = (viewportWidth: number, width: number) =>
   Math.min(getFloatingPreviewMaxWidth(viewportWidth), Math.max(180, width));
+const FLOATING_PREVIEW_ANCHOR_GAP = 12;
+const FLOATING_PREVIEW_CHROME_HEIGHT = 122;
 
 const overlayReveal = keyframes`
   0% { opacity: 0; transform: scale(0.97); }
@@ -418,6 +420,9 @@ const DeepScanPage = () => {
   const [roiDisplaySources, setRoiDisplaySources] = useState<Record<number, string>>({});
   const [overlayRevision, setOverlayRevision] = useState(0);
   const imageContainerRef = useRef<HTMLDivElement | null>(null);
+  const pageContainerRef = useRef<HTMLDivElement | null>(null);
+  const sidebarColumnRef = useRef<HTMLDivElement | null>(null);
+  const manualControlsRef = useRef<HTMLDivElement | null>(null);
   const [imageNaturalSize, setImageNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const [imageLayout, setImageLayout] = useState<{
     displayWidth: number;
@@ -599,12 +604,42 @@ const DeepScanPage = () => {
   }, [viewportSize.width]);
 
   const floatingPreviewMargin = useMemo(() => getFloatingPreviewMargin(viewportSize.width), [viewportSize.width]);
-  const getDefaultFloatingPreviewPosition = useCallback(() => {
+  const getAnchoredFloatingPreviewLayout = useCallback(() => {
+    const sidebarRect = sidebarColumnRef.current?.getBoundingClientRect();
+    const manualRect = manualControlsRef.current?.getBoundingClientRect();
+    const imageRect = imageContainerRef.current?.getBoundingClientRect();
+
+    if (!sidebarRect || !manualRect || !imageRect) {
+      return {
+        left: Math.max(12, viewportSize.width - floatingPreviewWidth - floatingPreviewMargin),
+        top: viewportSize.width < 900 ? 84 : 96,
+        width: clampFloatingPreviewWidth(viewportSize.width, floatingPreviewWidth),
+      };
+    }
+
+    const top = Math.max(12, Math.round(manualRect.bottom + FLOATING_PREVIEW_ANCHOR_GAP));
+    const availableHeight = Math.max(180, Math.round(imageRect.bottom - top));
+    const sidebarMaxWidth = Math.max(180, Math.floor(sidebarRect.width - 8));
+    const desiredWidth = Math.max(180, Math.min(sidebarMaxWidth, availableHeight - FLOATING_PREVIEW_CHROME_HEIGHT));
+    const width = Math.min(sidebarMaxWidth, clampFloatingPreviewWidth(viewportSize.width, desiredWidth));
+    const left = Math.max(
+      floatingPreviewMargin,
+      Math.round(sidebarRect.right - width - 4),
+    );
+
     return {
-      left: Math.max(12, viewportSize.width - floatingPreviewWidth - floatingPreviewMargin),
-      top: viewportSize.width < 900 ? 84 : 96,
+      left,
+      top,
+      width,
     };
   }, [floatingPreviewMargin, floatingPreviewWidth, viewportSize.width]);
+  const getDefaultFloatingPreviewPosition = useCallback(() => {
+    const anchored = getAnchoredFloatingPreviewLayout();
+    return {
+      left: anchored.left,
+      top: anchored.top,
+    };
+  }, [getAnchoredFloatingPreviewLayout]);
 
   useEffect(() => {
     if (!projectName || deepscanSource === "realtime") {
@@ -906,7 +941,11 @@ const DeepScanPage = () => {
     const maxLeft = Math.max(floatingPreviewMargin, viewportSize.width - floatingPreviewWidth - floatingPreviewMargin);
     const maxTop = Math.max(12, viewportSize.height - previewHeight - floatingPreviewMargin);
     setFloatingPreviewPosition((prev) => {
-      const next = prev ?? getDefaultFloatingPreviewPosition();
+      const anchored = getAnchoredFloatingPreviewLayout();
+      if (prev === null) {
+        setFloatingPreviewWidth(anchored.width);
+      }
+      const next = prev ?? { left: anchored.left, top: anchored.top };
       return {
         left: Math.min(Math.max(next.left, floatingPreviewMargin), maxLeft),
         top: Math.min(Math.max(next.top, 12), maxTop),
@@ -916,11 +955,15 @@ const DeepScanPage = () => {
     floatingPreviewMargin,
     floatingPreviewWidth,
     floatingPreviewEmbedded,
-    getDefaultFloatingPreviewPosition,
+    getAnchoredFloatingPreviewLayout,
     selectedOverlayPreviewOpen,
     viewportSize.height,
     viewportSize.width,
   ]);
+
+  useEffect(() => {
+    if (!selectedOverlayPreviewOpen || !floatingPreviewEmbedded) return;
+  }, [floatingPreviewEmbedded, selectedOverlayPreviewOpen]);
 
   useEffect(() => {
     if (!floatingPreviewDragging && !floatingPreviewResizing) return;
@@ -1220,7 +1263,7 @@ const DeepScanPage = () => {
   }, [floatingPreviewEmbedded]);
 
   const handleFloatingPreviewResizePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || floatingPreviewEmbedded) return;
     event.preventDefault();
     event.stopPropagation();
     floatingPreviewResizeStateRef.current = {
@@ -1228,23 +1271,30 @@ const DeepScanPage = () => {
       startWidth: floatingPreviewRef.current?.getBoundingClientRect().width ?? floatingPreviewWidth,
     };
     setFloatingPreviewResizing(true);
-  }, [floatingPreviewWidth]);
+  }, [floatingPreviewEmbedded, floatingPreviewWidth]);
 
   const handleToggleFloatingPreviewEmbed = useCallback(() => {
     const card = floatingPreviewRef.current;
-    if (!card) {
+    const container = pageContainerRef.current;
+    if (!card || !container) {
       setFloatingPreviewEmbedded((prev) => !prev);
       return;
     }
-    const rect = card.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
     if (floatingPreviewEmbedded) {
-      setFloatingPreviewPosition({ left: rect.left, top: rect.top });
+      setFloatingPreviewWidth(Math.round(cardRect.width));
+      setFloatingPreviewPosition({
+        left: Math.round(cardRect.left),
+        top: Math.round(cardRect.top),
+      });
       setFloatingPreviewEmbedded(false);
       return;
     }
+    const containerRect = container.getBoundingClientRect();
+    setFloatingPreviewWidth(Math.round(cardRect.width));
     setFloatingPreviewPosition({
-      left: rect.left + window.scrollX,
-      top: rect.top + window.scrollY,
+      left: Math.round(cardRect.left - containerRect.left),
+      top: Math.round(cardRect.top - containerRect.top),
     });
     setFloatingPreviewEmbedded(true);
   }, [floatingPreviewEmbedded]);
@@ -1473,6 +1523,7 @@ const DeepScanPage = () => {
 
   return (
     <ThemeProvider theme={deepScanTheme}>
+      <Box ref={pageContainerRef} sx={{ position: "relative" }}>
       <Container maxWidth={false} sx={PAGE_CONTAINER_SX}>
         <Stack spacing={2}>
           <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
@@ -1525,15 +1576,15 @@ const DeepScanPage = () => {
                 <CardContent>
                   <Stack
                     direction={{ xs: "column", lg: "row" }}
-                    spacing={1.5}
+                    spacing={2}
                     alignItems="stretch"
                   >
                     <Box
                       sx={{
                         flex: 1,
                         minWidth: 0,
-                        maxWidth: { lg: 1140 },
-                        flexBasis: { lg: 1140 },
+                        maxWidth: { lg: 1380 },
+                        flexBasis: { lg: 1380 },
                         borderRadius: 1,
                         overflow: "hidden",
                         border: "1px solid rgba(15,23,42,0.1)",
@@ -1649,11 +1700,17 @@ const DeepScanPage = () => {
                       ref={imageContainerRef}
                       onClick={(event) => void handleImageClickForManualRoi(event)}
                       sx={{
-                        flex: 1,
+                        flex: "0 0 auto",
                         position: "relative",
                         width: "100%",
-                        maxWidth: { xs: "100%", md: 1080, lg: 1140 },
-                        minHeight: { xs: 420, md: 630, lg: 705 },
+                        maxWidth: { xs: "100%", md: 1180, lg: 1380 },
+                        aspectRatio: imageNaturalSize
+                          ? `${imageNaturalSize.width} / ${imageNaturalSize.height}`
+                          : status.processed_shape
+                          ? `${status.processed_shape.width} / ${status.processed_shape.height}`
+                          : status.original_shape
+                          ? `${status.original_shape.width} / ${status.original_shape.height}`
+                          : "16 / 10",
                         backgroundColor: (theme) =>
                           theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
                         overflow: "hidden",
@@ -1776,12 +1833,13 @@ const DeepScanPage = () => {
                     </Box>
                   </Box>
                   <Stack
+                    ref={sidebarColumnRef}
                     spacing={1.25}
                     sx={{
                       width: "100%",
                       minWidth: 0,
-                      maxWidth: { lg: 560 },
-                      flexBasis: { lg: 540 },
+                      maxWidth: { lg: 420 },
+                      flexBasis: { lg: 420 },
                       flexShrink: 0,
                       alignSelf: "stretch",
                       pt: { lg: "92px" },
@@ -1789,6 +1847,7 @@ const DeepScanPage = () => {
                   >
                     <Stack spacing={1.25}>
                       <Box
+                        ref={manualControlsRef}
                         sx={{
                           border: "1px dashed rgba(15,23,42,0.15)",
                           borderRadius: 1,
@@ -1910,6 +1969,109 @@ const DeepScanPage = () => {
                           )}
                         </Stack>
                       </Box>
+                      {false ? (
+                        <Card
+                          variant="outlined"
+                          sx={{
+                            alignSelf: "flex-end",
+                            width: "100%",
+                            maxWidth: floatingPreviewWidth,
+                            borderRadius: 2,
+                            border: "1px solid rgba(148,163,184,0.32)",
+                            overflow: "hidden",
+                            boxShadow: "0 18px 36px rgba(15,23,42,0.18)",
+                            backgroundColor: (theme) => theme.palette.background.paper,
+                          }}
+                        >
+                          <Stack spacing={1.1} sx={{ p: 1.5 }}>
+                            <Box
+                              sx={{
+                                pt: 0.25,
+                                minHeight: 74,
+                                display: "grid",
+                                gridTemplateRows: "auto auto auto",
+                                alignContent: "start",
+                                userSelect: "none",
+                              }}
+                            >
+                              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 0.4 }}>
+                                <Typography variant="subtitle2" fontWeight={600}>
+                                  {labels.selectedRoi}
+                                </Typography>
+                                <Button
+                                  size="small"
+                                  variant="contained"
+                                  onClick={handleToggleFloatingPreviewEmbed}
+                                  sx={{ minWidth: 0, px: 1, py: 0.2, fontSize: 11, lineHeight: 1.4, whiteSpace: "nowrap" }}
+                                >
+                                  {labels.previewRelease}
+                                </Button>
+                              </Stack>
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                sx={{
+                                  display: "block",
+                                  lineHeight: 1.45,
+                                  whiteSpace: "normal",
+                                  overflowWrap: "anywhere",
+                                  wordBreak: "break-word",
+                                }}
+                              >
+                                Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
+                                {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}) / {labels.confidence}(AI):{" "}
+                                {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
+                              </Typography>
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                sx={{
+                                  display: "block",
+                                  mt: 0.45,
+                                  lineHeight: 1.45,
+                                  whiteSpace: "nowrap",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  minHeight: 18,
+                                  visibility: frameLabelMode === "manual" && selectedOverlayLabelInfo?.source === "ai" ? "visible" : "hidden",
+                                }}
+                              >
+                                {labels.manualFallbackWarning}
+                              </Typography>
+                            </Box>
+                            <Box
+                              sx={{
+                                width: "100%",
+                                aspectRatio: "1 / 1",
+                                borderRadius: 1.5,
+                                border: `2px solid ${selectedRoiColor ?? "rgba(148,163,184,0.6)"}`,
+                                backgroundColor: (theme) =>
+                                  theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
+                                overflow: "hidden",
+                                display: "block",
+                              }}
+                            >
+                              {selectedOverlayRoiSrc ? (
+                                <Box
+                                  component="img"
+                                  src={selectedOverlayRoiSrc}
+                                  alt="Selected ROI"
+                                  sx={{
+                                    width: "100%",
+                                    height: "100%",
+                                    objectFit: "cover",
+                                    display: "block",
+                                  }}
+                                />
+                              ) : (
+                                <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ px: 2 }}>
+                                  {labels.noRoiSelected}
+                                </Typography>
+                              )}
+                            </Box>
+                          </Stack>
+                        </Card>
+                      ) : null}
                       <Box
                         aria-hidden={!showFocusTrack}
                         sx={{
@@ -2259,8 +2421,12 @@ const DeepScanPage = () => {
           elevation={10}
           sx={{
             position: floatingPreviewEmbedded ? "absolute" : "fixed",
-            top: floatingPreviewPosition?.top ?? getDefaultFloatingPreviewPosition().top,
-            left: floatingPreviewPosition?.left ?? getDefaultFloatingPreviewPosition().left,
+            top:
+              floatingPreviewPosition?.top ??
+              (floatingPreviewEmbedded ? 0 : getDefaultFloatingPreviewPosition().top),
+            left:
+              floatingPreviewPosition?.left ??
+              (floatingPreviewEmbedded ? 0 : getDefaultFloatingPreviewPosition().left),
             width: floatingPreviewWidth,
             zIndex: (theme) => theme.zIndex.appBar - 1,
             borderRadius: 2,
@@ -2298,10 +2464,8 @@ const DeepScanPage = () => {
               sx={{
                 pt: 0.25,
                 pr: 3,
-                minHeight: 74,
-                display: "grid",
-                gridTemplateRows: "auto auto auto",
-                alignContent: "start",
+                display: "flex",
+                flexDirection: "column",
                 cursor: floatingPreviewEmbedded ? "default" : floatingPreviewDragging ? "grabbing" : "grab",
                 userSelect: "none",
               }}
@@ -2310,41 +2474,49 @@ const DeepScanPage = () => {
                 <Typography variant="subtitle2" fontWeight={600}>
                   {labels.selectedRoi}
                 </Typography>
-                <Button
-                  size="small"
-                  variant={floatingPreviewEmbedded ? "contained" : "outlined"}
-                  onClick={handleToggleFloatingPreviewEmbed}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  sx={{ minWidth: 0, px: 1, py: 0.2, fontSize: 11, lineHeight: 1.4, whiteSpace: "nowrap" }}
-                >
-                  {floatingPreviewEmbedded ? labels.previewRelease : labels.previewEmbed}
-                </Button>
               </Stack>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: "block", lineHeight: 1.45, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-              >
-                Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
-                {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}) / {labels.confidence}(AI):{" "}
-                {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
-              </Typography>
               <Typography
                 variant="caption"
                 color="text.secondary"
                 sx={{
                   display: "block",
-                  mt: 0.45,
                   lineHeight: 1.45,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  minHeight: 18,
-                  visibility: frameLabelMode === "manual" && selectedOverlayLabelInfo?.source === "ai" ? "visible" : "hidden",
+                  whiteSpace: "normal",
+                  overflowWrap: "anywhere",
+                  wordBreak: "break-word",
                 }}
               >
-                {labels.manualFallbackWarning}
+                Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
+                {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}) / {labels.confidence}(AI):{" "}
+                {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
               </Typography>
+              {frameLabelMode === "manual" && selectedOverlayLabelInfo?.source === "ai" ? (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{
+                    display: "block",
+                    mt: 0.35,
+                    lineHeight: 1.45,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {labels.manualFallbackWarning}
+                </Typography>
+              ) : null}
+            </Box>
+            <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 0.15, mb: 0.35 }}>
+              <Button
+                size="small"
+                variant={floatingPreviewEmbedded ? "contained" : "outlined"}
+                onClick={handleToggleFloatingPreviewEmbed}
+                onPointerDown={(event) => event.stopPropagation()}
+                sx={{ minWidth: 0, px: 1, py: 0.2, fontSize: 11, lineHeight: 1.4, whiteSpace: "nowrap" }}
+              >
+                {floatingPreviewEmbedded ? labels.previewRelease : labels.previewEmbed}
+              </Button>
             </Box>
             <Box
               sx={{
@@ -2402,6 +2574,7 @@ const DeepScanPage = () => {
           />
         </Card>
       )}
+      </Box>
     </ThemeProvider>
   );
 };
