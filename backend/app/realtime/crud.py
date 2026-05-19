@@ -1338,6 +1338,8 @@ async def initialize_realtime_project_session(project_name: str | None) -> None:
 
     normalized_project = tiff_bulk_crud._sanitize_component(project_name or "_", field="プロジェクト名")
     async with _status_lock:
+        if _active_realtime_project_name == normalized_project:
+            return
         _latest_status_revision += 1
         _active_realtime_project_name = normalized_project
         pending_tasks = list(_pending_finalize_tasks_by_name.values())
