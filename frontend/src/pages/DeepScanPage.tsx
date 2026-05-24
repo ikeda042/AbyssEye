@@ -55,6 +55,7 @@ type RealtimeROI = {
   png_base64: string;
   manual_label?: string | number | null;
   manual_added?: boolean;
+  manual_cell_count?: number | null;
 };
 
 type Dimensions = {
@@ -476,7 +477,7 @@ const DeepScanPage = () => {
         "Manualモードでもラベルが無いROIはAIラベルで描画します。手動追加ROIは破線で表示されます。",
         "Manual mode falls back to AI labels when manual labels are missing. Manually added ROIs are shown with dashed boxes.",
       ),
-      previewLabelMode: tt("プレビューのラベル基準", "Preview label mode"),
+      previewLabelMode: tt("ラベル表示基準", "Label display mode"),
       dragToReassign: tt(
         "推論画像を別のクラス枠へドラッグ＆ドロップすると manual_label を更新します。",
         "Drag an inference preview image to another class bucket to update its manual_label.",
@@ -515,7 +516,7 @@ const DeepScanPage = () => {
       manualRoiAddFailed: tt("手動ROI追加に失敗しました。", "Failed to add manual ROI."),
       manualRoiDeleteFailed: tt("ROI削除に失敗しました。", "Failed to delete ROI."),
       manualOnlyDeleteHint: tt("削除できるのは手動追加ROIのみです。", "Only manually added ROIs can be deleted."),
-      inferencePreview: tt("推論プレビュー表示モード", "Inference preview display mode"),
+      inferencePreview: tt("クラス別ROIプレビュー", "Class-based ROI preview"),
       noImages: tt("まだ割り当てられた画像がありません。", "No images assigned yet."),
       infoSelectDb: tt("DeepScanを表示するDBを選択してください。", "Select a DB to view DeepScan."),
       focusCurrent: tt("現在スコア", "Current score"),
@@ -1057,6 +1058,7 @@ const DeepScanPage = () => {
       predictedClass: selectedOverlayRoiMeta.predicted_class,
     };
   }, [selectedOverlayRoiMeta, frameLabelMode]);
+  const selectedOverlayConfidenceText = selectedOverlayRoiMeta ? (selectedOverlayRoiMeta.confidence * 100).toFixed(1) : "-";
 
   const selectedRoiColor =
     (selectedOverlayLabelInfo && classColors[selectedOverlayLabelInfo.label]) ||
@@ -1420,6 +1422,12 @@ const DeepScanPage = () => {
   const updateManualLabel = useCallback(
     async (roiId: number, label: string | null) => {
       if (!dbName) return;
+      const targetRoi = status?.rois?.find((roi) => roi.roi_id === roiId) ?? null;
+      const parsedRequestedLabel = parseManualLabel(label);
+      const normalizedLabel =
+        targetRoi && parsedRequestedLabel !== null && parsedRequestedLabel === targetRoi.predicted_class
+          ? null
+          : label;
       const isSelected = selectedOverlayRoiId === roiId;
       if (isSelected) {
         setManualLabelSaving(true);
@@ -1433,7 +1441,7 @@ const DeepScanPage = () => {
             Accept: "application/json",
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ manual_label: label }),
+          body: JSON.stringify({ manual_label: normalizedLabel }),
         });
         if (!response.ok) {
           const detail = (await response.json().catch(() => null))?.detail;
@@ -1443,19 +1451,19 @@ const DeepScanPage = () => {
           if (!prev || !prev.rois) return prev;
           return {
             ...prev,
-            rois: prev.rois.map((roi) => (roi.roi_id === roiId ? { ...roi, manual_label: label } : roi)),
+            rois: prev.rois.map((roi) => (roi.roi_id === roiId ? { ...roi, manual_label: normalizedLabel } : roi)),
           };
         });
         if (isSelected) {
           setManualLabelMessage(labels.manualUpdateSuccess);
-          setSelectedOverlayRoiMeta((prev) => (prev ? { ...prev, manual_label: label ?? null } : prev));
+          setSelectedOverlayRoiMeta((prev) => (prev ? { ...prev, manual_label: normalizedLabel ?? null } : prev));
         }
         const cacheKey = `${dbName}::${currentTifParam || "__default__"}`;
         const cached = statusCacheRef.current.get(cacheKey);
         if (cached && cached.rois) {
           statusCacheRef.current.set(cacheKey, {
             ...cached,
-            rois: cached.rois.map((roi) => (roi.roi_id === roiId ? { ...roi, manual_label: label } : roi)),
+            rois: cached.rois.map((roi) => (roi.roi_id === roiId ? { ...roi, manual_label: normalizedLabel } : roi)),
           });
         }
       } catch (err) {
@@ -1468,7 +1476,7 @@ const DeepScanPage = () => {
         }
       }
     },
-    [dbName, currentTifParam, labels.manualUpdateFailed, labels.manualUpdateSuccess, selectedOverlayRoiId],
+    [dbName, currentTifParam, labels.manualUpdateFailed, labels.manualUpdateSuccess, selectedOverlayRoiId, status?.rois],
   );
 
   const handleManualLabelUpdate = useCallback(
@@ -2018,9 +2026,9 @@ const DeepScanPage = () => {
                                   wordBreak: "break-word",
                                 }}
                               >
-                                Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta.predicted_class} (
+                                Class {selectedOverlayLabelInfo?.label ?? selectedOverlayRoiMeta?.predicted_class ?? "-"} (
                                 {selectedOverlayLabelInfo?.source === "manual" ? "manual" : "AI"}) / {labels.confidence}(AI):{" "}
-                                {(selectedOverlayRoiMeta.confidence * 100).toFixed(1)}%
+                                {selectedOverlayConfidenceText}%
                               </Typography>
                               <Typography
                                 variant="caption"
@@ -2054,7 +2062,7 @@ const DeepScanPage = () => {
                               {selectedOverlayRoiSrc ? (
                                 <Box
                                   component="img"
-                                  src={selectedOverlayRoiSrc}
+                                  src={selectedOverlayRoiSrc ?? undefined}
                                   alt="Selected ROI"
                                   sx={{
                                     width: "100%",
@@ -2296,7 +2304,7 @@ const DeepScanPage = () => {
                     onDragLeave={handleBucketDragLeave}
                     onDrop={(event) => handleBucketDrop(event, classIndex)}
                   >
-                    <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start" mb={1} spacing={1}>
                       <Typography variant="subtitle1" fontWeight={500}>
                         {label} ({bucket.length})
                       </Typography>
@@ -2326,10 +2334,10 @@ const DeepScanPage = () => {
                           const imageSrc = roiDisplaySources[roi.roi_id] || `data:image/png;base64,${roi.png_base64}`;
                           const isSelected = selectedOverlayRoiId === roi.roi_id;
                           return (
-                            <Box
-                              key={`${classIndex}-${roi.roi_id}`}
-                              sx={{
-                                border: "1px solid #e2e8f0",
+                              <Box
+                                key={`${classIndex}-${roi.roi_id}`}
+                                sx={{
+                                  border: "1px solid #e2e8f0",
                                 borderRadius: 1,
                                 overflow: "hidden",
                                 backgroundColor: (theme) => theme.palette.background.paper,
@@ -2355,19 +2363,19 @@ const DeepScanPage = () => {
                                   event.stopPropagation();
                                   handleSelectOverlayRoi(roi.roi_id);
                                 }}
-                            >
-                              <Box
-                                component="img"
+                              >
+                                <Box
+                                  component="img"
                                 src={imageSrc}
                                 alt={`ROI ${roi.roi_id} class ${classIndex}`}
                                 sx={{
                                   width: "100%",
                                   aspectRatio: "1 / 1",
                                   objectFit: "cover",
-                                  display: "block",
-                                }}
-                              />
-                            </Box>
+                                    display: "block",
+                                  }}
+                                />
+                              </Box>
                           );
                         })}
                       </Box>

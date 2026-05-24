@@ -28,6 +28,7 @@ ROI_3D_CENTER_DISTANCE = 0.08
 ROI_3D_AREA_RATIO_MAX = 8.0
 ROI_META_REVIEWED_IN_DEEPSCAN_KEY = "reviewed_in_deepscan"
 ROI_META_REVIEWED_IN_DEEPSCAN_AT_KEY = "reviewed_in_deepscan_at"
+ROI_META_MANUAL_CELL_COUNT_KEY = "manual_cell_count"
 
 FOCUS_METRIC_ALIASES: dict[str, str] = {
     "ten": "ften",
@@ -160,6 +161,15 @@ def _safe_class_label(raw: object) -> int | None:
     return int(value)
 
 
+def _safe_manual_cell_count(raw: object) -> int | None:
+    value = _safe_int_or_none(raw)
+    if value is None:
+        return None
+    if value < 0:
+        return None
+    return int(value)
+
+
 def _mark_image_reviewed_in_deepscan(db_path: Path, image_relative_path: str | None) -> int:
     updated_count = 0
     reviewed_at = datetime.now().isoformat()
@@ -217,6 +227,46 @@ def mark_image_reviewed(db_name: str, *, tif_name: str | None = None) -> int:
     _tif_path, _images, current_image, _current_index = _resolve_tif_path(db_path, tif_name=tif_name)
     image_relative_path = current_image.relative_path if current_image else None
     return _mark_image_reviewed_in_deepscan(db_path, image_relative_path)
+
+
+def update_manual_cell_count(db_name: str, record_id: int, manual_cell_count: int | None) -> dict[str, int | None]:
+    if record_id <= 0:
+        raise HTTPException(status_code=400, detail="record_id は1以上で指定してください。")
+    if manual_cell_count is not None and manual_cell_count < 0:
+        raise HTTPException(status_code=400, detail="manual_cell_count は0以上で指定してください。")
+
+    db_path = databases_crud.get_database_file_path(db_name)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            columns = _columns_for_table(conn, "roi_records")
+            if "roi_meta" not in columns:
+                raise HTTPException(status_code=500, detail="ROIメタデータ列が見つかりません。")
+
+            row = conn.execute(
+                "SELECT id, roi_meta FROM roi_records WHERE id = ?",
+                (record_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="指定されたレコードが見つかりません。")
+
+            meta = _deserialize_roi_meta(row["roi_meta"])
+            if not isinstance(meta, dict):
+                meta = {}
+            if manual_cell_count is None:
+                meta.pop(ROI_META_MANUAL_CELL_COUNT_KEY, None)
+            else:
+                meta[ROI_META_MANUAL_CELL_COUNT_KEY] = int(manual_cell_count)
+
+            conn.execute(
+                "UPDATE roi_records SET roi_meta = ? WHERE id = ?",
+                (json.dumps(meta, ensure_ascii=False), record_id),
+            )
+            conn.commit()
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=f"manual cell count の保存に失敗しました: {exc}") from exc
+
+    return {"record_id": int(record_id), "manual_cell_count": manual_cell_count}
 
 
 def _chunked(values: list[str], chunk_size: int = 500) -> list[list[str]]:
@@ -1127,6 +1177,9 @@ def _load_rois_for_image(db_name: str, db_path: Path, image_relative_path: str) 
         result = inference_crud.predict_label_for_record(db_name=db_name, record_id=record_id)
         raw_meta = _deserialize_roi_meta(row["roi_meta"])
         manual_added = bool(raw_meta.get("manual_added")) if isinstance(raw_meta, dict) else False
+        manual_cell_count = _safe_manual_cell_count(
+            raw_meta.get(ROI_META_MANUAL_CELL_COUNT_KEY) if isinstance(raw_meta, dict) else None
+        )
         rois.append(
             realtime_crud.RealtimeROI(
                 roi_id=record_id,
@@ -1145,6 +1198,7 @@ def _load_rois_for_image(db_name: str, db_path: Path, image_relative_path: str) 
                 ai_label=row["ai_label"],
                 ai_model_name=row["ai_model_name"],
                 manual_added=manual_added,
+                manual_cell_count=manual_cell_count,
             )
         )
 
@@ -1552,6 +1606,7 @@ def add_manual_roi(
         ai_label=str(result.predicted_class),
         ai_model_name=result.model_path,
         manual_added=True,
+        manual_cell_count=None,
     )
 
 

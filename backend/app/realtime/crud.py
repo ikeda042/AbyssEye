@@ -83,6 +83,7 @@ class RealtimeROI:
     ai_label: str | None = None
     ai_model_name: str | None = None
     manual_added: bool = False
+    manual_cell_count: int | None = None
 
 
 @dataclass
@@ -136,6 +137,22 @@ def _normalize_focus_metric(raw: str) -> str:
         return "ften"
     normalized = raw.strip().lower().replace("-", "").replace("_", "")
     return FOCUS_METRIC_ALIASES.get(normalized, "ften")
+
+
+def _extract_manual_cell_count(meta_obj: object) -> int | None:
+    if not isinstance(meta_obj, dict):
+        return None
+    raw_value = meta_obj.get("manual_cell_count")
+    if isinstance(raw_value, bool):
+        return int(raw_value)
+    if isinstance(raw_value, (int, float)):
+        return int(raw_value)
+    if isinstance(raw_value, str):
+        try:
+            return int(float(raw_value.strip()))
+        except ValueError:
+            return None
+    return None
 
 
 def _focus_metric_values(gray: np.ndarray) -> dict[str, float]:
@@ -1540,6 +1557,7 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
         raw_meta = row["roi_meta"] if "roi_meta" in row.keys() else None
         meta_obj = _deserialize_roi_meta(raw_meta)
         manual_added = bool(meta_obj.get("manual_added")) if isinstance(meta_obj, dict) else False
+        manual_cell_count = _extract_manual_cell_count(meta_obj)
         cached_result = cached.get(roi_id) if cached else None
         if cached_result:
             continue
@@ -1570,6 +1588,7 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
         raw_meta = row["roi_meta"] if "roi_meta" in row.keys() else None
         meta_obj = _deserialize_roi_meta(raw_meta)
         manual_added = bool(meta_obj.get("manual_added")) if isinstance(meta_obj, dict) else False
+        manual_cell_count = _extract_manual_cell_count(meta_obj)
         if cached_result:
             rois.append(
                 RealtimeROI(
@@ -1589,6 +1608,7 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                     ai_label=ai_label_val,
                     ai_model_name=ai_model_val,
                     manual_added=manual_added,
+                    manual_cell_count=manual_cell_count,
                 )
             )
             predicted_class_str = str(int(cached_result["predicted_class"]))
@@ -1624,6 +1644,7 @@ def _load_rois_with_inference(db_path: Path, tif_path: Path) -> list[RealtimeROI
                 ai_label=ai_label_val,
                 ai_model_name=ai_model_val,
                 manual_added=manual_added,
+                manual_cell_count=manual_cell_count,
             )
         )
         cache_dirty = True

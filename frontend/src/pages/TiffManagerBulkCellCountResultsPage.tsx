@@ -17,6 +17,7 @@ import {
   Paper,
   Select,
   Stack,
+  TextField,
   Table,
   TableBody,
   TableCell,
@@ -58,6 +59,7 @@ type ResultRoi = {
   image_height_px?: number;
   manual_label?: string | number | null;
   manual_added?: boolean;
+  manual_cell_count?: number | null;
 };
 
 type DeepScanStatus = {
@@ -116,6 +118,17 @@ const compareText = (left: string, right: string) =>
     sensitivity: "base",
   });
 
+const manualCellCountKey = (roi: Pick<ResultRoi, "roi_id"> & { dbName?: string }) =>
+  `${roi.dbName ?? ""}:${roi.roi_id}`;
+
+const parseManualCellCountInput = (raw: string | undefined): number | null => {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isInteger(parsed) || parsed < 2) return null;
+  return parsed;
+};
+
 const TiffManagerBulkCellCountResultsPage = () => {
   const { language } = useI18n();
   const tt = useCallback((ja: string, en: string) => (language === "ja" ? ja : en), [language]);
@@ -131,6 +144,11 @@ const TiffManagerBulkCellCountResultsPage = () => {
   const [selectedClass, setSelectedClass] = useState<0 | 1 | 2 | 3>(0);
   const [sortKey, setSortKey] = useState<RoiSortKey>("image");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
+  const [manualCellCountInputs, setManualCellCountInputs] = useState<Record<string, string>>({});
+  const [manualCellCountError, setManualCellCountError] = useState<string | null>(null);
+  const [manualCellCountMessage, setManualCellCountMessage] = useState<string | null>(null);
+  const [totalCellCount, setTotalCellCount] = useState<number | null>(null);
+  const [cellCountSaving, setCellCountSaving] = useState(false);
   const exportedAtLabel = useMemo(() => new Date().toLocaleString(language === "ja" ? "ja-JP" : "en-US"), [language]);
   const fileNameBase = useMemo(
     () => (projectName || "cell_count_results").replace(/[^A-Za-z0-9._-]+/g, "_"),
@@ -174,6 +192,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
 
     setLoading(true);
     setError(null);
+    setTotalCellCount(null);
     try {
       const folderResponse = await fetch(endpoint(`tiff-bulk/folders?project_name=${encodeURIComponent(projectName)}`), {
         headers: { Accept: "application/json" },
@@ -274,6 +293,24 @@ const TiffManagerBulkCellCountResultsPage = () => {
     setSelectedClass((currentClass) => (results.counts[currentClass] > 0 ? currentClass : availableClass));
   }, [results]);
 
+  useEffect(() => {
+    if (!results) {
+      setManualCellCountInputs({});
+      setManualCellCountError(null);
+      setManualCellCountMessage(null);
+      setTotalCellCount(null);
+      return;
+    }
+    const nextInputs: Record<string, string> = {};
+    results.classBuckets[1].forEach((roi) => {
+      nextInputs[manualCellCountKey(roi)] =
+        roi.manual_cell_count === null || roi.manual_cell_count === undefined ? "" : String(roi.manual_cell_count);
+    });
+    setManualCellCountInputs(nextInputs);
+    setManualCellCountError(null);
+    setManualCellCountMessage(null);
+  }, [results]);
+
   const handlePrintPdf = useCallback(() => {
     if (typeof window === "undefined") return;
     const originalTitle = window.document.title;
@@ -341,6 +378,96 @@ const TiffManagerBulkCellCountResultsPage = () => {
     });
     return items;
   }, [results, selectedClass, sortKey, sortOrder]);
+
+  const class1Rois = results?.classBuckets[1] ?? [];
+
+  const updateManualCellCountInput = useCallback((roiKey: string, value: string) => {
+    setManualCellCountInputs((prev) => ({
+      ...prev,
+      [roiKey]: value.replace(/[^\d]/g, ""),
+    }));
+    setManualCellCountError(null);
+    setManualCellCountMessage(null);
+    setTotalCellCount(null);
+  }, []);
+
+  const setPresetManualCellCount = useCallback((roiKey: string, value: 2 | 3 | 4) => {
+    setManualCellCountInputs((prev) => ({
+      ...prev,
+      [roiKey]: String(value),
+    }));
+    setManualCellCountError(null);
+    setManualCellCountMessage(null);
+    setTotalCellCount(null);
+  }, []);
+
+  const handleCalculateTotalCellCount = useCallback(async () => {
+    if (!results) return;
+
+    const class1Counts = new Map<string, number>();
+    for (const roi of class1Rois) {
+      const key = manualCellCountKey(roi);
+      const parsed = parseManualCellCountInput(manualCellCountInputs[key]);
+      if (parsed === null) {
+        setManualCellCountError(tt("Class 1 の入力を完了してください。", "Complete all Class 1 inputs."));
+        setManualCellCountMessage(null);
+        setTotalCellCount(null);
+        return;
+      }
+      class1Counts.set(key, parsed);
+    }
+
+    setCellCountSaving(true);
+    setManualCellCountError(null);
+    setManualCellCountMessage(null);
+    try {
+      await Promise.all(
+        class1Rois.map(async (roi) => {
+          const response = await fetch(
+            endpoint(`deepscan/${encodeURIComponent(roi.dbName)}/records/${roi.roi_id}/manual-cell-count`),
+            {
+              method: "PUT",
+              headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ manual_cell_count: class1Counts.get(manualCellCountKey(roi)) ?? null }),
+            },
+          );
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            throw new Error(payload?.detail || tt("細胞数の保存に失敗しました。", "Failed to save cell counts."));
+          }
+        }),
+      );
+
+      setResults((prev) => {
+        if (!prev) return prev;
+        const updateRoi = (roi: AggregatedRoi): AggregatedRoi => {
+          const key = manualCellCountKey(roi);
+          return class1Counts.has(key) ? { ...roi, manual_cell_count: class1Counts.get(key) ?? null } : roi;
+        };
+        return {
+          ...prev,
+          classBuckets: {
+            ...prev.classBuckets,
+            1: prev.classBuckets[1].map(updateRoi),
+          },
+          roiRows: prev.roiRows.map(updateRoi),
+        };
+      });
+
+      const computedTotal =
+        results.counts[0] + Array.from(class1Counts.values()).reduce((sum, value) => sum + value, 0);
+      setTotalCellCount(computedTotal);
+      setManualCellCountMessage(tt("全細胞数を更新しました。", "Updated total cell count."));
+    } catch (err) {
+      setManualCellCountError(err instanceof Error ? err.message : tt("細胞数の保存に失敗しました。", "Failed to save cell counts."));
+      setTotalCellCount(null);
+    } finally {
+      setCellCountSaving(false);
+    }
+  }, [class1Rois, manualCellCountInputs, results, tt]);
 
   const handleExportCsv = useCallback(() => {
     if (!results) return;
@@ -602,6 +729,38 @@ const TiffManagerBulkCellCountResultsPage = () => {
                     {results.skippedSources.join(", ")}
                   </Alert>
                 )}
+                <Stack
+                  spacing={1}
+                  sx={{
+                    pt: 1,
+                    borderTop: "1px solid rgba(15,23,42,0.08)",
+                    "@media print": { display: "none" },
+                  }}
+                >
+                  <Typography variant="subtitle1" fontWeight={600}>
+                    {tt("全細胞カウント", "Total cell count")}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {tt(
+                      "総細胞数 = Class 0 ROI数 × 1 + Class 1 ROIごとの入力数の合計",
+                      "Total cells = Class 0 ROI count × 1 + sum of the Class 1 inputs",
+                    )}
+                  </Typography>
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }}>
+                    <Button
+                      variant="contained"
+                      onClick={() => void handleCalculateTotalCellCount()}
+                      disabled={cellCountSaving}
+                    >
+                      {cellCountSaving ? tt("集計中...", "Calculating...") : tt("全細胞カウント", "Total cell count")}
+                    </Button>
+                    <Typography variant="h6" fontWeight={700}>
+                      {tt("総細胞数", "Total cell count")}: {totalCellCount === null ? "-" : totalCellCount.toLocaleString()}
+                    </Typography>
+                  </Stack>
+                  {manualCellCountError && <Alert severity="warning">{manualCellCountError}</Alert>}
+                  {manualCellCountMessage && !manualCellCountError && <Alert severity="success">{manualCellCountMessage}</Alert>}
+                </Stack>
               </Stack>
             </Paper>
 
@@ -698,17 +857,18 @@ const TiffManagerBulkCellCountResultsPage = () => {
                 ) : (
                   <TableContainer component={Paper} variant="outlined">
                     <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell align="center" sx={{ width: 92 }}>
-                            {tt("ROI画像", "ROI image")}
-                          </TableCell>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell align="center" sx={{ width: 92 }}>
+                              {tt("ROI画像", "ROI image")}
+                            </TableCell>
                           <TableCell>{tt("画像名", "Image name")}</TableCell>
                           <TableCell align="right">{tt("ROI番号", "ROI id")}</TableCell>
-                          <TableCell>{tt("ラベル", "Label")}</TableCell>
-                          <TableCell align="right">{tt("信頼度(%)", "Confidence (%)")}</TableCell>
-                        </TableRow>
-                      </TableHead>
+                            <TableCell>{tt("ラベル", "Label")}</TableCell>
+                            <TableCell align="right">{tt("信頼度(%)", "Confidence (%)")}</TableCell>
+                            {selectedClass === 1 && <TableCell align="center">{tt("細胞数", "Cell count")}</TableCell>}
+                          </TableRow>
+                        </TableHead>
                       <TableBody>
                         {visibleRois.map((roi) => (
                           <TableRow key={`screen-${roi.dbName}-${roi.roi_id}`} hover>
@@ -743,6 +903,41 @@ const TiffManagerBulkCellCountResultsPage = () => {
                               </Typography>
                             </TableCell>
                             <TableCell align="right">{(roi.confidence * 100).toFixed(1)}</TableCell>
+                            {selectedClass === 1 && (
+                              <TableCell align="center" sx={{ minWidth: 120 }}>
+                                {(() => {
+                                  const roiKey = manualCellCountKey(roi);
+                                  const parsed = parseManualCellCountInput(manualCellCountInputs[roiKey]);
+                                  const customValue = parsed !== null && parsed >= 5 ? String(parsed) : "";
+                                  return (
+                                    <Stack spacing={0.75} alignItems="center">
+                                      <Stack direction="row" spacing={0.5}>
+                                        {[2, 3, 4].map((value) => (
+                                          <Button
+                                            key={`${roiKey}-${value}`}
+                                            size="small"
+                                            variant={parsed === value ? "contained" : "outlined"}
+                                            onClick={() => setPresetManualCellCount(roiKey, value as 2 | 3 | 4)}
+                                            sx={{ minWidth: 36, px: 0.75 }}
+                                          >
+                                            {value}
+                                          </Button>
+                                        ))}
+                                      </Stack>
+                                      <TextField
+                                        size="small"
+                                        type="number"
+                                        value={customValue}
+                                        placeholder={tt("5以上", "5 or more")}
+                                        inputProps={{ min: 5, step: 1 }}
+                                        onChange={(event) => updateManualCellCountInput(roiKey, event.target.value)}
+                                        sx={{ width: 92 }}
+                                      />
+                                    </Stack>
+                                  );
+                                })()}
+                              </TableCell>
+                            )}
                           </TableRow>
                         ))}
                       </TableBody>

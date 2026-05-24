@@ -50,6 +50,7 @@ def _build_status_payload(view: crud.DeepScanView, request: Request) -> dict:
                 "png_base64": roi.png_base64,
                 "manual_label": roi.manual_label,
                 "manual_added": roi.manual_added,
+                "manual_cell_count": roi.manual_cell_count,
             }
             for roi in status.rois
         ],
@@ -139,6 +140,7 @@ class ManualRoiResponse(BaseModel):
     png_base64: str
     manual_label: str | None = None
     manual_added: bool = False
+    manual_cell_count: int | None = None
 
 
 class ManualRoiDeleteResponse(BaseModel):
@@ -147,6 +149,15 @@ class ManualRoiDeleteResponse(BaseModel):
 
 class DeepScanReviewResponse(BaseModel):
     reviewed_roi_count: int
+
+
+class ManualCellCountUpdateRequest(BaseModel):
+    manual_cell_count: int | None = Field(None, ge=0, description="class1 ROI に対する手入力細胞数。null でクリア。")
+
+
+class ManualCellCountUpdateResponse(BaseModel):
+    record_id: int
+    manual_cell_count: int | None
 
 
 class DeepscanCellCountImageResponse(BaseModel):
@@ -195,6 +206,7 @@ async def add_manual_roi(db_name: str, payload: ManualRoiAddRequest) -> ManualRo
         png_base64=roi.png_base64,
         manual_label=roi.manual_label,
         manual_added=roi.manual_added,
+        manual_cell_count=roi.manual_cell_count,
     )
 
 
@@ -215,6 +227,21 @@ async def mark_deepscan_reviewed(
 ) -> DeepScanReviewResponse:
     reviewed = await asyncio.to_thread(crud.mark_image_reviewed, db_name, tif_name=tif_name)
     return DeepScanReviewResponse(reviewed_roi_count=reviewed)
+
+
+@router.put("/{db_name}/records/{record_id}/manual-cell-count", response_model=ManualCellCountUpdateResponse)
+async def set_manual_cell_count(
+    db_name: str,
+    record_id: int,
+    payload: ManualCellCountUpdateRequest,
+) -> ManualCellCountUpdateResponse:
+    result = await asyncio.to_thread(
+        crud.update_manual_cell_count,
+        db_name,
+        record_id,
+        payload.manual_cell_count,
+    )
+    return ManualCellCountUpdateResponse(**result)
 
 
 @router.get("/{db_name}/cell-count-summary", response_model=DeepscanCellCountSummaryResponse)
