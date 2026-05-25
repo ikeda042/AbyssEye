@@ -494,6 +494,10 @@ const RetrainingPage = () => {
     window.open(endpoint(`tiff-bulk/projects/${encodeURIComponent(name)}/download`), "_blank");
   }, []);
 
+  const openArchivePicker = useCallback(() => {
+    archiveInputRef.current?.click();
+  }, []);
+
   const handleArchiveInputChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
     event.target.value = "";
@@ -514,13 +518,14 @@ const RetrainingPage = () => {
       }
       await fetchArchives();
       handleSelectArchive(payload.filename);
+      closeProjectDialog();
       setInfo(tt("再学習用データをアップロードしました。", "Uploaded the retraining data."));
     } catch (err) {
       setError(err instanceof Error ? err.message : tt("ZIPアップロードに失敗しました。", "Failed to upload the ZIP archive."));
     } finally {
       setUploadingArchive(false);
     }
-  }, [fetchArchives, handleSelectArchive, tt]);
+  }, [closeProjectDialog, fetchArchives, handleSelectArchive, tt]);
 
   const upsertJob = useCallback((job: RetrainingJob) => {
     setJobs((prev) => {
@@ -825,7 +830,7 @@ const RetrainingPage = () => {
                 <Button
                   variant="contained"
                   startIcon={<UploadFileIcon />}
-                  onClick={() => archiveInputRef.current?.click()}
+                  onClick={openArchivePicker}
                   disabled={uploadingArchive}
                   sx={{ alignSelf: "flex-start" }}
                 >
@@ -1188,6 +1193,17 @@ const RetrainingPage = () => {
               }}
               sx={{ maxWidth: 420 }}
             />
+            <Button
+              variant="outlined"
+              startIcon={<UploadFileIcon />}
+              onClick={openArchivePicker}
+              disabled={uploadingArchive}
+              sx={{ alignSelf: "flex-start" }}
+            >
+              {uploadingArchive
+                ? tt("アップロード中...", "Uploading...")
+                : tt("保存済みプロジェクトZIPをアップロード", "Upload saved project ZIP")}
+            </Button>
             <TableContainer component={Paper} variant="outlined" sx={TABLE_CONTAINER_SX}>
               <Table size="small">
                 <TableHead>
