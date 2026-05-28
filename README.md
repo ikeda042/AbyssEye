@@ -193,7 +193,7 @@ Do not commit:
 - Logs containing sample names, private hostnames, or internal network details
 
 ## Contributors
-
+- Research supervisor: Yuki MORONO (morono@jamstec.go.jp)
 - Yunosuke Ikeda (d263826@hiroshima-u.ac.jp)
 - Gashu Hayashi (m251284@hiroshima-u.ac.jp)
 - Kouta Honjo (m256844@hiroshima-u.ac.jp)
