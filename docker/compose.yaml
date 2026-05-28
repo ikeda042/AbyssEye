@@ -1,0 +1,77 @@
+services:
+  traefik:
+    image: traefik:latest
+    container_name: abysseye-traefik
+    environment:
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - DOCKER_API_VERSION=1.52  # API version must be >=1.44; matches host at 1.52
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.endpoint=unix:///var/run/docker.sock
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    networks:
+      - web
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: ${BACKEND_PORT:-3000}
+      APP_RELOAD: "false"
+      ABYSSEYE_DATA_DIR: /app/data
+      ABYSSEYE_MODELS_DIR: /app/models
+      ABYSSEYE_CORS_ORIGINS: ${ABYSSEYE_CORS_ORIGINS:-}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.backend.rule=Host(`${PUBLIC_HOSTNAME}`) && PathPrefix(`/api/v1`)
+      - traefik.http.routers.backend.entrypoints=websecure
+      - traefik.http.routers.backend.tls.certresolver=letsencrypt
+      - traefik.http.services.backend.loadbalancer.server.port=${BACKEND_PORT:-3000}
+    networks:
+      - web
+    volumes:
+      - app-data:/app/data
+      - models:/app/models
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        - VITE_BACKEND_PORT=${VITE_BACKEND_PORT:-443}
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.frontend.rule=Host(`${PUBLIC_HOSTNAME}`)
+      - traefik.http.routers.frontend.entrypoints=websecure
+      - traefik.http.routers.frontend.tls.certresolver=letsencrypt
+      - traefik.http.services.frontend.loadbalancer.server.port=80
+    networks:
+      - web
+    restart: unless-stopped
+
+networks:
+  web:
+    driver: bridge
+
+volumes:
+  app-data:
+  models:
