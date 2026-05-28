@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use AbyssEye in academic work, please cite this software and the associated Scientific Reports article."
+type: software
+title: "AbyssEye"
+version: "0.1.0"
+authors:
+  - family-names: "Ikeda"
+    given-names: "Yunosuke"
+    email: "d263826@hiroshima-u.ac.jp"
+  - family-names: "Hayashi"
+    given-names: "Gashu"
+    email: "m251284@hiroshima-u.ac.jp"
+  - family-names: "Honjo"
+    given-names: "Kouta"
+    email: "m256844@hiroshima-u.ac.jp"
+abstract: "AbyssEye is a web application for TIFF microscopy image management, ROI extraction, DeepScan review, and retraining preparation."
+keywords:
+  - "microscopy"
+  - "cell recognition"
+  - "ROI extraction"
+  - "deep learning"
+  - "FastAPI"
+  - "React"
+references:
+  - type: article
+    title: "Deep learning for microbial life detection in deep subseafloor samples: objective cell recognition"
+    authors:
+      - family-names: "Nishimura"
+        given-names: "Tomoya"
+    journal: "Scientific Reports"
+    volume: "15"
+    year: 2025
+    doi: "10.1038/s41598-025-29239-0"
