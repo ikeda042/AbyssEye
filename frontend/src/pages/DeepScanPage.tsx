@@ -56,6 +56,8 @@ type RealtimeROI = {
   manual_label?: string | number | null;
   manual_added?: boolean;
   manual_cell_count?: number | null;
+  suggested_cell_count?: number | null;
+  excluded_by_focus_area?: boolean;
 };
 
 type Dimensions = {
@@ -110,6 +112,40 @@ type FocusMap = {
   confidence: number[];
 };
 
+type FocusArea = {
+  version: number;
+  method: string;
+  source: "generated" | "saved";
+  approved: boolean;
+  approved_at?: string | null;
+  tile_size: number;
+  rows: number;
+  cols: number;
+  image_width: number;
+  image_height: number;
+  threshold: number;
+  scores: number[];
+  excluded: boolean[];
+  whole_area_px: number;
+  valid_area_px: number;
+  excluded_area_px: number;
+  excluded_area_ratio: number;
+};
+
+const isRoiExcludedByFocusArea = (roi: RealtimeROI, focusArea?: FocusArea | null) => {
+  if (!focusArea?.approved || !Array.isArray(focusArea.excluded)) return false;
+  const rows = Math.max(0, Math.trunc(focusArea.rows || 0));
+  const cols = Math.max(0, Math.trunc(focusArea.cols || 0));
+  const tileSize = Math.max(1, Math.trunc(focusArea.tile_size || 1));
+  if (rows <= 0 || cols <= 0) return false;
+  const centerX = Math.round((roi.roi_start_x + roi.roi_end_x) * 0.5);
+  const centerY = Math.round((roi.roi_start_y + roi.roi_end_y) * 0.5);
+  const col = Math.max(0, Math.min(cols - 1, Math.floor(centerX / tileSize)));
+  const row = Math.max(0, Math.min(rows - 1, Math.floor(centerY / tileSize)));
+  const index = row * cols + col;
+  return Boolean(focusArea.excluded[index]);
+};
+
 type DeepScanImageInfo = {
   relative_path: string;
   tif_name: string;
@@ -144,6 +180,7 @@ type DeepScanStatus = {
   processed_shape?: Dimensions | null;
   focus_profile?: FocusProfile | null;
   focus_map?: FocusMap | null;
+  focus_area?: FocusArea | null;
   roi_components_3d?: { [key: string]: unknown } | null;
 };
 
@@ -187,6 +224,13 @@ const buildManualRoiAddEndpoint = (dbName: string) =>
   new URL(`deepscan/${encodeURIComponent(dbName)}/manual-rois`, API_BASE_URL).toString();
 const buildReviewEndpoint = (dbName: string, tifName?: string) => {
   const url = new URL(`deepscan/${encodeURIComponent(dbName)}/review`, API_BASE_URL);
+  if (tifName) {
+    url.searchParams.set("tif_name", tifName);
+  }
+  return url.toString();
+};
+const buildFocusAreaApproveEndpoint = (dbName: string, tifName?: string) => {
+  const url = new URL(`deepscan/${encodeURIComponent(dbName)}/focus-area/approve`, API_BASE_URL);
   if (tifName) {
     url.searchParams.set("tif_name", tifName);
   }
@@ -453,6 +497,9 @@ const DeepScanPage = () => {
   const [manualLabelMessage, setManualLabelMessage] = useState<string | null>(null);
   const [manualLabelError, setManualLabelError] = useState<string | null>(null);
   const [cellCountLoading, setCellCountLoading] = useState(false);
+  const [focusAreaApproving, setFocusAreaApproving] = useState(false);
+  const [focusAreaError, setFocusAreaError] = useState<string | null>(null);
+  const [focusAreaMessage, setFocusAreaMessage] = useState<string | null>(null);
   const [manualRoiMode, setManualRoiMode] = useState(false);
   const [manualRoiSaving, setManualRoiSaving] = useState(false);
   const [manualRoiError, setManualRoiError] = useState<string | null>(null);
@@ -536,6 +583,19 @@ const DeepScanPage = () => {
       cellCountClass3: tt("Class 3", "Class 3"),
       cellCountNoData: tt("合計計算前です。", "No cell count calculated yet."),
       cellCountFetchFailed: tt("細胞数サマリの取得に失敗しました。", "Failed to load cell count summary."),
+      focusAreaTitle: tt("フォーカス除外ゾーン", "Focus exclusion zone"),
+      focusAreaGenerated: tt("自動生成・未承認", "Auto-generated / not approved"),
+      focusAreaApproved: tt("承認済み", "Approved"),
+      focusAreaApprove: tt("この除外ゾーンを承認", "Approve exclusion zone"),
+      focusAreaApproving: tt("承認中...", "Approving..."),
+      focusAreaApproveFailed: tt("フォーカス除外ゾーンの承認に失敗しました。", "Failed to approve focus exclusion zone."),
+      focusAreaApproveSuccess: tt("フォーカス除外ゾーンを承認しました。", "Focus exclusion zone approved."),
+      focusAreaExcludedRatio: tt("除外面積", "Excluded area"),
+      focusAreaValidArea: tt("有効面積(px)", "Valid area (px)"),
+      focusAreaNote: tt(
+        "承認後、除外ゾーン内に中心があるROIは面積補正カウントから除外されます。",
+        "After approval, ROIs with centers inside the exclusion zone are removed from area-normalized counts.",
+      ),
     }),
     [tt],
   );
@@ -785,6 +845,8 @@ const DeepScanPage = () => {
     setManualLabelError(null);
     setManualLabelMessage(null);
     setManualRoiError(null);
+    setFocusAreaError(null);
+    setFocusAreaMessage(null);
     setOverlayRevision((prev) => prev + 1);
     setBaseImageLoading(true);
   }, [status?.tif_name]);
@@ -1113,6 +1175,15 @@ const DeepScanPage = () => {
     ? projectSingleImagePager?.items.length ?? 0
     : availableImages.length;
   const frameRois = useMemo(() => status?.rois ?? [], [status?.rois]);
+  const focusArea = status?.focus_area ?? null;
+  const focusAreaExcludedPercent =
+    focusArea && Number.isFinite(focusArea.excluded_area_ratio)
+      ? `${(focusArea.excluded_area_ratio * 100).toFixed(1)}%`
+      : "-";
+  const focusAreaValidAreaText =
+    focusArea && Number.isFinite(focusArea.valid_area_px)
+      ? focusArea.valid_area_px.toLocaleString()
+      : "-";
 
   const handleMoveImage = (direction: -1 | 1) => {
     if (usesProjectSingleImagePager && projectSingleImagePager) {
@@ -1190,6 +1261,53 @@ const DeepScanPage = () => {
       setCellCountLoading(false);
     }
   }, [dbName, labels.cellCountFetchFailed]);
+
+  const handleApproveFocusArea = useCallback(async () => {
+    if (!dbName || !status || focusAreaApproving) return;
+    setFocusAreaApproving(true);
+    setFocusAreaError(null);
+    setFocusAreaMessage(null);
+    try {
+      const response = await fetch(
+        buildFocusAreaApproveEndpoint(dbName, status.current_image_relative_path || currentTifParam || undefined),
+        {
+          method: "POST",
+          headers: { Accept: "application/json" },
+        },
+      );
+      const payload: { focus_area?: FocusArea; detail?: string } = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.focus_area) {
+        throw new Error(payload.detail || labels.focusAreaApproveFailed);
+      }
+      const approvedFocusArea = payload.focus_area;
+      const applyFocusArea = (target: DeepScanStatus): DeepScanStatus => ({
+        ...target,
+        focus_area: approvedFocusArea,
+        rois: target.rois?.map((roi) => ({
+          ...roi,
+          excluded_by_focus_area: isRoiExcludedByFocusArea(roi, approvedFocusArea),
+        })),
+      });
+      setStatus((prev) => (prev ? applyFocusArea(prev) : prev));
+      const cacheKey = `${dbName}::${currentTifParam || "__default__"}`;
+      const cached = statusCacheRef.current.get(cacheKey);
+      if (cached) {
+        statusCacheRef.current.set(cacheKey, applyFocusArea(cached));
+      }
+      setFocusAreaMessage(labels.focusAreaApproveSuccess);
+    } catch (err) {
+      setFocusAreaError(err instanceof Error ? err.message : labels.focusAreaApproveFailed);
+    } finally {
+      setFocusAreaApproving(false);
+    }
+  }, [
+    currentTifParam,
+    dbName,
+    focusAreaApproving,
+    labels.focusAreaApproveFailed,
+    labels.focusAreaApproveSuccess,
+    status,
+  ]);
 
   const handleBackToSelection = () => {
     if (returnTo) {
@@ -1738,6 +1856,48 @@ const DeepScanPage = () => {
                           display: "block",
                         }}
                       />
+                      {focusArea && imageLayout && focusArea.excluded?.length > 0 && (
+                        <Box
+                          sx={{
+                            position: "absolute",
+                            inset: 0,
+                            pointerEvents: "none",
+                            zIndex: 1,
+                          }}
+                        >
+                          {focusArea.excluded.map((excluded, idx) => {
+                            if (!excluded) return null;
+                            const row = Math.floor(idx / focusArea.cols);
+                            const col = idx % focusArea.cols;
+                            const baseWidth = focusArea.image_width || 1;
+                            const baseHeight = focusArea.image_height || 1;
+                            const x0 = col * focusArea.tile_size;
+                            const y0 = row * focusArea.tile_size;
+                            const x1 = Math.min(baseWidth, (col + 1) * focusArea.tile_size);
+                            const y1 = Math.min(baseHeight, (row + 1) * focusArea.tile_size);
+                            const scaleX = imageLayout.displayWidth / baseWidth;
+                            const scaleY = imageLayout.displayHeight / baseHeight;
+                            const left = imageLayout.offsetX + x0 * scaleX;
+                            const top = imageLayout.offsetY + y0 * scaleY;
+                            const width = Math.max(1, (x1 - x0) * scaleX);
+                            const height = Math.max(1, (y1 - y0) * scaleY);
+                            return (
+                              <Box
+                                key={`focus-excluded-${idx}`}
+                                sx={{
+                                  position: "absolute",
+                                  left,
+                                  top,
+                                  width,
+                                  height,
+                                  backgroundColor: focusArea.approved ? "rgba(239,68,68,0.28)" : "rgba(245,158,11,0.26)",
+                                  border: focusArea.approved ? "1px solid rgba(239,68,68,0.38)" : "1px solid rgba(245,158,11,0.36)",
+                                }}
+                              />
+                            );
+                          })}
+                        </Box>
+                      )}
                       {deepVisionOverlayEnabled && imageLayout && (frameRois.length ?? 0) > 0 && (
                         <Box
                           key={overlayKey}
@@ -1758,7 +1918,8 @@ const DeepScanPage = () => {
                             const width = (roi.roi_end_x - roi.roi_start_x) * scaleX;
                             const height = (roi.roi_end_y - roi.roi_start_y) * scaleY;
                             const { label } = resolveLabel(roi, frameLabelMode);
-                            const color = classColors[label] ?? "#6366f1";
+                            const isFocusExcluded = Boolean(roi.excluded_by_focus_area);
+                            const color = isFocusExcluded ? "#94a3b8" : classColors[label] ?? "#6366f1";
                             const isManualAdded = Boolean(roi.manual_added);
                             const isSelected = selectedOverlayRoiId === roi.roi_id;
                             const sequenceIndex = roiCaptureOrder[roi.roi_id] ?? index;
@@ -1775,9 +1936,11 @@ const DeepScanPage = () => {
                                   borderRadius: 0.75,
                                   zIndex: isSelected ? 8 : 1,
                                   border: isSelected
-                                    ? `1.8px ${isManualAdded ? "dashed" : "solid"} ${color}`
-                                    : `1px ${isManualAdded ? "dashed" : "solid"} ${color}c0`,
-                                  backgroundColor: isManualAdded ? (isSelected ? "rgba(249,115,22,0.16)" : "rgba(249,115,22,0.08)") : (isSelected ? `${color}26` : `${color}12`),
+                                    ? `1.8px ${isManualAdded || isFocusExcluded ? "dashed" : "solid"} ${color}`
+                                    : `1px ${isManualAdded || isFocusExcluded ? "dashed" : "solid"} ${color}c0`,
+                                  backgroundColor: isFocusExcluded
+                                    ? "rgba(148,163,184,0.12)"
+                                    : isManualAdded ? (isSelected ? "rgba(249,115,22,0.16)" : "rgba(249,115,22,0.08)") : (isSelected ? `${color}26` : `${color}12`),
                                   opacity: 0,
                                   transform: "scale(0.97)",
                                   transformOrigin: "center center",
@@ -1885,6 +2048,65 @@ const DeepScanPage = () => {
                           </Typography>
                         </Stack>
                       </Box>
+                      {focusArea && (
+                        <Box
+                          sx={{
+                            border: `1px dashed ${focusArea.approved ? "rgba(34,197,94,0.45)" : "rgba(245,158,11,0.5)"}`,
+                            borderRadius: 1,
+                            p: 1,
+                            backgroundColor: focusArea.approved ? "rgba(34,197,94,0.05)" : "rgba(245,158,11,0.06)",
+                          }}
+                        >
+                          <Stack spacing={0.75}>
+                            <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+                              <Typography variant="subtitle2" fontWeight={600}>
+                                {labels.focusAreaTitle}
+                              </Typography>
+                              <Typography
+                                variant="caption"
+                                sx={{
+                                  color: focusArea.approved ? "success.main" : "warning.main",
+                                  fontWeight: 700,
+                                }}
+                              >
+                                {focusArea.approved ? labels.focusAreaApproved : labels.focusAreaGenerated}
+                              </Typography>
+                            </Stack>
+                            <Stack spacing={0.25}>
+                              <Typography variant="body2" color="text.secondary">
+                                {labels.focusAreaExcludedRatio}: {focusAreaExcludedPercent}
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                {labels.focusAreaValidArea}: {focusAreaValidAreaText}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {labels.focusAreaNote}
+                              </Typography>
+                            </Stack>
+                            {!focusArea.approved && (
+                              <Button
+                                variant="contained"
+                                size="small"
+                                onClick={() => void handleApproveFocusArea()}
+                                disabled={focusAreaApproving || !dbName}
+                                sx={{ alignSelf: "flex-start" }}
+                              >
+                                {focusAreaApproving ? labels.focusAreaApproving : labels.focusAreaApprove}
+                              </Button>
+                            )}
+                            {focusAreaError && (
+                              <Typography variant="caption" color="error">
+                                {focusAreaError}
+                              </Typography>
+                            )}
+                            {focusAreaMessage && (
+                              <Typography variant="caption" color="success.main">
+                                {focusAreaMessage}
+                              </Typography>
+                            )}
+                          </Stack>
+                        </Box>
+                      )}
                       <Box
                         sx={{
                           border: "1px dashed rgba(15,23,42,0.15)",
@@ -2375,6 +2597,28 @@ const DeepScanPage = () => {
                                     display: "block",
                                   }}
                                 />
+                                {classIndex === 1 && (
+                                  <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    sx={{ display: "block", px: 0.5, py: 0.35, lineHeight: 1.2 }}
+                                  >
+                                    {roi.manual_cell_count != null
+                                      ? `Manual: ${roi.manual_cell_count}`
+                                      : roi.suggested_cell_count != null
+                                      ? `Suggested: ${roi.suggested_cell_count}`
+                                      : "Suggested: -"}
+                                  </Typography>
+                                )}
+                                {roi.excluded_by_focus_area && (
+                                  <Typography
+                                    variant="caption"
+                                    color="warning.main"
+                                    sx={{ display: "block", px: 0.5, pb: 0.35, lineHeight: 1.2, fontWeight: 600 }}
+                                  >
+                                    Excluded
+                                  </Typography>
+                                )}
                               </Box>
                           );
                         })}
@@ -2514,6 +2758,19 @@ const DeepScanPage = () => {
                   {labels.manualFallbackWarning}
                 </Typography>
               ) : null}
+              {selectedOverlayRoiMeta.predicted_class === 1 && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.35 }}>
+                  Suggested cell count: {selectedOverlayRoiMeta.suggested_cell_count ?? "-"}
+                  {selectedOverlayRoiMeta.manual_cell_count != null
+                    ? ` / Manual: ${selectedOverlayRoiMeta.manual_cell_count}`
+                    : ""}
+                </Typography>
+              )}
+              {selectedOverlayRoiMeta.excluded_by_focus_area && (
+                <Typography variant="caption" color="warning.main" sx={{ display: "block", mt: 0.35, fontWeight: 700 }}>
+                  Excluded from area-normalized count
+                </Typography>
+              )}
             </Box>
             <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 0.15, mb: 0.35 }}>
               <Button

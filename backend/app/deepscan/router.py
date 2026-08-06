@@ -51,6 +51,8 @@ def _build_status_payload(view: crud.DeepScanView, request: Request) -> dict:
                 "manual_label": roi.manual_label,
                 "manual_added": roi.manual_added,
                 "manual_cell_count": roi.manual_cell_count,
+                "suggested_cell_count": roi.suggested_cell_count,
+                "excluded_by_focus_area": crud._is_roi_excluded_by_focus_area(roi, view.focus_area),
             }
             for roi in status.rois
         ],
@@ -98,6 +100,7 @@ def _build_status_payload(view: crud.DeepScanView, request: Request) -> dict:
         ),
         "focus_profile": view.focus_profile,
         "focus_map": view.focus_map,
+        "focus_area": view.focus_area,
         "roi_components_3d": view.roi_components_3d,
     }
 
@@ -141,6 +144,7 @@ class ManualRoiResponse(BaseModel):
     manual_label: str | None = None
     manual_added: bool = False
     manual_cell_count: int | None = None
+    suggested_cell_count: int | None = None
 
 
 class ManualRoiDeleteResponse(BaseModel):
@@ -149,6 +153,10 @@ class ManualRoiDeleteResponse(BaseModel):
 
 class DeepScanReviewResponse(BaseModel):
     reviewed_roi_count: int
+
+
+class FocusAreaApproveResponse(BaseModel):
+    focus_area: dict
 
 
 class ManualCellCountUpdateRequest(BaseModel):
@@ -168,6 +176,16 @@ class DeepscanCellCountImageResponse(BaseModel):
     class1_count: int
     class2_count: int
     class3_count: int
+    included_class0_count: int = 0
+    included_class1_count: int = 0
+    excluded_by_focus_area_count: int = 0
+    missing_class1_cell_count: int = 0
+    total_cells: int | None = None
+    whole_area_px: int | None = None
+    valid_area_px: int | None = None
+    excluded_area_px: int | None = None
+    excluded_area_ratio: float | None = None
+    focus_area_approved: bool = False
 
 
 class DeepscanCellCountSummaryResponse(BaseModel):
@@ -178,6 +196,16 @@ class DeepscanCellCountSummaryResponse(BaseModel):
     class2_total: int
     class3_total: int
     images: list[DeepscanCellCountImageResponse]
+    included_class0_total: int = 0
+    included_class1_total: int = 0
+    excluded_by_focus_area_total: int = 0
+    missing_class1_cell_count_total: int = 0
+    total_cells: int | None = None
+    whole_area_px_total: int | None = None
+    valid_area_px_total: int | None = None
+    excluded_area_px_total: int | None = None
+    excluded_area_ratio: float | None = None
+    area_normalization_ready: bool = False
 
 
 @router.post("/{db_name}/manual-rois", response_model=ManualRoiResponse)
@@ -207,6 +235,7 @@ async def add_manual_roi(db_name: str, payload: ManualRoiAddRequest) -> ManualRo
         manual_label=roi.manual_label,
         manual_added=roi.manual_added,
         manual_cell_count=roi.manual_cell_count,
+        suggested_cell_count=roi.suggested_cell_count,
     )
 
 
@@ -227,6 +256,15 @@ async def mark_deepscan_reviewed(
 ) -> DeepScanReviewResponse:
     reviewed = await asyncio.to_thread(crud.mark_image_reviewed, db_name, tif_name=tif_name)
     return DeepScanReviewResponse(reviewed_roi_count=reviewed)
+
+
+@router.post("/{db_name}/focus-area/approve", response_model=FocusAreaApproveResponse)
+async def approve_deepscan_focus_area(
+    db_name: str,
+    tif_name: str | None = Query(None, description="表示対象TIFF (相対パスまたはファイル名)"),
+) -> FocusAreaApproveResponse:
+    focus_area = await asyncio.to_thread(crud.approve_focus_area, db_name, tif_name=tif_name)
+    return FocusAreaApproveResponse(focus_area=focus_area)
 
 
 @router.put("/{db_name}/records/{record_id}/manual-cell-count", response_model=ManualCellCountUpdateResponse)
@@ -254,6 +292,16 @@ async def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummaryRespon
         class1_total=summary.class1_total,
         class2_total=summary.class2_total,
         class3_total=summary.class3_total,
+        included_class0_total=summary.included_class0_total,
+        included_class1_total=summary.included_class1_total,
+        excluded_by_focus_area_total=summary.excluded_by_focus_area_total,
+        missing_class1_cell_count_total=summary.missing_class1_cell_count_total,
+        total_cells=summary.total_cells,
+        whole_area_px_total=summary.whole_area_px_total,
+        valid_area_px_total=summary.valid_area_px_total,
+        excluded_area_px_total=summary.excluded_area_px_total,
+        excluded_area_ratio=summary.excluded_area_ratio,
+        area_normalization_ready=summary.area_normalization_ready,
         images=[
             DeepscanCellCountImageResponse(
                 relative_path=image.relative_path,
@@ -263,6 +311,16 @@ async def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummaryRespon
                 class1_count=image.class1_count,
                 class2_count=image.class2_count,
                 class3_count=image.class3_count,
+                included_class0_count=image.included_class0_count,
+                included_class1_count=image.included_class1_count,
+                excluded_by_focus_area_count=image.excluded_by_focus_area_count,
+                missing_class1_cell_count=image.missing_class1_cell_count,
+                total_cells=image.total_cells,
+                whole_area_px=image.whole_area_px,
+                valid_area_px=image.valid_area_px,
+                excluded_area_px=image.excluded_area_px,
+                excluded_area_ratio=image.excluded_area_ratio,
+                focus_area_approved=image.focus_area_approved,
             )
             for image in summary.images
         ],

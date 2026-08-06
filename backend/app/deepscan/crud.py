@@ -29,6 +29,19 @@ ROI_3D_AREA_RATIO_MAX = 8.0
 ROI_META_REVIEWED_IN_DEEPSCAN_KEY = "reviewed_in_deepscan"
 ROI_META_REVIEWED_IN_DEEPSCAN_AT_KEY = "reviewed_in_deepscan_at"
 ROI_META_MANUAL_CELL_COUNT_KEY = "manual_cell_count"
+ROI_META_SUGGESTED_CELL_COUNT_KEY = "suggested_cell_count"
+FOCUS_AREA_STORE_SUFFIX = "_focus_areas.json"
+FOCUS_AREA_SCHEMA_VERSION = 5
+FOCUS_AREA_DEFAULT_TILE_SIZE = 16
+FOCUS_AREA_LOCAL_WINDOW_SIZE = 51
+FOCUS_AREA_MIN_ZONE_TILES = 40
+FOCUS_AREA_MAX_INCLUDED_HOLE_TILES = 80
+FOCUS_AREA_PIXEL_MORPH_TILE_SCALE = 2.5
+FOCUS_AREA_GRID_MORPH_SIZE = 5
+FOCUS_AREA_VALID_ROI_CONFIDENCE = 0.80
+FOCUS_AREA_BLUR_ROI_CONFIDENCE = 0.70
+FOCUS_AREA_ROI_CONTEXT_TILES = 1
+FOCUS_AREA_MIN_VALID_ROI_CENTERS_TO_REMOVE_ZONE = 2
 
 FOCUS_METRIC_ALIASES: dict[str, str] = {
     "ten": "ften",
@@ -81,6 +94,16 @@ class DeepscanCellCountImageInfo:
     class1_count: int
     class2_count: int
     class3_count: int
+    included_class0_count: int = 0
+    included_class1_count: int = 0
+    excluded_by_focus_area_count: int = 0
+    missing_class1_cell_count: int = 0
+    total_cells: int | None = None
+    whole_area_px: int | None = None
+    valid_area_px: int | None = None
+    excluded_area_px: int | None = None
+    excluded_area_ratio: float | None = None
+    focus_area_approved: bool = False
 
 
 @dataclass
@@ -92,6 +115,16 @@ class DeepscanCellCountSummary:
     class2_total: int
     class3_total: int
     images: list[DeepscanCellCountImageInfo]
+    included_class0_total: int = 0
+    included_class1_total: int = 0
+    excluded_by_focus_area_total: int = 0
+    missing_class1_cell_count_total: int = 0
+    total_cells: int | None = None
+    whole_area_px_total: int | None = None
+    valid_area_px_total: int | None = None
+    excluded_area_px_total: int | None = None
+    excluded_area_ratio: float | None = None
+    area_normalization_ready: bool = False
 
 
 @dataclass
@@ -103,6 +136,7 @@ class DeepScanView:
     focus_profile: dict[str, object] | None
     focus_map: dict[str, object] | None
     roi_components_3d: dict[str, object] | None
+    focus_area: dict[str, object] | None = None
 
 
 @dataclass
@@ -166,6 +200,15 @@ def _safe_manual_cell_count(raw: object) -> int | None:
     if value is None:
         return None
     if value < 0:
+        return None
+    return int(value)
+
+
+def _safe_suggested_cell_count(raw: object) -> int | None:
+    value = _safe_int_or_none(raw)
+    if value is None:
+        return None
+    if value < 1:
         return None
     return int(value)
 
@@ -688,6 +731,15 @@ def _columns_for_table(conn: sqlite3.Connection, table_name: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {str(row[1]) for row in rows}
 
+
+def _table_has_column(db_path: Path, table_name: str, column_name: str) -> bool:
+    try:
+        with sqlite3.connect(db_path) as conn:
+            return column_name in _columns_for_table(conn, table_name)
+    except sqlite3.DatabaseError:
+        return False
+
+
 def _focus_tenengrad(gray: np.ndarray, ksize: int = 3) -> float:
     gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=ksize)
     gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=ksize)
@@ -703,6 +755,587 @@ def _minmax(values: list[float]) -> list[float]:
     if mx - mn <= 1e-12:
         return [0.0 for _ in values]
     return [(v - mn) / (mx - mn) for v in values]
+
+
+DEFAULT_CLASS1_COUNT_TUNING: dict[str, float | int] = {
+    "canvas_size": 144,
+    "invert_ratio_threshold": 0.70,
+    "distance_ratio": 0.35,
+    "min_contour_area": 8.0,
+    "morph_open_iterations": 1,
+    "min_cells": 2,
+    "max_cells": 12,
+}
+
+
+def _normalize_class1_count_tuning(raw: dict[str, object] | None = None) -> dict[str, float | int]:
+    tuning: dict[str, float | int] = dict(DEFAULT_CLASS1_COUNT_TUNING)
+    if raw:
+        for key in tuning.keys():
+            if key not in raw:
+                continue
+            try:
+                if key in {"canvas_size", "morph_open_iterations", "min_cells", "max_cells"}:
+                    tuning[key] = int(raw[key])  # type: ignore[arg-type]
+                else:
+                    tuning[key] = float(raw[key])  # type: ignore[arg-type]
+            except Exception:
+                continue
+    tuning["canvas_size"] = max(8, int(tuning["canvas_size"]))
+    tuning["morph_open_iterations"] = max(0, int(tuning["morph_open_iterations"]))
+    tuning["min_cells"] = max(1, int(tuning["min_cells"]))
+    tuning["max_cells"] = max(int(tuning["min_cells"]), int(tuning["max_cells"]))
+    tuning["invert_ratio_threshold"] = float(max(0.05, min(0.95, float(tuning["invert_ratio_threshold"]))))
+    tuning["distance_ratio"] = float(max(0.10, min(0.90, float(tuning["distance_ratio"]))))
+    tuning["min_contour_area"] = float(max(1.0, float(tuning["min_contour_area"])))
+    return tuning
+
+
+def _map_patch_to_black_canvas(patch_bgr: np.ndarray, canvas_size: int = 144) -> np.ndarray:
+    side = max(8, int(canvas_size))
+    canvas = np.zeros((side, side, 3), dtype=np.uint8)
+    h, w = patch_bgr.shape[:2]
+    h_use = min(h, side)
+    w_use = min(w, side)
+    src_y = max(0, (h - h_use) // 2)
+    src_x = max(0, (w - w_use) // 2)
+    src = patch_bgr[src_y : src_y + h_use, src_x : src_x + w_use, :]
+    dst_y = (side - h_use) // 2
+    dst_x = (side - w_use) // 2
+    canvas[dst_y : dst_y + h_use, dst_x : dst_x + w_use, :] = src
+    return canvas
+
+
+def _estimate_cells_in_class1_patch(
+    png_blob: bytes | None,
+    tuning: dict[str, object] | None = None,
+) -> int:
+    params = _normalize_class1_count_tuning(tuning)
+    min_cells = int(params["min_cells"])
+    max_cells = int(params["max_cells"])
+    fallback = max(2, min_cells)
+    if not png_blob:
+        return fallback
+    try:
+        buffer = np.frombuffer(png_blob, dtype=np.uint8)
+        patch_bgr = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+        if patch_bgr is None:
+            return fallback
+        patch_bgr = _map_patch_to_black_canvas(patch_bgr, canvas_size=int(params["canvas_size"]))
+
+        green = patch_bgr[:, :, 1]
+        blur = cv2.GaussianBlur(green, (3, 3), 0)
+        _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if int(np.count_nonzero(binary)) > int(binary.size * float(params["invert_ratio_threshold"])):
+            binary = cv2.bitwise_not(binary)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        open_iter = int(params["morph_open_iterations"])
+        if open_iter > 0:
+            binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=open_iter)
+
+        dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+        estimated = fallback
+        if float(dist.max()) > 0.0:
+            _, sure_fg = cv2.threshold(dist, float(params["distance_ratio"]) * float(dist.max()), 255, 0)
+            sure_fg = np.uint8(sure_fg)
+            n_labels, _ = cv2.connectedComponents(sure_fg)
+            estimated = max(1, int(n_labels) - 1)
+
+        if estimated < min_cells:
+            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            valid = [c for c in contours if cv2.contourArea(c) >= float(params["min_contour_area"])]
+            estimated = max(estimated, len(valid))
+
+        return max(min_cells, min(estimated, max_cells))
+    except Exception:
+        return fallback
+
+
+def _focus_area_store_path(db_path: Path) -> Path:
+    return db_path.with_name(f"{db_path.stem}{FOCUS_AREA_STORE_SUFFIX}")
+
+
+def _load_focus_area_store(db_path: Path) -> dict[str, object]:
+    path = _focus_area_store_path(db_path)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_focus_area_store(db_path: Path, payload: dict[str, object]) -> None:
+    path = _focus_area_store_path(db_path)
+    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _get_saved_focus_area(db_path: Path, image_relative_path: str) -> dict[str, object] | None:
+    store = _load_focus_area_store(db_path)
+    raw = store.get(image_relative_path)
+    if not isinstance(raw, dict):
+        return None
+    if not _is_current_focus_area(raw):
+        return None
+    return raw
+
+
+def _is_current_focus_area(focus_area: dict[str, object]) -> bool:
+    version = _safe_int_or_none(focus_area.get("version"))
+    tile_size = _safe_int_or_none(focus_area.get("tile_size"))
+    return version == FOCUS_AREA_SCHEMA_VERSION and tile_size == FOCUS_AREA_DEFAULT_TILE_SIZE
+
+
+def _target_processed_shape_for_focus_area(
+    image: DeepScanImageInfo | None,
+    rois: list[realtime_crud.RealtimeROI] | None,
+    tif_shape: tuple[int, int],
+) -> tuple[int, int]:
+    if image and image.processed_shape:
+        return image.processed_shape
+    if rois:
+        for roi in rois:
+            if roi.image_width_px > 0 and roi.image_height_px > 0:
+                return (int(roi.image_height_px), int(roi.image_width_px))
+    return tif_shape
+
+
+def _focus_gray_for_shape(tif_path: Path, target_shape: tuple[int, int]) -> np.ndarray | None:
+    img = _read_tiff_unchanged(tif_path)
+    if img is None or img.ndim < 2:
+        return None
+    if img.ndim == 3:
+        gray = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY)
+    else:
+        gray = img
+    if gray.dtype != np.uint8:
+        gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    target_h, target_w = target_shape
+    if target_h <= 0 or target_w <= 0:
+        return None
+    if gray.shape[:2] != (target_h, target_w):
+        gray = cv2.resize(gray, (target_w, target_h), interpolation=cv2.INTER_AREA)
+    return gray
+
+
+def _remove_small_excluded_components(mask: np.ndarray, min_tiles: int) -> np.ndarray:
+    if min_tiles <= 1:
+        return mask
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
+    cleaned = np.zeros(mask.shape, dtype=np.uint8)
+    for label_idx in range(1, n_labels):
+        area = int(stats[label_idx, cv2.CC_STAT_AREA])
+        if area >= min_tiles:
+            cleaned[labels == label_idx] = 1
+    return cleaned.astype(bool)
+
+
+def _fill_small_included_holes(excluded_mask: np.ndarray, max_tiles: int) -> np.ndarray:
+    if max_tiles <= 0 or excluded_mask.size == 0:
+        return excluded_mask
+    included_u8 = (~excluded_mask).astype(np.uint8)
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(included_u8, 8)
+    filled = excluded_mask.copy()
+    rows, cols = excluded_mask.shape[:2]
+    for label_idx in range(1, n_labels):
+        area = int(stats[label_idx, cv2.CC_STAT_AREA])
+        if area <= 0 or area > max_tiles:
+            continue
+        x = int(stats[label_idx, cv2.CC_STAT_LEFT])
+        y = int(stats[label_idx, cv2.CC_STAT_TOP])
+        width = int(stats[label_idx, cv2.CC_STAT_WIDTH])
+        height = int(stats[label_idx, cv2.CC_STAT_HEIGHT])
+        touches_border = x <= 0 or y <= 0 or (x + width) >= cols or (y + height) >= rows
+        if not touches_border:
+            filled[labels == label_idx] = True
+    return filled
+
+
+def _zone_smooth_excluded_mask(excluded_mask: np.ndarray) -> np.ndarray:
+    if excluded_mask.size == 0:
+        return excluded_mask
+    smoothed = _remove_small_excluded_components(excluded_mask, FOCUS_AREA_MIN_ZONE_TILES)
+    if min(smoothed.shape[:2]) >= 3:
+        kernel_size = max(3, int(FOCUS_AREA_GRID_MORPH_SIZE))
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        smoothed_u8 = smoothed.astype(np.uint8)
+        smoothed_u8 = cv2.morphologyEx(smoothed_u8, cv2.MORPH_CLOSE, kernel, iterations=1)
+        smoothed_u8 = cv2.morphologyEx(smoothed_u8, cv2.MORPH_OPEN, kernel, iterations=1)
+        smoothed = smoothed_u8.astype(bool)
+    smoothed = _fill_small_included_holes(smoothed, FOCUS_AREA_MAX_INCLUDED_HOLE_TILES)
+    smoothed = _remove_small_excluded_components(smoothed, FOCUS_AREA_MIN_ZONE_TILES)
+    return smoothed
+
+
+def _mark_roi_grid_region(
+    mask: np.ndarray,
+    roi: realtime_crud.RealtimeROI,
+    *,
+    tile_size: int,
+    image_width: int,
+    image_height: int,
+    context_tiles: int = 0,
+) -> None:
+    rows, cols = mask.shape[:2]
+    if rows <= 0 or cols <= 0:
+        return
+    source_w = max(1, int(roi.image_width_px or image_width))
+    source_h = max(1, int(roi.image_height_px or image_height))
+    scale_x = float(image_width) / float(source_w)
+    scale_y = float(image_height) / float(source_h)
+    x0 = int(math.floor(min(roi.roi_start_x, roi.roi_end_x) * scale_x))
+    x1 = int(math.ceil(max(roi.roi_start_x, roi.roi_end_x) * scale_x))
+    y0 = int(math.floor(min(roi.roi_start_y, roi.roi_end_y) * scale_y))
+    y1 = int(math.ceil(max(roi.roi_start_y, roi.roi_end_y) * scale_y))
+    x0 = max(0, min(image_width - 1, x0))
+    x1 = max(x0 + 1, min(image_width, x1))
+    y0 = max(0, min(image_height - 1, y0))
+    y1 = max(y0 + 1, min(image_height, y1))
+    c0 = max(0, x0 // tile_size - context_tiles)
+    c1 = min(cols - 1, max(0, (x1 - 1) // tile_size) + context_tiles)
+    r0 = max(0, y0 // tile_size - context_tiles)
+    r1 = min(rows - 1, max(0, (y1 - 1) // tile_size) + context_tiles)
+    mask[r0 : r1 + 1, c0 : c1 + 1] = True
+
+
+def _mark_roi_grid_center(
+    mask: np.ndarray,
+    roi: realtime_crud.RealtimeROI,
+    *,
+    tile_size: int,
+    image_width: int,
+    image_height: int,
+) -> None:
+    rows, cols = mask.shape[:2]
+    if rows <= 0 or cols <= 0:
+        return
+    source_w = max(1, int(roi.image_width_px or image_width))
+    source_h = max(1, int(roi.image_height_px or image_height))
+    scale_x = float(image_width) / float(source_w)
+    scale_y = float(image_height) / float(source_h)
+    center_x = int(round((roi.roi_start_x + roi.roi_end_x) * 0.5 * scale_x))
+    center_y = int(round((roi.roi_start_y + roi.roi_end_y) * 0.5 * scale_y))
+    col = max(0, min(cols - 1, center_x // tile_size))
+    row = max(0, min(rows - 1, center_y // tile_size))
+    mask[row, col] = True
+
+
+def _build_roi_focus_constraint_masks(
+    rois: list[realtime_crud.RealtimeROI] | None,
+    *,
+    rows: int,
+    cols: int,
+    tile_size: int,
+    image_width: int,
+    image_height: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, int]]:
+    protected_mask = np.zeros((rows, cols), dtype=bool)
+    protected_centers = np.zeros((rows, cols), dtype=bool)
+    blur_mask = np.zeros((rows, cols), dtype=bool)
+    blur_centers = np.zeros((rows, cols), dtype=bool)
+    counts = {"protected_roi_count": 0, "blur_roi_count": 0}
+    if not rois:
+        return protected_mask, protected_centers, blur_mask, blur_centers, counts
+
+    for roi in rois:
+        predicted_class = int(roi.predicted_class)
+        confidence = float(roi.confidence)
+        if predicted_class in {0, 1} and confidence >= FOCUS_AREA_VALID_ROI_CONFIDENCE:
+            counts["protected_roi_count"] += 1
+            _mark_roi_grid_region(
+                protected_mask,
+                roi,
+                tile_size=tile_size,
+                image_width=image_width,
+                image_height=image_height,
+                context_tiles=FOCUS_AREA_ROI_CONTEXT_TILES,
+            )
+            _mark_roi_grid_center(
+                protected_centers,
+                roi,
+                tile_size=tile_size,
+                image_width=image_width,
+                image_height=image_height,
+            )
+        elif predicted_class == 2 and confidence >= FOCUS_AREA_BLUR_ROI_CONFIDENCE:
+            counts["blur_roi_count"] += 1
+            _mark_roi_grid_region(
+                blur_mask,
+                roi,
+                tile_size=tile_size,
+                image_width=image_width,
+                image_height=image_height,
+                context_tiles=FOCUS_AREA_ROI_CONTEXT_TILES,
+            )
+            _mark_roi_grid_center(
+                blur_centers,
+                roi,
+                tile_size=tile_size,
+                image_width=image_width,
+                image_height=image_height,
+            )
+    return protected_mask, protected_centers, blur_mask, blur_centers, counts
+
+
+def _remove_zones_supported_by_valid_rois(
+    excluded_mask: np.ndarray,
+    protected_centers: np.ndarray,
+    blur_centers: np.ndarray,
+) -> np.ndarray:
+    if excluded_mask.size == 0 or not np.any(protected_centers):
+        return excluded_mask
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(excluded_mask.astype(np.uint8), 8)
+    cleaned = excluded_mask.copy()
+    for label_idx in range(1, n_labels):
+        area = int(stats[label_idx, cv2.CC_STAT_AREA])
+        if area <= 0:
+            continue
+        component = labels == label_idx
+        valid_center_count = int(np.count_nonzero(protected_centers & component))
+        blur_center_count = int(np.count_nonzero(blur_centers & component))
+        if (
+            valid_center_count >= FOCUS_AREA_MIN_VALID_ROI_CENTERS_TO_REMOVE_ZONE
+            and valid_center_count > blur_center_count
+        ):
+            cleaned[component] = False
+    return cleaned
+
+
+def _build_focus_area_for_image(
+    tif_path: Path,
+    image: DeepScanImageInfo | None,
+    rois: list[realtime_crud.RealtimeROI] | None = None,
+    *,
+    tile_size: int = FOCUS_AREA_DEFAULT_TILE_SIZE,
+) -> dict[str, object] | None:
+    tif_shape = _read_shape_from_tif(tif_path)
+    if tif_shape is None:
+        return None
+    target_shape = _target_processed_shape_for_focus_area(image, rois, tif_shape)
+    gray = _focus_gray_for_shape(tif_path, target_shape)
+    if gray is None:
+        return None
+
+    h, w = gray.shape[:2]
+    tile_size = max(4, int(tile_size))
+    rows = max(1, int(math.ceil(h / tile_size)))
+    cols = max(1, int(math.ceil(w / tile_size)))
+
+    gray_float = gray.astype(np.float32)
+    if min(h, w) < 5:
+        return None
+    window_size = min(FOCUS_AREA_LOCAL_WINDOW_SIZE, max(3, min(h, w)))
+    if window_size % 2 == 0:
+        window_size -= 1
+    window_size = max(3, window_size)
+
+    lap = cv2.Laplacian(gray_float, cv2.CV_32F, ksize=3)
+    lap_energy = lap * lap
+    focus_energy = cv2.boxFilter(
+        lap_energy,
+        ddepth=-1,
+        ksize=(window_size, window_size),
+        normalize=True,
+        borderType=cv2.BORDER_REFLECT,
+    )
+    focus_energy = cv2.GaussianBlur(
+        focus_energy,
+        ksize=(0, 0),
+        sigmaX=max(1.0, tile_size * 0.5),
+        sigmaY=max(1.0, tile_size * 0.5),
+        borderType=cv2.BORDER_REFLECT,
+    )
+    log_focus = np.log1p(np.maximum(focus_energy, 0.0))
+    finite_scores = log_focus[np.isfinite(log_focus)]
+    tile_areas: list[int] = []
+    norm_scores: list[float] = []
+    threshold = 0.0
+    (
+        protected_roi_mask,
+        protected_roi_centers,
+        blur_roi_mask,
+        blur_roi_centers,
+        roi_constraint_counts,
+    ) = _build_roi_focus_constraint_masks(
+        rois,
+        rows=rows,
+        cols=cols,
+        tile_size=tile_size,
+        image_width=w,
+        image_height=h,
+    )
+
+    if finite_scores.size == 0 or float(finite_scores.max() - finite_scores.min()) <= 1e-12:
+        excluded_mask = np.zeros((rows, cols), dtype=bool)
+    else:
+        low, high = np.percentile(finite_scores, [5, 95])
+        if float(high - low) <= 1e-12:
+            low = float(finite_scores.min())
+            high = float(finite_scores.max())
+        norm_focus = np.clip((log_focus - float(low)) / max(float(high - low), 1e-12), 0.0, 1.0)
+        norm_u8 = np.clip(norm_focus * 255.0, 0, 255).astype(np.uint8)
+        threshold_u8, _ = cv2.threshold(norm_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        threshold = float(threshold_u8) / 255.0
+        excluded_pixels = norm_focus < threshold
+        excluded_ratio = float(np.count_nonzero(excluded_pixels)) / float(excluded_pixels.size)
+        flattened_focus = norm_focus.reshape(-1)
+        if excluded_ratio > 0.65:
+            threshold = float(np.percentile(flattened_focus, 35))
+            excluded_pixels = norm_focus < threshold
+        elif excluded_ratio < 0.03:
+            threshold = float(np.percentile(flattened_focus, 15))
+            excluded_pixels = norm_focus < threshold
+
+        kernel_size = max(3, int(round(tile_size * FOCUS_AREA_PIXEL_MORPH_TILE_SCALE)))
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        excluded_u8 = excluded_pixels.astype(np.uint8)
+        excluded_u8 = cv2.morphologyEx(excluded_u8, cv2.MORPH_OPEN, kernel, iterations=1)
+        excluded_u8 = cv2.morphologyEx(excluded_u8, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+        cell_excluded: list[bool] = []
+        cell_scores: list[float] = []
+        for r in range(rows):
+            y0 = r * tile_size
+            y1 = min(h, (r + 1) * tile_size)
+            for c in range(cols):
+                x0 = c * tile_size
+                x1 = min(w, (c + 1) * tile_size)
+                area = int(max(0, y1 - y0) * max(0, x1 - x0))
+                tile_areas.append(area)
+                if area <= 0:
+                    cell_excluded.append(False)
+                    cell_scores.append(0.0)
+                    continue
+                mask_cell = excluded_u8[y0:y1, x0:x1]
+                score_cell = norm_focus[y0:y1, x0:x1]
+                cell_excluded.append(float(mask_cell.mean()) >= 0.5)
+                cell_scores.append(float(score_cell.mean()))
+        excluded_mask = np.array(cell_excluded, dtype=bool).reshape(rows, cols)
+        excluded_mask = excluded_mask | blur_roi_mask
+        excluded_mask = _zone_smooth_excluded_mask(excluded_mask)
+        excluded_mask = _remove_zones_supported_by_valid_rois(
+            excluded_mask,
+            protected_roi_centers,
+            blur_roi_centers,
+        )
+        excluded_mask = excluded_mask & ~protected_roi_mask
+        excluded_mask = _remove_small_excluded_components(excluded_mask, FOCUS_AREA_MIN_ZONE_TILES)
+        norm_scores = cell_scores
+
+    if not tile_areas:
+        for r in range(rows):
+            y0 = r * tile_size
+            y1 = min(h, (r + 1) * tile_size)
+            for c in range(cols):
+                x0 = c * tile_size
+                x1 = min(w, (c + 1) * tile_size)
+                tile_areas.append(int(max(0, y1 - y0) * max(0, x1 - x0)))
+    if not norm_scores:
+        norm_scores = [0.0 for _ in range(rows * cols)]
+
+    excluded_flat = [bool(v) for v in excluded_mask.reshape(-1).tolist()]
+    whole_area_px = int(w * h)
+    excluded_area_px = int(sum(area for area, excluded in zip(tile_areas, excluded_flat) if excluded))
+    valid_area_px = max(0, whole_area_px - excluded_area_px)
+    excluded_area_ratio = 0.0 if whole_area_px <= 0 else excluded_area_px / float(whole_area_px)
+
+    return {
+        "version": FOCUS_AREA_SCHEMA_VERSION,
+        "method": "local_laplacian_focus_map",
+        "source": "generated",
+        "approved": False,
+        "approved_at": None,
+        "tile_size": int(tile_size),
+        "window_size": int(window_size),
+        "min_zone_tiles": int(FOCUS_AREA_MIN_ZONE_TILES),
+        "max_included_hole_tiles": int(FOCUS_AREA_MAX_INCLUDED_HOLE_TILES),
+        "pixel_morph_tile_scale": float(FOCUS_AREA_PIXEL_MORPH_TILE_SCALE),
+        "grid_morph_size": int(FOCUS_AREA_GRID_MORPH_SIZE),
+        "valid_roi_confidence": float(FOCUS_AREA_VALID_ROI_CONFIDENCE),
+        "blur_roi_confidence": float(FOCUS_AREA_BLUR_ROI_CONFIDENCE),
+        "roi_context_tiles": int(FOCUS_AREA_ROI_CONTEXT_TILES),
+        "protected_roi_count": int(roi_constraint_counts["protected_roi_count"]),
+        "blur_roi_count": int(roi_constraint_counts["blur_roi_count"]),
+        "protected_tile_count": int(np.count_nonzero(protected_roi_mask)),
+        "blur_tile_count": int(np.count_nonzero(blur_roi_mask)),
+        "rows": int(rows),
+        "cols": int(cols),
+        "image_width": int(w),
+        "image_height": int(h),
+        "threshold": float(threshold),
+        "scores": [float(v) for v in norm_scores],
+        "excluded": excluded_flat,
+        "whole_area_px": int(whole_area_px),
+        "valid_area_px": int(valid_area_px),
+        "excluded_area_px": int(excluded_area_px),
+        "excluded_area_ratio": float(excluded_area_ratio),
+    }
+
+
+def _focus_area_for_status(
+    db_path: Path,
+    tif_path: Path,
+    image: DeepScanImageInfo | None,
+    rois: list[realtime_crud.RealtimeROI] | None,
+) -> dict[str, object] | None:
+    relative_path = image.relative_path if image else tif_path.name
+    saved = _get_saved_focus_area(db_path, relative_path)
+    if isinstance(saved, dict) and saved.get("approved") is True:
+        copied = dict(saved)
+        copied["source"] = "saved"
+        return copied
+    generated = _build_focus_area_for_image(tif_path, image, rois)
+    return generated
+
+
+def _is_point_excluded_by_focus_area(center_x: int, center_y: int, focus_area: dict[str, object] | None) -> bool:
+    if not focus_area or focus_area.get("approved") is not True:
+        return False
+    excluded = focus_area.get("excluded")
+    if not isinstance(excluded, list):
+        return False
+    rows = _safe_int_or_none(focus_area.get("rows")) or 0
+    cols = _safe_int_or_none(focus_area.get("cols")) or 0
+    tile_size = _safe_int_or_none(focus_area.get("tile_size")) or FOCUS_AREA_DEFAULT_TILE_SIZE
+    if rows <= 0 or cols <= 0:
+        return False
+    col = max(0, min(cols - 1, center_x // max(1, tile_size)))
+    row = max(0, min(rows - 1, center_y // max(1, tile_size)))
+    idx = int(row * cols + col)
+    if idx < 0 or idx >= len(excluded):
+        return False
+    return bool(excluded[idx])
+
+
+def _is_roi_excluded_by_focus_area(roi: realtime_crud.RealtimeROI, focus_area: dict[str, object] | None) -> bool:
+    center_x = int(round((roi.roi_start_x + roi.roi_end_x) * 0.5))
+    center_y = int(round((roi.roi_start_y + roi.roi_end_y) * 0.5))
+    return _is_point_excluded_by_focus_area(center_x, center_y, focus_area)
+
+
+def approve_focus_area(db_name: str, *, tif_name: str | None = None) -> dict[str, object]:
+    db_path = databases_crud.get_database_file_path(db_name)
+    tif_path, _images, current_image, _current_index = _resolve_tif_path(db_path, tif_name=tif_name)
+    image_relative_path = current_image.relative_path if current_image else tif_path.name
+    rois = _load_rois_for_image(db_name, db_path, image_relative_path) if current_image else []
+    focus_area = _build_focus_area_for_image(tif_path, current_image, rois)
+    if focus_area is None:
+        raise HTTPException(status_code=400, detail="フォーカス除外領域を生成できませんでした。")
+    focus_area["source"] = "saved"
+    focus_area["approved"] = True
+    focus_area["approved_at"] = datetime.now().isoformat()
+    store = _load_focus_area_store(db_path)
+    store[image_relative_path] = focus_area
+    _save_focus_area_store(db_path, store)
+    return focus_area
 
 
 def _load_focus_gray(path: Path, max_side: int = 640) -> np.ndarray | None:
@@ -1180,6 +1813,9 @@ def _load_rois_for_image(db_name: str, db_path: Path, image_relative_path: str) 
         manual_cell_count = _safe_manual_cell_count(
             raw_meta.get(ROI_META_MANUAL_CELL_COUNT_KEY) if isinstance(raw_meta, dict) else None
         )
+        suggested_cell_count = _safe_suggested_cell_count(
+            raw_meta.get(ROI_META_SUGGESTED_CELL_COUNT_KEY) if isinstance(raw_meta, dict) else None
+        )
         rois.append(
             realtime_crud.RealtimeROI(
                 roi_id=record_id,
@@ -1199,6 +1835,7 @@ def _load_rois_for_image(db_name: str, db_path: Path, image_relative_path: str) 
                 ai_model_name=row["ai_model_name"],
                 manual_added=manual_added,
                 manual_cell_count=manual_cell_count,
+                suggested_cell_count=suggested_cell_count,
             )
         )
 
@@ -1224,21 +1861,105 @@ def _label_for_cell_count(raw_manual: object, raw_ai: object, db_name: str | Non
     return int(inferred.predicted_class)
 
 
+def _ensure_suggested_cell_counts_for_image(db_name: str, db_path: Path, image_relative_path: str) -> None:
+    databases_crud.ensure_label_columns(db_path)
+    updates: list[tuple[str, int]] = []
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            columns = _columns_for_table(conn, "roi_records")
+            if "roi_meta" not in columns or "png_blob" not in columns or "image_filename" not in columns:
+                return
+            rows = conn.execute(
+                """
+                SELECT id, png_blob, manual_label, ai_label, roi_meta
+                FROM roi_records
+                WHERE image_filename = ?
+                ORDER BY id
+                """,
+                (image_relative_path,),
+            ).fetchall()
+
+            for row in rows:
+                record_id = int(row["id"])
+                label = _label_for_cell_count(
+                    raw_manual=row["manual_label"],
+                    raw_ai=row["ai_label"],
+                    db_name=db_name,
+                    record_id=record_id,
+                )
+                if label != 1:
+                    continue
+
+                meta = _deserialize_roi_meta(row["roi_meta"])
+                if not isinstance(meta, dict):
+                    meta = {}
+                existing = _safe_suggested_cell_count(meta.get(ROI_META_SUGGESTED_CELL_COUNT_KEY))
+                if existing is not None:
+                    continue
+
+                suggested = _estimate_cells_in_class1_patch(row["png_blob"])
+                meta[ROI_META_SUGGESTED_CELL_COUNT_KEY] = int(suggested)
+                updates.append((json.dumps(meta, ensure_ascii=False), record_id))
+
+            if updates:
+                conn.executemany("UPDATE roi_records SET roi_meta = ? WHERE id = ?", updates)
+                conn.commit()
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=f"Class1推定細胞数の保存に失敗しました: {exc}") from exc
+
+
+def _cell_count_bucket(focus_area: dict[str, object] | None = None) -> dict[str, int | float | bool | None]:
+    approved = bool(focus_area and focus_area.get("approved") is True)
+    whole_area = _safe_int_or_none(focus_area.get("whole_area_px")) if approved and focus_area else None
+    valid_area = _safe_int_or_none(focus_area.get("valid_area_px")) if approved and focus_area else None
+    excluded_area = _safe_int_or_none(focus_area.get("excluded_area_px")) if approved and focus_area else None
+    ratio_raw = focus_area.get("excluded_area_ratio") if approved and focus_area else None
+    excluded_ratio = float(ratio_raw) if isinstance(ratio_raw, (int, float)) else None
+    return {
+        "roi_count": 0,
+        "class0_count": 0,
+        "class1_count": 0,
+        "class2_count": 0,
+        "class3_count": 0,
+        "included_class0_count": 0,
+        "included_class1_count": 0,
+        "excluded_by_focus_area_count": 0,
+        "missing_class1_cell_count": 0,
+        "total_cells": 0,
+        "whole_area_px": whole_area,
+        "valid_area_px": valid_area,
+        "excluded_area_px": excluded_area,
+        "excluded_area_ratio": excluded_ratio,
+        "focus_area_approved": approved,
+    }
+
+
 def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
     db_path = databases_crud.get_database_file_path(db_name)
     images = _list_bulk_images(db_path)
 
-    available_counts: dict[str, dict[str, int]] = {}
+    focus_area_by_image: dict[str, dict[str, object] | None] = {}
+    available_counts: dict[str, dict[str, int | float | bool | None]] = {}
     for image in images:
-        available_counts[image.relative_path] = {
-            "roi_count": 0,
-            "class0_count": 0,
-            "class1_count": 0,
-            "class2_count": 0,
-            "class3_count": 0,
-        }
+        focus_area = _get_saved_focus_area(db_path, image.relative_path)
+        if not (isinstance(focus_area, dict) and focus_area.get("approved") is True):
+            focus_area = None
+        focus_area_by_image[image.relative_path] = focus_area
+        available_counts[image.relative_path] = _cell_count_bucket(focus_area)
 
-    totals = {"roi_count": 0, "class0": 0, "class1": 0, "class2": 0, "class3": 0}
+    totals: dict[str, int] = {
+        "roi_count": 0,
+        "class0": 0,
+        "class1": 0,
+        "class2": 0,
+        "class3": 0,
+        "included_class0": 0,
+        "included_class1": 0,
+        "excluded_by_focus_area": 0,
+        "missing_class1_cell_count": 0,
+        "total_cells": 0,
+    }
     unknown_images = set[str]()
 
     try:
@@ -1255,6 +1976,11 @@ def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
                         class1_count=0,
                         class2_count=0,
                         class3_count=0,
+                        included_class0_count=0,
+                        included_class1_count=0,
+                        excluded_by_focus_area_count=0,
+                        missing_class1_cell_count=0,
+                        total_cells=0,
                     )
                     for image in images
                 ]
@@ -1266,11 +1992,21 @@ def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
                     class2_total=0,
                     class3_total=0,
                     images=image_summaries,
+                    total_cells=0,
                 )
 
             rows = conn.execute(
                 """
-                SELECT id, image_filename, ai_label, manual_label
+                SELECT
+                  id,
+                  image_filename,
+                  ai_label,
+                  manual_label,
+                  roi_meta,
+                  roi_start_x,
+                  roi_start_y,
+                  roi_end_x,
+                  roi_end_y
                 FROM roi_records
                 """
             ).fetchall()
@@ -1294,32 +2030,62 @@ def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
         )
 
         if relative_path not in available_counts:
-            available_counts[relative_path] = {
-                "roi_count": 0,
-                "class0_count": 0,
-                "class1_count": 0,
-                "class2_count": 0,
-                "class3_count": 0,
-            }
+            focus_area = _get_saved_focus_area(db_path, relative_path)
+            if not (isinstance(focus_area, dict) and focus_area.get("approved") is True):
+                focus_area = None
+            focus_area_by_image[relative_path] = focus_area
+            available_counts[relative_path] = _cell_count_bucket(focus_area)
             unknown_images.add(relative_path)
 
-        available_counts[relative_path]["roi_count"] += 1
+        counts = available_counts[relative_path]
+        counts["roi_count"] = int(counts["roi_count"] or 0) + 1
         totals["roi_count"] += 1
         if label is None or label < 0 or label > 3:
             continue
 
         if label == 0:
-            available_counts[relative_path]["class0_count"] += 1
+            counts["class0_count"] = int(counts["class0_count"] or 0) + 1
             totals["class0"] += 1
         elif label == 1:
-            available_counts[relative_path]["class1_count"] += 1
+            counts["class1_count"] = int(counts["class1_count"] or 0) + 1
             totals["class1"] += 1
         elif label == 2:
-            available_counts[relative_path]["class2_count"] += 1
+            counts["class2_count"] = int(counts["class2_count"] or 0) + 1
             totals["class2"] += 1
         elif label == 3:
-            available_counts[relative_path]["class3_count"] += 1
+            counts["class3_count"] = int(counts["class3_count"] or 0) + 1
             totals["class3"] += 1
+
+        x1 = _safe_int_or_none(row["roi_start_x"]) or 0
+        y1 = _safe_int_or_none(row["roi_start_y"]) or 0
+        x2 = _safe_int_or_none(row["roi_end_x"]) or x1
+        y2 = _safe_int_or_none(row["roi_end_y"]) or y1
+        center_x = int(round((x1 + x2) * 0.5))
+        center_y = int(round((y1 + y2) * 0.5))
+        excluded_by_focus_area = _is_point_excluded_by_focus_area(center_x, center_y, focus_area_by_image.get(relative_path))
+        if excluded_by_focus_area:
+            counts["excluded_by_focus_area_count"] = int(counts["excluded_by_focus_area_count"] or 0) + 1
+            totals["excluded_by_focus_area"] += 1
+            continue
+
+        if label == 0:
+            counts["included_class0_count"] = int(counts["included_class0_count"] or 0) + 1
+            counts["total_cells"] = int(counts["total_cells"] or 0) + 1
+            totals["included_class0"] += 1
+            totals["total_cells"] += 1
+        elif label == 1:
+            raw_meta = _deserialize_roi_meta(row["roi_meta"])
+            manual_count = _safe_manual_cell_count(
+                raw_meta.get(ROI_META_MANUAL_CELL_COUNT_KEY) if isinstance(raw_meta, dict) else None
+            )
+            counts["included_class1_count"] = int(counts["included_class1_count"] or 0) + 1
+            totals["included_class1"] += 1
+            if manual_count is None:
+                counts["missing_class1_cell_count"] = int(counts["missing_class1_cell_count"] or 0) + 1
+                totals["missing_class1_cell_count"] += 1
+            else:
+                counts["total_cells"] = int(counts["total_cells"] or 0) + int(manual_count)
+                totals["total_cells"] += int(manual_count)
 
     image_summaries: list[DeepscanCellCountImageInfo] = []
     seen_relative = set[str]()
@@ -1330,17 +2096,37 @@ def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
             "class1_count": 0,
             "class2_count": 0,
             "class3_count": 0,
+            "included_class0_count": 0,
+            "included_class1_count": 0,
+            "excluded_by_focus_area_count": 0,
+            "missing_class1_cell_count": 0,
+            "total_cells": 0,
+            "whole_area_px": None,
+            "valid_area_px": None,
+            "excluded_area_px": None,
+            "excluded_area_ratio": None,
+            "focus_area_approved": False,
         })
         seen_relative.add(image.relative_path)
         image_summaries.append(
             DeepscanCellCountImageInfo(
                 relative_path=image.relative_path,
                 tif_name=image.tif_name,
-                roi_count=counts["roi_count"],
-                class0_count=counts["class0_count"],
-                class1_count=counts["class1_count"],
-                class2_count=counts["class2_count"],
-                class3_count=counts["class3_count"],
+                roi_count=int(counts["roi_count"] or 0),
+                class0_count=int(counts["class0_count"] or 0),
+                class1_count=int(counts["class1_count"] or 0),
+                class2_count=int(counts["class2_count"] or 0),
+                class3_count=int(counts["class3_count"] or 0),
+                included_class0_count=int(counts["included_class0_count"] or 0),
+                included_class1_count=int(counts["included_class1_count"] or 0),
+                excluded_by_focus_area_count=int(counts["excluded_by_focus_area_count"] or 0),
+                missing_class1_cell_count=int(counts["missing_class1_cell_count"] or 0),
+                total_cells=None if int(counts["missing_class1_cell_count"] or 0) > 0 else int(counts["total_cells"] or 0),
+                whole_area_px=_safe_int_or_none(counts["whole_area_px"]),
+                valid_area_px=_safe_int_or_none(counts["valid_area_px"]),
+                excluded_area_px=_safe_int_or_none(counts["excluded_area_px"]),
+                excluded_area_ratio=float(counts["excluded_area_ratio"]) if isinstance(counts["excluded_area_ratio"], (int, float)) else None,
+                focus_area_approved=bool(counts["focus_area_approved"]),
             )
         )
 
@@ -1353,11 +2139,21 @@ def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
             DeepscanCellCountImageInfo(
                 relative_path=relative_path,
                 tif_name=tif_name,
-                roi_count=counts["roi_count"],
-                class0_count=counts["class0_count"],
-                class1_count=counts["class1_count"],
-                class2_count=counts["class2_count"],
-                class3_count=counts["class3_count"],
+                roi_count=int(counts["roi_count"] or 0),
+                class0_count=int(counts["class0_count"] or 0),
+                class1_count=int(counts["class1_count"] or 0),
+                class2_count=int(counts["class2_count"] or 0),
+                class3_count=int(counts["class3_count"] or 0),
+                included_class0_count=int(counts["included_class0_count"] or 0),
+                included_class1_count=int(counts["included_class1_count"] or 0),
+                excluded_by_focus_area_count=int(counts["excluded_by_focus_area_count"] or 0),
+                missing_class1_cell_count=int(counts["missing_class1_cell_count"] or 0),
+                total_cells=None if int(counts["missing_class1_cell_count"] or 0) > 0 else int(counts["total_cells"] or 0),
+                whole_area_px=_safe_int_or_none(counts["whole_area_px"]),
+                valid_area_px=_safe_int_or_none(counts["valid_area_px"]),
+                excluded_area_px=_safe_int_or_none(counts["excluded_area_px"]),
+                excluded_area_ratio=float(counts["excluded_area_ratio"]) if isinstance(counts["excluded_area_ratio"], (int, float)) else None,
+                focus_area_approved=bool(counts["focus_area_approved"]),
             )
         )
 
@@ -1365,6 +2161,13 @@ def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
     if image_summaries and unknown_images:
         # Keep unknown image records in stable order after known images for visibility.
         image_summaries.sort(key=lambda item: (item.relative_path in unknown_images, item.relative_path))
+
+    area_images = [image for image in image_summaries if image.roi_count > 0]
+    area_normalization_ready = bool(area_images) and all(image.focus_area_approved for image in area_images)
+    whole_area_total = sum((image.whole_area_px or 0) for image in area_images if image.focus_area_approved)
+    valid_area_total = sum((image.valid_area_px or 0) for image in area_images if image.focus_area_approved)
+    excluded_area_total = sum((image.excluded_area_px or 0) for image in area_images if image.focus_area_approved)
+    total_cells_value: int | None = None if totals["missing_class1_cell_count"] > 0 else totals["total_cells"]
 
     return DeepscanCellCountSummary(
         db_name=db_path.name,
@@ -1374,6 +2177,16 @@ def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
         class2_total=totals["class2"],
         class3_total=totals["class3"],
         images=image_summaries,
+        included_class0_total=totals["included_class0"],
+        included_class1_total=totals["included_class1"],
+        excluded_by_focus_area_total=totals["excluded_by_focus_area"],
+        missing_class1_cell_count_total=totals["missing_class1_cell_count"],
+        total_cells=total_cells_value,
+        whole_area_px_total=whole_area_total if area_normalization_ready else None,
+        valid_area_px_total=valid_area_total if area_normalization_ready else None,
+        excluded_area_px_total=excluded_area_total if area_normalization_ready else None,
+        excluded_area_ratio=(excluded_area_total / float(whole_area_total)) if area_normalization_ready and whole_area_total > 0 else None,
+        area_normalization_ready=area_normalization_ready,
     )
 
 
@@ -1607,6 +2420,7 @@ def add_manual_roi(
         ai_model_name=result.model_path,
         manual_added=True,
         manual_cell_count=None,
+        suggested_cell_count=None,
     )
 
 
@@ -1672,7 +2486,9 @@ async def get_deepscan_view(
     db_path = databases_crud.get_database_file_path(db_name)
     tif_path, images, current_image, current_index = _resolve_tif_path(db_path, tif_name=tif_name)
 
-    if current_image and len(images) > 1:
+    has_image_filename = _table_has_column(db_path, "roi_records", "image_filename")
+    if current_image and has_image_filename:
+        await asyncio.to_thread(_ensure_suggested_cell_counts_for_image, db_name, db_path, current_image.relative_path)
         rois = await asyncio.to_thread(_load_rois_for_image, db_name, db_path, current_image.relative_path)
     else:
         rois = await asyncio.to_thread(realtime_crud._load_rois_with_inference, db_path, tif_path)
@@ -1706,6 +2522,7 @@ async def get_deepscan_view(
 
     focus_profile = await asyncio.to_thread(_build_focus_profile, images, current_index, focus_metric)
     focus_map = await asyncio.to_thread(_build_focus_map, images, current_index, focus_metric)
+    focus_area = await asyncio.to_thread(_focus_area_for_status, db_path, tif_path, current_image, rois)
 
     return DeepScanView(
         status=status,
@@ -1715,4 +2532,5 @@ async def get_deepscan_view(
         focus_profile=focus_profile,
         focus_map=focus_map,
         roi_components_3d=roi_components_3d_payload,
+        focus_area=focus_area,
     )

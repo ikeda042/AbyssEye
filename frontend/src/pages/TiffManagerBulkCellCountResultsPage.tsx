@@ -60,12 +60,23 @@ type ResultRoi = {
   manual_label?: string | number | null;
   manual_added?: boolean;
   manual_cell_count?: number | null;
+  suggested_cell_count?: number | null;
+  excluded_by_focus_area?: boolean;
+};
+
+type FocusArea = {
+  approved: boolean;
+  whole_area_px: number;
+  valid_area_px: number;
+  excluded_area_px: number;
+  excluded_area_ratio: number;
 };
 
 type DeepScanStatus = {
   db_name?: string;
   tif_name: string;
   rois?: ResultRoi[];
+  focus_area?: FocusArea | null;
 };
 
 type AggregatedRoi = ResultRoi & {
@@ -76,11 +87,23 @@ type AggregatedRoi = ResultRoi & {
   labelSource: "ai" | "manual";
 };
 
+type SourceAreaSummary = {
+  dbName: string;
+  sourceName: string;
+  tifName: string;
+  focusAreaApproved: boolean;
+  wholeAreaPx: number | null;
+  validAreaPx: number | null;
+  excludedAreaPx: number | null;
+  excludedAreaRatio: number | null;
+};
+
 type AggregatedResults = {
   totalRoiCount: number;
   counts: Record<number, number>;
   classBuckets: Record<number, AggregatedRoi[]>;
   roiRows: AggregatedRoi[];
+  sourceAreas: SourceAreaSummary[];
   sourceCount: number;
   skippedSources: string[];
 };
@@ -121,6 +144,8 @@ const compareText = (left: string, right: string) =>
 const manualCellCountKey = (roi: Pick<ResultRoi, "roi_id"> & { dbName?: string }) =>
   `${roi.dbName ?? ""}:${roi.roi_id}`;
 
+const PIXEL_SIZE_STORAGE_KEY = "abyssEye:cellCount:pixelSizeUm";
+
 const parseManualCellCountInput = (raw: string | undefined): number | null => {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) return null;
@@ -149,6 +174,10 @@ const TiffManagerBulkCellCountResultsPage = () => {
   const [manualCellCountMessage, setManualCellCountMessage] = useState<string | null>(null);
   const [totalCellCount, setTotalCellCount] = useState<number | null>(null);
   const [cellCountSaving, setCellCountSaving] = useState(false);
+  const [pixelSizeUmInput, setPixelSizeUmInput] = useState(() => {
+    if (typeof window === "undefined") return "0.16";
+    return window.localStorage.getItem(PIXEL_SIZE_STORAGE_KEY) || "0.16";
+  });
   const exportedAtLabel = useMemo(() => new Date().toLocaleString(language === "ja" ? "ja-JP" : "en-US"), [language]);
   const fileNameBase = useMemo(
     () => (projectName || "cell_count_results").replace(/[^A-Za-z0-9._-]+/g, "_"),
@@ -213,20 +242,33 @@ const TiffManagerBulkCellCountResultsPage = () => {
       const counts: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0 };
       const classBuckets: Record<number, AggregatedRoi[]> = { 0: [], 1: [], 2: [], 3: [] };
       const roiRows: AggregatedRoi[] = [];
+      const sourceAreas: SourceAreaSummary[] = [];
       const skippedSources: string[] = [];
 
       await Promise.all(
         filteredSingleImageFolders.map(async (folder) => {
           const dbName = `${folder.name}_bulk.db`;
+          const sourceName = scopedFolderName(folder.name);
           const response = await fetch(endpoint(`deepscan/status?db_name=${encodeURIComponent(dbName)}`), {
             headers: { Accept: "application/json" },
           });
           const payload: DeepScanStatus & { detail?: string } = await response.json().catch(() => ({} as DeepScanStatus));
           if (!response.ok || !payload) {
-            skippedSources.push(scopedFolderName(folder.name));
+            skippedSources.push(sourceName);
             return;
           }
           const rois = payload.rois ?? [];
+          const focusArea = payload.focus_area ?? null;
+          sourceAreas.push({
+            dbName,
+            sourceName,
+            tifName: payload.tif_name,
+            focusAreaApproved: Boolean(focusArea?.approved),
+            wholeAreaPx: focusArea?.approved ? focusArea.whole_area_px ?? null : null,
+            validAreaPx: focusArea?.approved ? focusArea.valid_area_px ?? null : null,
+            excludedAreaPx: focusArea?.approved ? focusArea.excluded_area_px ?? null : null,
+            excludedAreaRatio: focusArea?.approved ? focusArea.excluded_area_ratio ?? null : null,
+          });
           rois.forEach((roi) => {
             const manualLabel = parseClassLabel(roi.manual_label);
             const finalClass = manualLabel ?? roi.predicted_class;
@@ -234,7 +276,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
             const row: AggregatedRoi = {
               ...roi,
               dbName,
-              sourceName: scopedFolderName(folder.name),
+              sourceName,
               tifName: payload.tif_name,
               finalClass,
               labelSource,
@@ -272,6 +314,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
         counts,
         classBuckets,
         roiRows,
+        sourceAreas,
         sourceCount: filteredSingleImageFolders.length,
         skippedSources,
       });
@@ -286,6 +329,11 @@ const TiffManagerBulkCellCountResultsPage = () => {
   useEffect(() => {
     void fetchResults();
   }, [fetchResults]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(PIXEL_SIZE_STORAGE_KEY, pixelSizeUmInput);
+  }, [pixelSizeUmInput]);
 
   useEffect(() => {
     if (!results) return;
@@ -303,8 +351,8 @@ const TiffManagerBulkCellCountResultsPage = () => {
     }
     const nextInputs: Record<string, string> = {};
     results.classBuckets[1].forEach((roi) => {
-      nextInputs[manualCellCountKey(roi)] =
-        roi.manual_cell_count === null || roi.manual_cell_count === undefined ? "" : String(roi.manual_cell_count);
+      const initialCount = roi.manual_cell_count ?? roi.suggested_cell_count ?? null;
+      nextInputs[manualCellCountKey(roi)] = initialCount === null ? "" : String(initialCount);
     });
     setManualCellCountInputs(nextInputs);
     setManualCellCountError(null);
@@ -380,6 +428,44 @@ const TiffManagerBulkCellCountResultsPage = () => {
   }, [results, selectedClass, sortKey, sortOrder]);
 
   const class1Rois = results?.classBuckets[1] ?? [];
+  const countableClass1Rois = useMemo(
+    () => class1Rois.filter((roi) => !roi.excluded_by_focus_area),
+    [class1Rois],
+  );
+  const countableClass0Count = useMemo(
+    () => (results?.classBuckets[0] ?? []).filter((roi) => !roi.excluded_by_focus_area).length,
+    [results],
+  );
+  const excludedByFocusAreaCount = useMemo(
+    () => (results?.roiRows ?? []).filter((roi) => roi.excluded_by_focus_area).length,
+    [results],
+  );
+  const focusAreaSourceCount = results?.sourceAreas.length ?? 0;
+  const focusAreaApprovedCount = useMemo(
+    () => (results?.sourceAreas ?? []).filter((source) => source.focusAreaApproved).length,
+    [results],
+  );
+  const areaNormalizationReady = focusAreaSourceCount > 0 && focusAreaApprovedCount === focusAreaSourceCount;
+  const validAreaPxTotal = useMemo(
+    () =>
+      areaNormalizationReady
+        ? (results?.sourceAreas ?? []).reduce((sum, source) => sum + (source.validAreaPx ?? 0), 0)
+        : 0,
+    [areaNormalizationReady, results],
+  );
+  const excludedAreaRatioTotal = useMemo(() => {
+    if (!areaNormalizationReady) return null;
+    const whole = (results?.sourceAreas ?? []).reduce((sum, source) => sum + (source.wholeAreaPx ?? 0), 0);
+    const excluded = (results?.sourceAreas ?? []).reduce((sum, source) => sum + (source.excludedAreaPx ?? 0), 0);
+    return whole > 0 ? excluded / whole : null;
+  }, [areaNormalizationReady, results]);
+  const pixelSizeUm = Number.parseFloat(pixelSizeUmInput);
+  const validAreaMm2 =
+    areaNormalizationReady && validAreaPxTotal > 0 && Number.isFinite(pixelSizeUm) && pixelSizeUm > 0
+      ? (validAreaPxTotal * pixelSizeUm * pixelSizeUm) / 1_000_000
+      : null;
+  const cellDensityPerMm2 =
+    totalCellCount !== null && validAreaMm2 !== null && validAreaMm2 > 0 ? totalCellCount / validAreaMm2 : null;
 
   const updateManualCellCountInput = useCallback((roiKey: string, value: string) => {
     setManualCellCountInputs((prev) => ({
@@ -405,7 +491,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
     if (!results) return;
 
     const class1Counts = new Map<string, number>();
-    for (const roi of class1Rois) {
+    for (const roi of countableClass1Rois) {
       const key = manualCellCountKey(roi);
       const parsed = parseManualCellCountInput(manualCellCountInputs[key]);
       if (parsed === null) {
@@ -422,7 +508,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
     setManualCellCountMessage(null);
     try {
       await Promise.all(
-        class1Rois.map(async (roi) => {
+        countableClass1Rois.map(async (roi) => {
           const response = await fetch(
             endpoint(`deepscan/${encodeURIComponent(roi.dbName)}/records/${roi.roi_id}/manual-cell-count`),
             {
@@ -458,7 +544,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
       });
 
       const computedTotal =
-        results.counts[0] + Array.from(class1Counts.values()).reduce((sum, value) => sum + value, 0);
+        countableClass0Count + Array.from(class1Counts.values()).reduce((sum, value) => sum + value, 0);
       setTotalCellCount(computedTotal);
       setManualCellCountMessage(tt("全細胞数を更新しました。", "Updated total cell count."));
     } catch (err) {
@@ -467,7 +553,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
     } finally {
       setCellCountSaving(false);
     }
-  }, [class1Rois, manualCellCountInputs, results, tt]);
+  }, [countableClass0Count, countableClass1Rois, manualCellCountInputs, results, tt]);
 
   const handleExportCsv = useCallback(() => {
     if (!results) return;
@@ -486,6 +572,9 @@ const TiffManagerBulkCellCountResultsPage = () => {
         "bbox_ymax",
         "image_width_px",
         "image_height_px",
+        "manual_cell_count",
+        "suggested_cell_count",
+        "excluded_by_focus_area",
       ],
       results.roiRows.map((roi) => [
         roi.tifName,
@@ -500,6 +589,9 @@ const TiffManagerBulkCellCountResultsPage = () => {
         roi.roi_end_y ?? "",
         roi.image_width_px ?? "",
         roi.image_height_px ?? "",
+        roi.manual_cell_count ?? "",
+        roi.suggested_cell_count ?? "",
+        Boolean(roi.excluded_by_focus_area),
       ]),
       [["project_name", projectName || ""]],
     );
@@ -742,9 +834,55 @@ const TiffManagerBulkCellCountResultsPage = () => {
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
                     {tt(
-                      "総細胞数 = Class 0 ROI数 × 1 + Class 1 ROIごとの入力数の合計",
-                      "Total cells = Class 0 ROI count × 1 + sum of the Class 1 inputs",
+                      "総細胞数 = 有効領域内の Class 0 ROI数 × 1 + 有効領域内の Class 1 ROIごとの入力数の合計",
+                      "Total cells = included Class 0 ROI count × 1 + sum of included Class 1 inputs",
                     )}
+                  </Typography>
+                  <Stack direction={{ xs: "column", md: "row" }} spacing={1.25} alignItems={{ md: "center" }}>
+                    <TextField
+                      label={tt("ピクセルサイズ (µm/pixel)", "Pixel size (µm/pixel)")}
+                      size="small"
+                      type="number"
+                      value={pixelSizeUmInput}
+                      inputProps={{ min: 0, step: 0.001 }}
+                      onChange={(event) => {
+                        setPixelSizeUmInput(event.target.value);
+                      }}
+                      sx={{ width: { xs: "100%", md: 220 } }}
+                    />
+                    <Chip
+                      variant="outlined"
+                      label={tt(
+                        `有効Class 0: ${countableClass0Count.toLocaleString()}`,
+                        `Included Class 0: ${countableClass0Count.toLocaleString()}`,
+                      )}
+                    />
+                    <Chip
+                      variant="outlined"
+                      label={tt(
+                        `有効Class 1: ${countableClass1Rois.length.toLocaleString()}`,
+                        `Included Class 1: ${countableClass1Rois.length.toLocaleString()}`,
+                      )}
+                    />
+                    <Chip
+                      color={excludedByFocusAreaCount > 0 ? "warning" : "default"}
+                      variant="outlined"
+                      label={tt(
+                        `除外ROI: ${excludedByFocusAreaCount.toLocaleString()}`,
+                        `Excluded ROI: ${excludedByFocusAreaCount.toLocaleString()}`,
+                      )}
+                    />
+                  </Stack>
+                  <Typography variant="body2" color="text.secondary">
+                    {areaNormalizationReady
+                      ? tt(
+                          `有効面積: ${validAreaPxTotal.toLocaleString()} px (${validAreaMm2?.toFixed(6) ?? "-"} mm²), 除外面積: ${excludedAreaRatioTotal === null ? "-" : `${(excludedAreaRatioTotal * 100).toFixed(1)}%`}`,
+                          `Valid area: ${validAreaPxTotal.toLocaleString()} px (${validAreaMm2?.toFixed(6) ?? "-"} mm²), excluded area: ${excludedAreaRatioTotal === null ? "-" : `${(excludedAreaRatioTotal * 100).toFixed(1)}%`}`,
+                        )
+                      : tt(
+                          `面積補正には全画像のフォーカス除外領域の確認が必要です。確認済み: ${focusAreaApprovedCount}/${focusAreaSourceCount}`,
+                          `Area normalization requires approved focus exclusion zones for all images. Approved: ${focusAreaApprovedCount}/${focusAreaSourceCount}`,
+                        )}
                   </Typography>
                   <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }}>
                     <Button
@@ -756,6 +894,10 @@ const TiffManagerBulkCellCountResultsPage = () => {
                     </Button>
                     <Typography variant="h6" fontWeight={700}>
                       {tt("総細胞数", "Total cell count")}: {totalCellCount === null ? "-" : totalCellCount.toLocaleString()}
+                    </Typography>
+                    <Typography variant="h6" fontWeight={700}>
+                      {tt("面積あたり菌数", "Cell density")}:{" "}
+                      {cellDensityPerMm2 === null ? "-" : `${cellDensityPerMm2.toExponential(3)} cells/mm²`}
                     </Typography>
                   </Stack>
                   {manualCellCountError && <Alert severity="warning">{manualCellCountError}</Alert>}
@@ -906,11 +1048,34 @@ const TiffManagerBulkCellCountResultsPage = () => {
                             {selectedClass === 1 && (
                               <TableCell align="center" sx={{ minWidth: 120 }}>
                                 {(() => {
+                                  if (roi.excluded_by_focus_area) {
+                                    return (
+                                      <Stack spacing={0.5} alignItems="center">
+                                        <Chip
+                                          size="small"
+                                          color="warning"
+                                          variant="outlined"
+                                          label={tt("除外", "Excluded")}
+                                        />
+                                        <Typography variant="caption" color="text.secondary">
+                                          {tt("フォーカス除外領域内", "Inside focus-excluded zone")}
+                                        </Typography>
+                                      </Stack>
+                                    );
+                                  }
                                   const roiKey = manualCellCountKey(roi);
                                   const parsed = parseManualCellCountInput(manualCellCountInputs[roiKey]);
                                   const customValue = parsed !== null && parsed >= 5 ? String(parsed) : "";
                                   return (
                                     <Stack spacing={0.75} alignItems="center">
+                                      {roi.suggested_cell_count != null && (
+                                        <Typography variant="caption" color="text.secondary">
+                                          {tt(
+                                            `推定: ${roi.suggested_cell_count}`,
+                                            `Suggested: ${roi.suggested_cell_count}`,
+                                          )}
+                                        </Typography>
+                                      )}
                                       <Stack direction="row" spacing={0.5}>
                                         {[2, 3, 4].map((value) => (
                                           <Button

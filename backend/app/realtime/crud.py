@@ -84,6 +84,7 @@ class RealtimeROI:
     ai_model_name: str | None = None
     manual_added: bool = False
     manual_cell_count: int | None = None
+    suggested_cell_count: int | None = None
 
 
 @dataclass
