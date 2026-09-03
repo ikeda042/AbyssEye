@@ -17,11 +17,11 @@ import cv2
 import numpy as np
 from fastapi import HTTPException
 try:  # pragma: no cover - optional dependency
-    from matplotlib import cm
+    from matplotlib import colormaps
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
 except ImportError:  # pragma: no cover - optional dependency
-    cm = None  # type: ignore[assignment]
+    colormaps = None  # type: ignore[assignment]
     FigureCanvasAgg = None  # type: ignore[assignment]
     Figure = None  # type: ignore[assignment]
 
@@ -30,7 +30,7 @@ TIFF_STORAGE_DIR = Path(__file__).resolve().parents[1] / "tiff_manager"
 REALTIME_DATABASE_DIR = Path(__file__).resolve().parents[1] / "realtime_databases"
 TEMP_REALTIME_DATABASE_DIR = Path(tempfile.gettempdir()) / "abyss_eye" / "realtime_databases"
 RenderMode = Literal["raw", "normalized", "jet"]
-JET_COLORMAP = cm.get_cmap("jet") if cm else None
+JET_COLORMAP = colormaps["jet"] if colormaps else None
 
 
 @dataclass
