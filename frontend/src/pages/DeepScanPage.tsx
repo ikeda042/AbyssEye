@@ -60,6 +60,13 @@ type RealtimeROI = {
   excluded_by_focus_area?: boolean;
 };
 
+type CellCountGroup = {
+  key: number | "none";
+  count: number | null;
+  label: string;
+  items: RealtimeROI[];
+};
+
 type Dimensions = {
   width: number;
   height: number;
@@ -511,6 +518,8 @@ const DeepScanPage = () => {
   const [draggingRoiId, setDraggingRoiId] = useState<number | null>(null);
   const [dragOverClass, setDragOverClass] = useState<number | null>(null);
   const [dragOverCellCount, setDragOverCellCount] = useState<number | "none" | null>(null);
+  const cellCountDragContextRef = useRef<{ container: HTMLElement; groups: CellCountGroup[] } | null>(null);
+  const dragPointerRef = useRef<{ x: number; y: number } | null>(null);
   const [projectSingleImagePagerItems, setProjectSingleImagePagerItems] = useState<ProjectSingleImagePagerItem[]>([]);
   const statusCacheRef = useRef<Map<string, DeepScanStatus>>(new Map());
   const roiDisplayCacheRef = useRef<Map<string, string>>(new Map());
@@ -665,6 +674,7 @@ const DeepScanPage = () => {
     let rafId = 0;
     const handleDragOver = (event: DragEvent) => {
       pointerY = event.clientY;
+      dragPointerRef.current = { x: event.clientX, y: event.clientY };
     };
     const step = () => {
       if (pointerY >= 0) {
@@ -674,6 +684,12 @@ const DeepScanPage = () => {
         } else if (pointerY > viewportHeight - EDGE_PX) {
           window.scrollBy(0, Math.ceil(((pointerY - (viewportHeight - EDGE_PX)) / EDGE_PX) * MAX_SPEED_PX));
         }
+      }
+      const ctx = cellCountDragContextRef.current;
+      const pointer = dragPointerRef.current;
+      if (ctx && pointer) {
+        const key = cellCountKeyAt(ctx.container, ctx.groups, pointer.x, pointer.y);
+        setDragOverCellCount((prev) => (prev === key ? prev : key));
       }
       rafId = window.requestAnimationFrame(step);
     };
@@ -1673,10 +1689,11 @@ const DeepScanPage = () => {
     [dbName, currentTifParam, tt],
   );
 
-  const handleBucketDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+  const handleBucketDragOver = (event: React.DragEvent<HTMLDivElement>, classIndex: number) => {
     if (!draggingRoiId) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
+    setDragOverClass((prev) => (prev === classIndex ? prev : classIndex));
   };
 
   const handleBucketDragEnter = (event: React.DragEvent<HTMLDivElement>, classIndex: number) => {
@@ -1714,19 +1731,68 @@ const DeepScanPage = () => {
   const handleRoiDragEnd = () => {
     setDraggingRoiId(null);
     setDragOverCellCount(null);
+    cellCountDragContextRef.current = null;
+    dragPointerRef.current = null;
   };
 
-  const handleCellCountBoxDragEnter = (event: React.DragEvent<HTMLDivElement>, boxKey: number | "none") => {
+  const cellCountKeyAt = (
+    container: HTMLElement,
+    groups: CellCountGroup[],
+    x: number,
+    y: number,
+  ): number | "none" | null => {
+    const containerRect = container.getBoundingClientRect();
+    if (x < containerRect.left || x > containerRect.right || y < containerRect.top || y > containerRect.bottom) {
+      return null;
+    }
+    const children = Array.from(container.children) as HTMLElement[];
+    for (let i = 0; i < children.length; i += 1) {
+      const rect = children[i].getBoundingClientRect();
+      if (y >= rect.top && y <= rect.bottom) {
+        return i < groups.length ? groups[i].key : null;
+      }
+    }
+    return null;
+  };
+
+  const resolveCellCountGroupAtPointer = (
+    event: React.DragEvent<HTMLDivElement>,
+    groups: CellCountGroup[],
+  ): CellCountGroup | null => {
+    const key = cellCountKeyAt(event.currentTarget as HTMLElement, groups, event.clientX, event.clientY);
+    if (key === null) return null;
+    return groups.find((group) => group.key === key) ?? null;
+  };
+
+  const handleCellCountAreaDragOver = (event: React.DragEvent<HTMLDivElement>, groups: CellCountGroup[]) => {
     if (!draggingRoiId) return;
     event.preventDefault();
-    event.stopPropagation();
-    setDragOverCellCount(boxKey);
+    event.dataTransfer.dropEffect = "move";
+    cellCountDragContextRef.current = { container: event.currentTarget as HTMLElement, groups };
+    dragPointerRef.current = { x: event.clientX, y: event.clientY };
+    const group = resolveCellCountGroupAtPointer(event, groups);
+    setDragOverCellCount((prev) => (prev === (group?.key ?? null) ? prev : group?.key ?? null));
   };
 
-  const handleCellCountBoxDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+  const handleCellCountAreaDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
     const nextTarget = event.relatedTarget as Node | null;
     if (nextTarget && event.currentTarget.contains(nextTarget)) return;
     setDragOverCellCount(null);
+  };
+
+  const handleCellCountAreaDrop = (event: React.DragEvent<HTMLDivElement>, groups: CellCountGroup[]) => {
+    const group = resolveCellCountGroupAtPointer(event, groups);
+    if (!group) {
+      event.preventDefault();
+      event.stopPropagation();
+      setDragOverCellCount(null);
+      setDragOverClass(null);
+      setDraggingRoiId(null);
+      cellCountDragContextRef.current = null;
+      dragPointerRef.current = null;
+      return;
+    }
+    handleCellCountBoxDrop(event, group.count);
   };
 
   const handleCellCountBoxDrop = (event: React.DragEvent<HTMLDivElement>, count: number | null) => {
@@ -1735,6 +1801,8 @@ const DeepScanPage = () => {
     setDragOverCellCount(null);
     setDragOverClass(null);
     setDraggingRoiId(null);
+    cellCountDragContextRef.current = null;
+    dragPointerRef.current = null;
     const roiIdRaw = event.dataTransfer.getData("text/deepscan-roi-id");
     const roiId = Number(roiIdRaw);
     if (!Number.isInteger(roiId)) return;
@@ -2676,12 +2744,7 @@ const DeepScanPage = () => {
                     </Box>
                   );
                 };
-                const cellCountGroups: Array<{
-                  key: number | "none";
-                  count: number | null;
-                  label: string;
-                  items: RealtimeROI[];
-                }> | null =
+                const cellCountGroups: CellCountGroup[] | null =
                   classIndex === 1
                     ? [
                         {
@@ -2717,7 +2780,7 @@ const DeepScanPage = () => {
                           : undefined,
                       transition: "border-color 120ms ease, box-shadow 120ms ease",
                     }}
-                    onDragOver={handleBucketDragOver}
+                    onDragOver={(event) => handleBucketDragOver(event, classIndex)}
                     onDragEnter={(event) => handleBucketDragEnter(event, classIndex)}
                     onDragLeave={handleBucketDragLeave}
                     onDrop={(event) => handleBucketDrop(event, classIndex)}
@@ -2728,7 +2791,12 @@ const DeepScanPage = () => {
                       </Typography>
                     </Stack>
                     {classIndex === 1 && cellCountGroups ? (
-                      <Stack spacing={1}>
+                      <Stack
+                        spacing={1}
+                        onDragOver={(event) => handleCellCountAreaDragOver(event, cellCountGroups)}
+                        onDragLeave={handleCellCountAreaDragLeave}
+                        onDrop={(event) => handleCellCountAreaDrop(event, cellCountGroups)}
+                      >
                         {cellCountGroups.map((group) => (
                           <Box
                             key={`cell-count-${group.key}`}
@@ -2741,10 +2809,6 @@ const DeepScanPage = () => {
                                 dragOverCellCount === group.key ? "rgba(14,165,233,0.06)" : "transparent",
                               transition: "border-color 120ms ease, background-color 120ms ease",
                             }}
-                            onDragOver={handleBucketDragOver}
-                            onDragEnter={(event) => handleCellCountBoxDragEnter(event, group.key)}
-                            onDragLeave={handleCellCountBoxDragLeave}
-                            onDrop={(event) => handleCellCountBoxDrop(event, group.count)}
                           >
                             <Typography
                               variant="caption"
@@ -2876,6 +2940,8 @@ const DeepScanPage = () => {
               (floatingPreviewEmbedded ? 0 : getDefaultFloatingPreviewPosition().left),
             width: floatingPreviewWidth,
             zIndex: (theme) => theme.zIndex.appBar - 1,
+            pointerEvents: draggingRoiId !== null ? "none" : "auto",
+            opacity: draggingRoiId !== null ? 0.35 : 1,
             borderRadius: 2,
             border: "1px solid rgba(148,163,184,0.32)",
             overflow: "hidden",
