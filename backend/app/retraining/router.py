@@ -66,6 +66,7 @@ class RetrainingJobResponse(BaseModel):
     epochs: int
     batch_size: int
     learning_rate: float
+    training_mode: str
     activate_on_complete: bool
     active_model_relative_path: str | None
     active_model_absolute_path: str | None
@@ -99,6 +100,7 @@ class RetrainingJobResponse(BaseModel):
             epochs=item.epochs,
             batch_size=item.batch_size,
             learning_rate=item.learning_rate,
+            training_mode=item.training_mode,
             activate_on_complete=item.activate_on_complete,
             active_model_relative_path=item.active_model_relative_path,
             active_model_absolute_path=item.active_model_absolute_path,
@@ -183,9 +185,13 @@ class StartRetrainingJobRequest(BaseModel):
     source_type: Literal["project", "archive"] = Field(..., description="再学習元の種別")
     source_name: str = Field(..., description="プロジェクト名またはアップロードZIP名")
     run_name: str | None = Field(None, description="任意の実行名")
-    epochs: int = Field(default=crud.DEFAULT_EPOCHS, ge=1, le=200)
-    batch_size: int = Field(default=crud.DEFAULT_BATCH_SIZE, ge=1, le=512)
-    learning_rate: float = Field(default=crud.DEFAULT_LEARNING_RATE, gt=0)
+    training_mode: Literal["batch", "fine_tune"] = Field(
+        default="batch",
+        description="batch: 既存モデルを無視して提供データセットのみでスクラッチ学習（論文プロトコル準拠・既定）。fine_tune: アクティブモデルからの継続学習。",
+    )
+    epochs: int | None = Field(default=None, ge=1, le=crud.MAX_EPOCHS, description="未指定ならモード既定値（batch: 300 / fine_tune: 8）")
+    batch_size: int | None = Field(default=None, ge=1, le=512, description="未指定ならモード既定値（batch: 64 / fine_tune: 32）")
+    learning_rate: float | None = Field(default=None, gt=0, description="未指定ならモード既定値（batch: 1e-3 / fine_tune: 1e-4）")
     activate_on_complete: bool = Field(default=False, description="学習完了後にモデルを有効化する")
 
 
@@ -245,6 +251,7 @@ async def start_retraining_job(request: StartRetrainingJobRequest) -> Retraining
         source_type=request.source_type,
         source_name=request.source_name,
         run_name=request.run_name,
+        training_mode=request.training_mode,
         epochs=request.epochs,
         batch_size=request.batch_size,
         learning_rate=request.learning_rate,

@@ -22,6 +22,8 @@ import {
   TableHead,
   TableRow,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
@@ -82,6 +84,7 @@ type RetrainingJob = {
   epochs: number;
   batch_size: number;
   learning_rate: number;
+  training_mode?: string;
   activate_on_complete: boolean;
   active_model_relative_path: string | null;
   active_model_absolute_path: string | null;
@@ -198,9 +201,10 @@ const RetrainingPage = () => {
   const [startingJob, setStartingJob] = useState(false);
   const [registeringJobId, setRegisteringJobId] = useState<string | null>(null);
   const [runName, setRunName] = useState("");
-  const [epochs, setEpochs] = useState(8);
-  const [batchSize, setBatchSize] = useState(32);
-  const [learningRate, setLearningRate] = useState("0.0001");
+  const [trainingMode, setTrainingMode] = useState<"batch" | "fine_tune">("batch");
+  const [epochs, setEpochs] = useState(300);
+  const [batchSize, setBatchSize] = useState(64);
+  const [learningRate, setLearningRate] = useState("0.001");
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
@@ -558,6 +562,7 @@ const RetrainingPage = () => {
           source_type: selectedSource.type,
           source_name: selectedSource.name,
           run_name: runName.trim() || null,
+          training_mode: trainingMode,
           epochs,
           batch_size: batchSize,
           learning_rate: parsedLearningRate,
@@ -576,7 +581,7 @@ const RetrainingPage = () => {
     } finally {
       setStartingJob(false);
     }
-  }, [batchSize, epochs, fetchJobs, learningRate, runName, selectedSource, tt, upsertJob]);
+  }, [batchSize, epochs, fetchJobs, learningRate, runName, selectedSource, trainingMode, tt, upsertJob]);
 
   const handleRegisterJob = useCallback(async (jobId: string) => {
     setRegisteringJobId(jobId);
@@ -925,6 +930,40 @@ const RetrainingPage = () => {
                   )}
                 </Typography>
               </Box>
+              <Stack spacing={0.75}>
+                <ToggleButtonGroup
+                  size="small"
+                  exclusive
+                  value={trainingMode}
+                  onChange={(_, value: "batch" | "fine_tune" | null) => {
+                    if (!value || value === trainingMode) return;
+                    setTrainingMode(value);
+                    if (value === "batch") {
+                      setEpochs(300);
+                      setBatchSize(64);
+                      setLearningRate("0.001");
+                    } else {
+                      setEpochs(8);
+                      setBatchSize(32);
+                      setLearningRate("0.0001");
+                    }
+                  }}
+                >
+                  <ToggleButton value="batch">{tt("batch 再学習（論文準拠）", "Batch (paper protocol)")}</ToggleButton>
+                  <ToggleButton value="fine_tune">{tt("ファインチューニング", "Fine-tune")}</ToggleButton>
+                </ToggleButtonGroup>
+                <Typography variant="caption" color="text.secondary">
+                  {trainingMode === "batch"
+                    ? tt(
+                        "既存モデルを無視し、データセットのみでスクラッチ学習します（データ拡張・EarlyStopping(val_loss, patience 10)・論文と同じ設定）。",
+                        "Ignores the existing model and trains from scratch on the dataset only (augmentation, EarlyStopping on val_loss with patience 10, same settings as the paper).",
+                      )
+                    : tt(
+                        "アクティブモデルの重みから継続学習します。",
+                        "Continues training from the active model weights.",
+                      )}
+                </Typography>
+              </Stack>
               <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
                 <TextField
                   label={tt("実行名（任意）", "Run name (optional)")}
@@ -940,7 +979,7 @@ const RetrainingPage = () => {
                   onChange={(event) => setEpochs(Math.max(1, Number(event.target.value) || 1))}
                   size="small"
                   sx={{ width: 120 }}
-                  inputProps={{ min: 1, max: 200 }}
+                  inputProps={{ min: 1, max: 300 }}
                 />
                 <TextField
                   label={tt("Batch size", "Batch size")}

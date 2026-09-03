@@ -30,6 +30,14 @@ NUM_CLASSES = 4
 DEFAULT_EPOCHS = 8
 DEFAULT_BATCH_SIZE = 32
 DEFAULT_LEARNING_RATE = 1e-4
+# batch モード（論文プロトコル準拠のスクラッチ学習）の既定値。
+# 出典: Nishimura et al. の学習スクリプト Deep_learning_ResNet18.py
+BATCH_MODE_EPOCHS = 300
+BATCH_MODE_BATCH_SIZE = 64
+BATCH_MODE_LEARNING_RATE = 1e-3
+BATCH_MODE_ES_PATIENCE = 10
+FINE_TUNE_ES_PATIENCE = 3
+MAX_EPOCHS = 300
 RANDOM_SEED = 42
 MIN_RETRAIN_TOTAL_ROIS = 20
 MIN_RETRAIN_CLASS_COUNT = 2
@@ -69,6 +77,7 @@ class RetrainingJob:
     epochs: int
     batch_size: int
     learning_rate: float
+    training_mode: str
     activate_on_complete: bool
     active_model_relative_path: str | None
     active_model_absolute_path: str | None
@@ -492,6 +501,7 @@ def _deserialize_job(payload: dict[str, Any]) -> RetrainingJob:
         epochs=int(payload.get("epochs") or DEFAULT_EPOCHS),
         batch_size=int(payload.get("batch_size") or DEFAULT_BATCH_SIZE),
         learning_rate=float(payload.get("learning_rate") or DEFAULT_LEARNING_RATE),
+        training_mode=str(payload.get("training_mode") or "fine_tune"),
         activate_on_complete=bool(payload.get("activate_on_complete", False)),
         active_model_relative_path=payload.get("active_model_relative_path") if isinstance(payload.get("active_model_relative_path"), str) else None,
         active_model_absolute_path=payload.get("active_model_absolute_path") if isinstance(payload.get("active_model_absolute_path"), str) else None,
@@ -765,7 +775,7 @@ def _load_dataset_examples(dataset_dir: Path) -> list[TrainingExample]:
     return examples
 
 
-def _split_counts_for_class(count: int) -> tuple[int, int, int]:
+def _split_counts_for_class(count: int, *, val_ratio: float = 0.15, test_ratio: float = 0.15) -> tuple[int, int, int]:
     if count <= 1:
         return count, 0, 0
     if count == 2:
@@ -773,8 +783,8 @@ def _split_counts_for_class(count: int) -> tuple[int, int, int]:
     if count == 3:
         return 2, 1, 0
 
-    test_count = max(1, round(count * 0.15))
-    val_count = max(1, round(count * 0.15))
+    test_count = max(1, round(count * test_ratio))
+    val_count = max(1, round(count * val_ratio))
     train_count = count - val_count - test_count
     while train_count < 1 and (val_count > 0 or test_count > 0):
         if val_count >= test_count and val_count > 0:
@@ -852,6 +862,8 @@ def _split_examples(
     examples: list[TrainingExample],
     *,
     run_dir: Path,
+    val_ratio: float = 0.15,
+    test_ratio: float = 0.15,
 ) -> tuple[list[TrainingExample], list[TrainingExample], list[TrainingExample], dict[str, Any]]:
     by_label: dict[int, list[TrainingExample]] = {label: [] for label in range(NUM_CLASSES)}
     for example in examples:
@@ -867,7 +879,7 @@ def _split_examples(
             continue
         shuffled = items[:]
         rng.shuffle(shuffled)
-        train_count, val_count, test_count = _split_counts_for_class(len(shuffled))
+        train_count, val_count, test_count = _split_counts_for_class(len(shuffled), val_ratio=val_ratio, test_ratio=test_ratio)
         train_examples.extend(shuffled[:train_count])
         val_examples.extend(shuffled[train_count:train_count + val_count])
         test_examples.extend(shuffled[train_count + val_count:train_count + val_count + test_count])
@@ -1158,6 +1170,49 @@ def _save_training_metrics(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _get_random_eraser(
+    p: float = 0.5,
+    s_l: float = 0.02,
+    s_h: float = 0.1,
+    r_1: float = 0.3,
+    r_2: float = 1 / 0.3,
+    v_l: float = 0.0,
+    v_h: float = 0.0,
+):
+    """論文スクリプト同梱の random eraser（yu4u/cutout-random-erasing）を同一パラメータで移植。"""
+
+    def eraser(input_img: np.ndarray) -> np.ndarray:
+        img_h, img_w = input_img.shape[0], input_img.shape[1]
+        if np.random.rand() > p:
+            return input_img
+        while True:
+            s = np.random.uniform(s_l, s_h) * img_h * img_w
+            r = np.random.uniform(r_1, r_2)
+            w = int(np.sqrt(s / r))
+            h = int(np.sqrt(s * r))
+            left = np.random.randint(0, img_w)
+            top = np.random.randint(0, img_h)
+            if left + w <= img_w and top + h <= img_h:
+                break
+        input_img[top:top + h, left:left + w] = np.random.uniform(v_l, v_h)
+        return input_img
+
+    return eraser
+
+
+def _build_paper_datagen(tf: Any) -> Any:
+    """論文の ImageDataGenerator 設定（回転180°・上下左右反転・平行移動0.5・random erasing）。"""
+    return tf.keras.preprocessing.image.ImageDataGenerator(
+        rotation_range=180,
+        width_shift_range=0.5,
+        height_shift_range=0.5,
+        horizontal_flip=True,
+        vertical_flip=True,
+        fill_mode="nearest",
+        preprocessing_function=_get_random_eraser(),
+    )
+
+
 def _train_retraining_job_sync(
     *,
     dataset_dir: Path,
@@ -1166,13 +1221,21 @@ def _train_retraining_job_sync(
     epochs: int,
     batch_size: int,
     learning_rate: float,
+    training_mode: str,
     active_model_path: str | None,
 ) -> dict[str, Any]:
     tf, keras = _get_tensorflow_modules()
     tf.keras.utils.set_random_seed(RANDOM_SEED)
+    is_batch_mode = training_mode == "batch"
 
     examples = _load_dataset_examples(dataset_dir)
-    train_examples, val_examples, test_examples, split_summary = _split_examples(examples, run_dir=run_dir)
+    if is_batch_mode:
+        # 論文の分割に合わせる: test 20% / 残り80%の20%（全体16%）を val
+        train_examples, val_examples, test_examples, split_summary = _split_examples(
+            examples, run_dir=run_dir, val_ratio=0.16, test_ratio=0.20
+        )
+    else:
+        train_examples, val_examples, test_examples, split_summary = _split_examples(examples, run_dir=run_dir)
     x_train, y_train = _examples_to_arrays(train_examples)
     x_val, y_val = _examples_to_arrays(val_examples)
     x_test, y_test = _examples_to_arrays(test_examples)
@@ -1190,31 +1253,62 @@ def _train_retraining_job_sync(
                 "baseline_error": str(exc),
             }
 
-    model, initialization_mode, initialization_note = _build_training_model(active_model_path, NUM_CLASSES)
+    if is_batch_mode:
+        # batch モード: アクティブモデルを無視し、提供データセットのみでスクラッチ学習（論文プロトコル）
+        model = _build_resnet18_classifier(NUM_CLASSES)
+        initialization_mode = "batch_scratch"
+        initialization_note = "論文プロトコル準拠のスクラッチ学習（既存モデルの重みは使用しません）。"
+    else:
+        model, initialization_mode, initialization_note = _build_training_model(active_model_path, NUM_CLASSES)
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
         loss=keras.losses.SparseCategoricalCrossentropy(),
         metrics=[keras.metrics.SparseCategoricalAccuracy(name="accuracy")],
     )
 
+    has_validation = x_val.size > 0 and y_val.size > 0
     callbacks: list[keras.callbacks.Callback] = []
-    fit_kwargs: dict[str, Any] = {
-        "x": x_train,
-        "y": y_train,
-        "epochs": epochs,
-        "batch_size": batch_size,
-        "verbose": 0,
-        "class_weight": _compute_class_weight(train_examples),
-    }
-    if x_val.size > 0 and y_val.size > 0:
-        callbacks.append(
-            keras.callbacks.EarlyStopping(
-                monitor="val_accuracy",
-                mode="max",
-                patience=3,
-                restore_best_weights=True,
+    if has_validation:
+        if is_batch_mode:
+            # 論文: EarlyStopping(monitor=val_loss, patience=10) + ModelCheckpoint(val_loss best)。
+            # restore_best_weights=True が ModelCheckpoint ベスト保存と同等の役割を果たす。
+            callbacks.append(
+                keras.callbacks.EarlyStopping(
+                    monitor="val_loss",
+                    mode="min",
+                    patience=BATCH_MODE_ES_PATIENCE,
+                    restore_best_weights=True,
+                )
             )
-        )
+        else:
+            callbacks.append(
+                keras.callbacks.EarlyStopping(
+                    monitor="val_accuracy",
+                    mode="max",
+                    patience=FINE_TUNE_ES_PATIENCE,
+                    restore_best_weights=True,
+                )
+            )
+
+    if is_batch_mode:
+        # 論文と同じくデータ拡張ジェネレータで学習（class_weight は全クラス 1.0 相当なので指定しない）
+        datagen = _build_paper_datagen(tf)
+        fit_kwargs = {
+            "x": datagen.flow(x_train, y_train, batch_size=batch_size, seed=RANDOM_SEED),
+            "steps_per_epoch": max(1, len(x_train) // batch_size),
+            "epochs": epochs,
+            "verbose": 0,
+        }
+    else:
+        fit_kwargs = {
+            "x": x_train,
+            "y": y_train,
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "verbose": 0,
+            "class_weight": _compute_class_weight(train_examples),
+        }
+    if has_validation:
         fit_kwargs["validation_data"] = (x_val, y_val)
     if callbacks:
         fit_kwargs["callbacks"] = callbacks
@@ -1285,6 +1379,7 @@ def _train_retraining_job_sync(
     metrics_payload: dict[str, Any] = {
         "dataset": split_summary,
         "training": {
+            "training_mode": training_mode,
             "epochs_requested": epochs,
             "epochs_completed": len(epoch_losses),
             "batch_size": batch_size,
@@ -1385,6 +1480,7 @@ async def _run_retraining_job(job_id: str) -> None:
                 epochs=job.epochs,
                 batch_size=job.batch_size,
                 learning_rate=job.learning_rate,
+                training_mode=job.training_mode,
                 active_model_path=job.active_model_absolute_path,
             )
 
@@ -1424,9 +1520,10 @@ async def start_retraining_job(
     source_type: Literal["project", "archive"],
     source_name: str,
     run_name: str | None = None,
-    epochs: int = DEFAULT_EPOCHS,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    learning_rate: float = DEFAULT_LEARNING_RATE,
+    training_mode: Literal["batch", "fine_tune"] = "batch",
+    epochs: int | None = None,
+    batch_size: int | None = None,
+    learning_rate: float | None = None,
     activate_on_complete: bool = False,
 ) -> RetrainingJob:
     source_name = source_name.strip()
@@ -1434,8 +1531,18 @@ async def start_retraining_job(
         raise HTTPException(status_code=400, detail="再学習元を指定してください。")
     if source_type not in {"project", "archive"}:
         raise HTTPException(status_code=400, detail="source_type は project または archive を指定してください。")
-    if epochs <= 0 or epochs > 200:
-        raise HTTPException(status_code=400, detail="epochs は 1 以上 200 以下で指定してください。")
+    if training_mode not in {"batch", "fine_tune"}:
+        raise HTTPException(status_code=400, detail="training_mode は batch または fine_tune を指定してください。")
+    if training_mode == "batch":
+        epochs = epochs if epochs is not None else BATCH_MODE_EPOCHS
+        batch_size = batch_size if batch_size is not None else BATCH_MODE_BATCH_SIZE
+        learning_rate = learning_rate if learning_rate is not None else BATCH_MODE_LEARNING_RATE
+    else:
+        epochs = epochs if epochs is not None else DEFAULT_EPOCHS
+        batch_size = batch_size if batch_size is not None else DEFAULT_BATCH_SIZE
+        learning_rate = learning_rate if learning_rate is not None else DEFAULT_LEARNING_RATE
+    if epochs <= 0 or epochs > MAX_EPOCHS:
+        raise HTTPException(status_code=400, detail=f"epochs は 1 以上 {MAX_EPOCHS} 以下で指定してください。")
     if batch_size <= 0 or batch_size > 512:
         raise HTTPException(status_code=400, detail="batch_size は 1 以上 512 以下で指定してください。")
     if learning_rate <= 0:
@@ -1466,6 +1573,7 @@ async def start_retraining_job(
         epochs=epochs,
         batch_size=batch_size,
         learning_rate=learning_rate,
+        training_mode=training_mode,
         activate_on_complete=activate_on_complete,
         active_model_relative_path=active_model.relative_path if active_model else None,
         active_model_absolute_path=str(active_model.absolute_path) if active_model else None,
