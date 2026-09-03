@@ -707,6 +707,33 @@ const TiffManagerBulkPage = () => {
     );
   }, []);
 
+  const toggleAllSingleImageDeleteSelection = useCallback(() => {
+    setSelectedSingleImageFolders((prev) => {
+      const visibleNames = visibleSingleImageFolders.map((folder) => folder.name);
+      const allSelected = visibleNames.length > 0 && visibleNames.every((name) => prev.includes(name));
+      if (allSelected) return prev.filter((name) => !visibleNames.includes(name));
+      return Array.from(new Set([...prev, ...visibleNames]));
+    });
+  }, [visibleSingleImageFolders]);
+
+  const toggleAllSingleImageExtractionSelection = useCallback(() => {
+    setSelectedSingleImageExtractionFolders((prev) => {
+      const visibleNames = visiblePendingUploadSingleImageFolders.map((folder) => folder.name);
+      const allSelected = visibleNames.length > 0 && visibleNames.every((name) => prev.includes(name));
+      if (allSelected) return prev.filter((name) => !visibleNames.includes(name));
+      return Array.from(new Set([...prev, ...visibleNames]));
+    });
+  }, [visiblePendingUploadSingleImageFolders]);
+
+  const toggleAllMultiImageDeleteSelection = useCallback(() => {
+    setSelectedMultiImageFolders((prev) => {
+      const visibleNames = multiImageFolders.map((folder) => folder.name);
+      const allSelected = visibleNames.length > 0 && visibleNames.every((name) => prev.includes(name));
+      if (allSelected) return prev.filter((name) => !visibleNames.includes(name));
+      return Array.from(new Set([...prev, ...visibleNames]));
+    });
+  }, [multiImageFolders]);
+
   const handleCancelSingleImageDeleteMode = useCallback(() => {
     if (deletingSelectedSingleImages) return;
     setSingleImageDeleteMode(false);
@@ -1680,9 +1707,41 @@ const TiffManagerBulkPage = () => {
                     <Table size="small" sx={buildDataTableSx(960)}>
                         <TableHead>
                         <TableRow>
-                          {singleImageDeleteMode ? <TableCell padding="checkbox" align="center" /> : null}
+                          {singleImageDeleteMode ? (
+                            <TableCell padding="checkbox" align="center">
+                              <Checkbox
+                                color="error"
+                                checked={
+                                  visibleSingleImageFolders.length > 0 &&
+                                  visibleSingleImageFolders.every((folder) => selectedSingleImageFolders.includes(folder.name))
+                                }
+                                indeterminate={
+                                  selectedSingleImageFolders.length > 0 &&
+                                  !visibleSingleImageFolders.every((folder) => selectedSingleImageFolders.includes(folder.name))
+                                }
+                                disabled={deletingSelectedSingleImages}
+                                onChange={toggleAllSingleImageDeleteSelection}
+                              />
+                            </TableCell>
+                          ) : null}
                           {!singleImageDeleteMode && currentSingleImageOrigin === "upload" ? (
-                            <TableCell align="center" sx={{ width: 96 }} />
+                            <TableCell align="center" sx={{ width: 96 }}>
+                              {visiblePendingUploadSingleImageFolders.length > 0 ? (
+                                <Checkbox
+                                  checked={visiblePendingUploadSingleImageFolders.every((folder) =>
+                                    selectedSingleImageExtractionFolders.includes(folder.name),
+                                  )}
+                                  indeterminate={
+                                    selectedSingleImageExtractionFolders.length > 0 &&
+                                    !visiblePendingUploadSingleImageFolders.every((folder) =>
+                                      selectedSingleImageExtractionFolders.includes(folder.name),
+                                    )
+                                  }
+                                  disabled={batchInferRunning || batchCellCountRunning}
+                                  onChange={toggleAllSingleImageExtractionSelection}
+                                />
+                              ) : null}
+                            </TableCell>
                           ) : null}
                           <TableCell>{tt("名前", "Name")}</TableCell>
                           <TableCell align="center" sx={{ width: 128 }}>{tt("ROI変更数", "ROI changes")}</TableCell>
@@ -1890,7 +1949,23 @@ const TiffManagerBulkPage = () => {
                     <Table size="small" sx={buildDataTableSx(860)}>
                       <TableHead>
                         <TableRow>
-                          {multiImageDeleteMode ? <TableCell padding="checkbox" align="center" /> : null}
+                          {multiImageDeleteMode ? (
+                            <TableCell padding="checkbox" align="center">
+                              <Checkbox
+                                color="error"
+                                checked={
+                                  multiImageFolders.length > 0 &&
+                                  multiImageFolders.every((folder) => selectedMultiImageFolders.includes(folder.name))
+                                }
+                                indeterminate={
+                                  selectedMultiImageFolders.length > 0 &&
+                                  !multiImageFolders.every((folder) => selectedMultiImageFolders.includes(folder.name))
+                                }
+                                disabled={deletingSelectedMultiImages}
+                                onChange={toggleAllMultiImageDeleteSelection}
+                              />
+                            </TableCell>
+                          ) : null}
                           <TableCell>{tt("名前", "Name")}</TableCell>
                           <TableCell align="right" sx={{ width: 92 }} />
                           <TableCell align="right" sx={{ width: 180 }} />
