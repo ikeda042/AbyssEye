@@ -21,6 +21,9 @@ ENV APP_HOST=0.0.0.0 \
     ABYSSEYE_DATA_DIR=/app/data \
     ABYSSEYE_MODELS_DIR=/app/models
 
+RUN test -f /app/backend/app/tiff_manager_bulk/crud.py \
+    && PYTHONPATH=/app/backend python -c "from app.app import app"
+
 EXPOSE 3000
 
 CMD ["python", "backend/main.py"]

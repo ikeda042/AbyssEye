@@ -49,6 +49,20 @@ services:
     volumes:
       - app-data:/app/data
       - models:/app/models
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os, urllib.request;
+          urllib.request.urlopen(
+          f"http://127.0.0.1:{os.environ.get('APP_PORT', '3000')}/api/v1/",
+          timeout=5).read()
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 
   frontend:
