@@ -21,6 +21,7 @@ backend/app/realtime_databases
 backend/app/realtime_tiff
 backend/app/retraining_runs
 backend/app/retraining_uploads
-backend/app/tiff_manager_bulk/*/
+backend/app/tiff_manager_bulk/*
+!backend/app/tiff_manager_bulk/*.py
 models/*
 !models/.gitignore
