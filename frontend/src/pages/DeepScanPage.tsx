@@ -220,6 +220,11 @@ const buildManualLabelEndpoint = (dbName: string, recordId: number) =>
     `databases/${encodeURIComponent(dbName)}/records/${recordId}/manual-label`,
     API_BASE_URL,
   ).toString();
+const buildManualCellCountEndpoint = (dbName: string, recordId: number) =>
+  new URL(
+    `deepscan/${encodeURIComponent(dbName)}/records/${recordId}/manual-cell-count`,
+    API_BASE_URL,
+  ).toString();
 const buildManualRoiAddEndpoint = (dbName: string) =>
   new URL(`deepscan/${encodeURIComponent(dbName)}/manual-rois`, API_BASE_URL).toString();
 const buildReviewEndpoint = (dbName: string, tifName?: string) => {
@@ -505,6 +510,7 @@ const DeepScanPage = () => {
   const [manualRoiError, setManualRoiError] = useState<string | null>(null);
   const [draggingRoiId, setDraggingRoiId] = useState<number | null>(null);
   const [dragOverClass, setDragOverClass] = useState<number | null>(null);
+  const [dragOverCellCount, setDragOverCellCount] = useState<number | "none" | null>(null);
   const [projectSingleImagePagerItems, setProjectSingleImagePagerItems] = useState<ProjectSingleImagePagerItem[]>([]);
   const statusCacheRef = useRef<Map<string, DeepScanStatus>>(new Map());
   const roiDisplayCacheRef = useRef<Map<string, string>>(new Map());
@@ -650,6 +656,34 @@ const DeepScanPage = () => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(storageKeys.deepVision, deepVisionOverlayEnabled ? "1" : "0");
   }, [deepVisionOverlayEnabled]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || draggingRoiId === null) return;
+    const EDGE_PX = 110;
+    const MAX_SPEED_PX = 26;
+    let pointerY = -1;
+    let rafId = 0;
+    const handleDragOver = (event: DragEvent) => {
+      pointerY = event.clientY;
+    };
+    const step = () => {
+      if (pointerY >= 0) {
+        const viewportHeight = window.innerHeight;
+        if (pointerY < EDGE_PX) {
+          window.scrollBy(0, -Math.ceil(((EDGE_PX - pointerY) / EDGE_PX) * MAX_SPEED_PX));
+        } else if (pointerY > viewportHeight - EDGE_PX) {
+          window.scrollBy(0, Math.ceil(((pointerY - (viewportHeight - EDGE_PX)) / EDGE_PX) * MAX_SPEED_PX));
+        }
+      }
+      rafId = window.requestAnimationFrame(step);
+    };
+    window.addEventListener("dragover", handleDragOver);
+    rafId = window.requestAnimationFrame(step);
+    return () => {
+      window.removeEventListener("dragover", handleDragOver);
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [draggingRoiId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1605,6 +1639,40 @@ const DeepScanPage = () => {
     [selectedOverlayRoiId, updateManualLabel],
   );
 
+  const updateManualCellCount = useCallback(
+    async (roiId: number, count: number | null) => {
+      if (!dbName) return;
+      try {
+        const response = await fetch(buildManualCellCountEndpoint(dbName, roiId), {
+          method: "PUT",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ manual_cell_count: count }),
+        });
+        if (!response.ok) {
+          const detail = (await response.json().catch(() => null))?.detail;
+          throw new Error(detail || tt("細胞数の保存に失敗しました。", "Failed to save cell count."));
+        }
+        const applyCount = (roi: RealtimeROI) =>
+          roi.roi_id === roiId ? { ...roi, manual_cell_count: count } : roi;
+        setStatus((prev) => {
+          if (!prev || !prev.rois) return prev;
+          return { ...prev, rois: prev.rois.map(applyCount) };
+        });
+        const cacheKey = `${dbName}::${currentTifParam || "__default__"}`;
+        const cached = statusCacheRef.current.get(cacheKey);
+        if (cached && cached.rois) {
+          statusCacheRef.current.set(cacheKey, { ...cached, rois: cached.rois.map(applyCount) });
+        }
+      } catch (err) {
+        setManualLabelError(err instanceof Error ? err.message : tt("細胞数の保存に失敗しました。", "Failed to save cell count."));
+      }
+    },
+    [dbName, currentTifParam, tt],
+  );
+
   const handleBucketDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     if (!draggingRoiId) return;
     event.preventDefault();
@@ -1645,6 +1713,40 @@ const DeepScanPage = () => {
 
   const handleRoiDragEnd = () => {
     setDraggingRoiId(null);
+    setDragOverCellCount(null);
+  };
+
+  const handleCellCountBoxDragEnter = (event: React.DragEvent<HTMLDivElement>, boxKey: number | "none") => {
+    if (!draggingRoiId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOverCellCount(boxKey);
+  };
+
+  const handleCellCountBoxDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (nextTarget && event.currentTarget.contains(nextTarget)) return;
+    setDragOverCellCount(null);
+  };
+
+  const handleCellCountBoxDrop = (event: React.DragEvent<HTMLDivElement>, count: number | null) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOverCellCount(null);
+    setDragOverClass(null);
+    setDraggingRoiId(null);
+    const roiIdRaw = event.dataTransfer.getData("text/deepscan-roi-id");
+    const roiId = Number(roiIdRaw);
+    if (!Number.isInteger(roiId)) return;
+    const roi = status?.rois?.find((item) => item.roi_id === roiId);
+    if (!roi) return;
+    const currentClass = parseManualLabel(roi.manual_label) ?? roi.predicted_class;
+    if (currentClass !== 1) {
+      void updateManualLabel(roiId, "1");
+    }
+    if ((roi.manual_cell_count ?? null) !== count) {
+      void updateManualCellCount(roiId, count);
+    }
   };
 
   return (
@@ -2508,6 +2610,100 @@ const DeepScanPage = () => {
 
               {classLabels.map((label, classIndex) => {
                 const bucket = previewBuckets.buckets[classIndex] ?? [];
+                const renderRoiTile = (roi: RealtimeROI) => {
+                  const imageSrc = roiDisplaySources[roi.roi_id] || `data:image/png;base64,${roi.png_base64}`;
+                  const isSelected = selectedOverlayRoiId === roi.roi_id;
+                  return (
+                    <Box
+                      key={`${classIndex}-${roi.roi_id}`}
+                      sx={{
+                        border: "1px solid #e2e8f0",
+                        borderRadius: 1,
+                        overflow: "hidden",
+                        backgroundColor: (theme) => theme.palette.background.paper,
+                        cursor: "grab",
+                        opacity: draggingRoiId === roi.roi_id ? 0.55 : 1,
+                        transition: "opacity 120ms ease, box-shadow 160ms ease, transform 120ms ease",
+                        boxShadow:
+                          draggingRoiId === roi.roi_id
+                            ? "0 8px 24px rgba(15,23,42,0.12)"
+                            : isSelected
+                            ? "0 0 0 2px rgba(14,165,233,0.35)"
+                            : undefined,
+                        borderColor: isSelected ? "primary.main" : undefined,
+                        "&:active": {
+                          cursor: "grabbing",
+                          transform: "scale(0.99)",
+                        },
+                      }}
+                      draggable
+                      onDragStart={(event) => handleRoiDragStart(event, roi.roi_id)}
+                      onDragEnd={handleRoiDragEnd}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleSelectOverlayRoi(roi.roi_id);
+                      }}
+                    >
+                      <Box
+                        component="img"
+                        src={imageSrc}
+                        alt={`ROI ${roi.roi_id} class ${classIndex}`}
+                        sx={{
+                          width: "100%",
+                          aspectRatio: "1 / 1",
+                          objectFit: "cover",
+                          display: "block",
+                        }}
+                      />
+                      {classIndex === 1 && roi.manual_cell_count == null && roi.suggested_cell_count != null && (
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: "block", px: 0.5, py: 0.35, lineHeight: 1.2 }}
+                        >
+                          {`Suggested: ${roi.suggested_cell_count}`}
+                        </Typography>
+                      )}
+                      {roi.excluded_by_focus_area && (
+                        <Typography
+                          variant="caption"
+                          color="warning.main"
+                          sx={{ display: "block", px: 0.5, pb: 0.35, lineHeight: 1.2, fontWeight: 600 }}
+                        >
+                          Excluded
+                        </Typography>
+                      )}
+                    </Box>
+                  );
+                };
+                const cellCountGroups: Array<{
+                  key: number | "none";
+                  count: number | null;
+                  label: string;
+                  items: RealtimeROI[];
+                }> | null =
+                  classIndex === 1
+                    ? [
+                        {
+                          key: "none",
+                          count: null,
+                          label: tt("未割当", "Unassigned"),
+                          items: bucket.filter((roi) => roi.manual_cell_count == null),
+                        },
+                        ...[2, 3, 4, 5, 6].map((value) => ({
+                          key: value,
+                          count: value,
+                          label: tt(`${value}細胞`, `${value} cells`),
+                          items: bucket.filter((roi) => roi.manual_cell_count === value),
+                        })),
+                      ]
+                    : null;
+                const cellCountOthers =
+                  classIndex === 1
+                    ? bucket.filter(
+                        (roi) => roi.manual_cell_count != null && (roi.manual_cell_count < 2 || roi.manual_cell_count > 6),
+                      )
+                    : [];
                 return (
                   <Card
                     key={label}
@@ -2531,7 +2727,75 @@ const DeepScanPage = () => {
                         {label} ({bucket.length})
                       </Typography>
                     </Stack>
-                    {bucket.length === 0 ? (
+                    {classIndex === 1 && cellCountGroups ? (
+                      <Stack spacing={1}>
+                        {cellCountGroups.map((group) => (
+                          <Box
+                            key={`cell-count-${group.key}`}
+                            sx={{
+                              border: "1px dashed",
+                              borderColor: dragOverCellCount === group.key ? "primary.main" : "rgba(148,163,184,0.5)",
+                              borderRadius: 1,
+                              p: 1,
+                              backgroundColor:
+                                dragOverCellCount === group.key ? "rgba(14,165,233,0.06)" : "transparent",
+                              transition: "border-color 120ms ease, background-color 120ms ease",
+                            }}
+                            onDragOver={handleBucketDragOver}
+                            onDragEnter={(event) => handleCellCountBoxDragEnter(event, group.key)}
+                            onDragLeave={handleCellCountBoxDragLeave}
+                            onDrop={(event) => handleCellCountBoxDrop(event, group.count)}
+                          >
+                            <Typography
+                              variant="caption"
+                              fontWeight={600}
+                              color="text.secondary"
+                              sx={{ display: "block", mb: 0.5 }}
+                            >
+                              {group.label} ({group.items.length})
+                            </Typography>
+                            {group.items.length === 0 ? (
+                              <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 56 }}>
+                                <Typography variant="caption" color="text.secondary">
+                                  {tt("ここにドラッグ", "Drop here")}
+                                </Typography>
+                              </Box>
+                            ) : (
+                              <Box
+                                sx={{
+                                  display: "grid",
+                                  gridTemplateColumns: "repeat(10, minmax(0, 1fr))",
+                                  gap: 0.75,
+                                }}
+                              >
+                                {group.items.map(renderRoiTile)}
+                              </Box>
+                            )}
+                          </Box>
+                        ))}
+                        {cellCountOthers.length > 0 && (
+                          <Box sx={{ border: "1px dashed rgba(148,163,184,0.5)", borderRadius: 1, p: 1 }}>
+                            <Typography
+                              variant="caption"
+                              fontWeight={600}
+                              color="text.secondary"
+                              sx={{ display: "block", mb: 0.5 }}
+                            >
+                              {tt("その他(7以上)", "Others (7+)")} ({cellCountOthers.length})
+                            </Typography>
+                            <Box
+                              sx={{
+                                display: "grid",
+                                gridTemplateColumns: "repeat(10, minmax(0, 1fr))",
+                                gap: 0.75,
+                              }}
+                            >
+                              {cellCountOthers.map(renderRoiTile)}
+                            </Box>
+                          </Box>
+                        )}
+                      </Stack>
+                    ) : bucket.length === 0 ? (
                       <Box
                         sx={{
                           display: "flex",
@@ -2552,76 +2816,7 @@ const DeepScanPage = () => {
                           gap: 0.75,
                         }}
                       >
-                        {bucket.map((roi) => {
-                          const imageSrc = roiDisplaySources[roi.roi_id] || `data:image/png;base64,${roi.png_base64}`;
-                          const isSelected = selectedOverlayRoiId === roi.roi_id;
-                          return (
-                              <Box
-                                key={`${classIndex}-${roi.roi_id}`}
-                                sx={{
-                                  border: "1px solid #e2e8f0",
-                                borderRadius: 1,
-                                overflow: "hidden",
-                                backgroundColor: (theme) => theme.palette.background.paper,
-                                cursor: "grab",
-                                opacity: draggingRoiId === roi.roi_id ? 0.55 : 1,
-                                transition: "opacity 120ms ease, box-shadow 160ms ease, transform 120ms ease",
-                                boxShadow:
-                                  draggingRoiId === roi.roi_id
-                                    ? "0 8px 24px rgba(15,23,42,0.12)"
-                                    : isSelected
-                                    ? "0 0 0 2px rgba(14,165,233,0.35)"
-                                    : undefined,
-                                borderColor: isSelected ? "primary.main" : undefined,
-                                "&:active": {
-                                  cursor: "grabbing",
-                                  transform: "scale(0.99)",
-                                },
-                              }}
-                              draggable
-                              onDragStart={(event) => handleRoiDragStart(event, roi.roi_id)}
-                              onDragEnd={handleRoiDragEnd}
-                              onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleSelectOverlayRoi(roi.roi_id);
-                                }}
-                              >
-                                <Box
-                                  component="img"
-                                src={imageSrc}
-                                alt={`ROI ${roi.roi_id} class ${classIndex}`}
-                                sx={{
-                                  width: "100%",
-                                  aspectRatio: "1 / 1",
-                                  objectFit: "cover",
-                                    display: "block",
-                                  }}
-                                />
-                                {classIndex === 1 && (
-                                  <Typography
-                                    variant="caption"
-                                    color="text.secondary"
-                                    sx={{ display: "block", px: 0.5, py: 0.35, lineHeight: 1.2 }}
-                                  >
-                                    {roi.manual_cell_count != null
-                                      ? `Manual: ${roi.manual_cell_count}`
-                                      : roi.suggested_cell_count != null
-                                      ? `Suggested: ${roi.suggested_cell_count}`
-                                      : "Suggested: -"}
-                                  </Typography>
-                                )}
-                                {roi.excluded_by_focus_area && (
-                                  <Typography
-                                    variant="caption"
-                                    color="warning.main"
-                                    sx={{ display: "block", px: 0.5, pb: 0.35, lineHeight: 1.2, fontWeight: 600 }}
-                                  >
-                                    Excluded
-                                  </Typography>
-                                )}
-                              </Box>
-                          );
-                        })}
+                        {bucket.map(renderRoiTile)}
                       </Box>
                     )}
                   </Card>
