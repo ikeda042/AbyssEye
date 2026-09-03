@@ -174,6 +174,8 @@ const TiffManagerBulkCellCountResultsPage = () => {
   const [manualCellCountMessage, setManualCellCountMessage] = useState<string | null>(null);
   const [totalCellCount, setTotalCellCount] = useState<number | null>(null);
   const [cellCountSaving, setCellCountSaving] = useState(false);
+  const [classChangeSavingKeys, setClassChangeSavingKeys] = useState<Record<string, boolean>>({});
+  const [classChangeError, setClassChangeError] = useState<string | null>(null);
   const [pixelSizeUmInput, setPixelSizeUmInput] = useState(() => {
     if (typeof window === "undefined") return "0.16";
     return window.localStorage.getItem(PIXEL_SIZE_STORAGE_KEY) || "0.16";
@@ -486,6 +488,61 @@ const TiffManagerBulkCellCountResultsPage = () => {
     setManualCellCountMessage(null);
     setTotalCellCount(null);
   }, []);
+
+  const handleChangeRoiClass = useCallback(
+    async (roi: AggregatedRoi, newClass: number) => {
+      if (newClass === roi.finalClass) return;
+      const roiKey = manualCellCountKey(roi);
+      setClassChangeSavingKeys((prev) => ({ ...prev, [roiKey]: true }));
+      setClassChangeError(null);
+      try {
+        const response = await fetch(
+          endpoint(`databases/${encodeURIComponent(roi.dbName)}/records/${roi.roi_id}/manual-label`),
+          {
+            method: "PUT",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ manual_label: String(newClass) }),
+          },
+        );
+        if (!response.ok) {
+          const detail = (await response.json().catch(() => null))?.detail;
+          throw new Error(detail || tt("クラスの変更に失敗しました。", "Failed to change class."));
+        }
+        setResults((prev) => {
+          if (!prev) return prev;
+          const updateRoi = (row: AggregatedRoi): AggregatedRoi =>
+            row.dbName === roi.dbName && row.roi_id === roi.roi_id
+              ? { ...row, manual_label: String(newClass), finalClass: newClass, labelSource: "manual" }
+              : row;
+          const roiRows = prev.roiRows.map(updateRoi);
+          const classBuckets: Record<number, AggregatedRoi[]> = { 0: [], 1: [], 2: [], 3: [] };
+          roiRows.forEach((row) => {
+            if (row.finalClass in classBuckets) classBuckets[row.finalClass].push(row);
+          });
+          const counts: Record<number, number> = {
+            0: classBuckets[0].length,
+            1: classBuckets[1].length,
+            2: classBuckets[2].length,
+            3: classBuckets[3].length,
+          };
+          return { ...prev, roiRows, classBuckets, counts };
+        });
+        setTotalCellCount(null);
+      } catch (err) {
+        setClassChangeError(err instanceof Error ? err.message : tt("クラスの変更に失敗しました。", "Failed to change class."));
+      } finally {
+        setClassChangeSavingKeys((prev) => {
+          const next = { ...prev };
+          delete next[roiKey];
+          return next;
+        });
+      }
+    },
+    [tt],
+  );
 
   const handleCalculateTotalCellCount = useCallback(async () => {
     if (!results) return;
@@ -978,6 +1035,12 @@ const TiffManagerBulkCellCountResultsPage = () => {
                   </Stack>
                 </Stack>
 
+                {classChangeError ? (
+                  <Alert severity="error" onClose={() => setClassChangeError(null)}>
+                    {classChangeError}
+                  </Alert>
+                ) : null}
+
                 <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">
                   <Chip
                     color="primary"
@@ -1008,6 +1071,7 @@ const TiffManagerBulkCellCountResultsPage = () => {
                           <TableCell align="right">{tt("ROI番号", "ROI id")}</TableCell>
                             <TableCell>{tt("ラベル", "Label")}</TableCell>
                             <TableCell align="right">{tt("信頼度(%)", "Confidence (%)")}</TableCell>
+                            <TableCell align="center" sx={{ width: 168 }}>{tt("クラス変更", "Change class")}</TableCell>
                             {selectedClass === 1 && <TableCell align="center">{tt("細胞数", "Cell count")}</TableCell>}
                           </TableRow>
                         </TableHead>
@@ -1045,6 +1109,20 @@ const TiffManagerBulkCellCountResultsPage = () => {
                               </Typography>
                             </TableCell>
                             <TableCell align="right">{(roi.confidence * 100).toFixed(1)}</TableCell>
+                            <TableCell align="center">
+                              <FormControl size="small" sx={{ minWidth: 148 }}>
+                                <Select
+                                  value={roi.finalClass}
+                                  disabled={Boolean(classChangeSavingKeys[manualCellCountKey(roi)])}
+                                  onChange={(event) => void handleChangeRoiClass(roi, Number(event.target.value))}
+                                >
+                                  <MenuItem value={0}>{tt("単一細胞", "Single cell")}</MenuItem>
+                                  <MenuItem value={1}>{tt("複数細胞", "Multiple cells")}</MenuItem>
+                                  <MenuItem value={2}>{tt("ピンぼけ", "Blurred")}</MenuItem>
+                                  <MenuItem value={3}>{tt("非細胞粒子", "Non-cell particle")}</MenuItem>
+                                </Select>
+                              </FormControl>
+                            </TableCell>
                             {selectedClass === 1 && (
                               <TableCell align="center" sx={{ minWidth: 120 }}>
                                 {(() => {
