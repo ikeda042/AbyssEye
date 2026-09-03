@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
 COMPOSE_FILE="${SCRIPT_DIR}/compose.yaml"
+COMPOSE_COMMAND=(docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}")
 
 cd "${REPO_ROOT}"
 
@@ -30,9 +31,18 @@ after_sha="$(git rev-parse HEAD)"
 
 if [[ "${before_sha}" != "${after_sha}" ]]; then
   echo "Changes pulled. Rebuilding and deploying containers..."
-  docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" build --pull
-  docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d --remove-orphans
+  "${COMPOSE_COMMAND[@]}" build --pull
+  "${COMPOSE_COMMAND[@]}" up -d --remove-orphans
   echo "Deployment updated to ${after_sha}."
 else
-  echo "Repository already up-to-date. No rebuild required."
+  expected_services="$("${COMPOSE_COMMAND[@]}" config --services | sort)"
+  running_services="$("${COMPOSE_COMMAND[@]}" ps --services --filter status=running | sort)"
+
+  if [[ "${running_services}" != "${expected_services}" ]]; then
+    echo "Repository already up-to-date, but one or more containers are not running. Building and starting the stack..."
+    "${COMPOSE_COMMAND[@]}" up -d --build --remove-orphans
+    echo "Deployment started at ${after_sha}."
+  else
+    echo "Repository already up-to-date and all containers are running. No action required."
+  fi
 fi
