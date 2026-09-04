@@ -99,6 +99,10 @@ type DeepscanImageSummary = {
   class1_count: number;
   class2_count: number;
   class3_count: number;
+  total_cells?: number | null;
+  has_area_selection?: boolean;
+  selection_cells?: number | null;
+  area_corrected_total_cells?: number | null;
 };
 
 type DeepscanSummary = {
@@ -243,6 +247,7 @@ const RealtimeProjectsPage = () => {
   const [cellCountTargetCount, setCellCountTargetCount] = useState(0);
   const [cellCountDone, setCellCountDone] = useState(false);
   const [cellCountRows, setCellCountRows] = useState<Record<string, DeepscanImageSummary>>({});
+  const [countChoice, setCountChoice] = useState<Record<string, "whole" | "corrected">>({});
   const [class1PreviewGroups, setClass1PreviewGroups] = useState<Class1PreviewGroup[]>([]);
   const [manualClass1, setManualClass1] = useState<Record<string, string>>({});
   const [finalCellCount, setFinalCellCount] = useState<number | null>(null);
@@ -1194,6 +1199,7 @@ const RealtimeProjectsPage = () => {
 
       const nextRows: Record<string, DeepscanImageSummary> = {};
       const nextManual: Record<string, string> = {};
+      const nextChoice: Record<string, "whole" | "corrected"> = {};
       const nextClass1Groups: Class1PreviewGroup[] = [];
 
       for (const item of filteredSingleItems) {
@@ -1232,6 +1238,7 @@ const RealtimeProjectsPage = () => {
         const key = cellCountKey(item.dbName, item.relativePath);
         nextRows[key] = count;
         nextManual[key] = String(count.class1_count);
+        nextChoice[key] = count.area_corrected_total_cells != null ? "corrected" : "whole";
 
         if (count.class1_count > 0) {
           const statusResponse = await fetch(buildDeepscanStatusEndpoint(item.dbName, item.relativePath), {
@@ -1262,6 +1269,7 @@ const RealtimeProjectsPage = () => {
       setCellCountRows(nextRows);
       setClass1PreviewGroups(nextClass1Groups);
       setManualClass1(nextManual);
+      setCountChoice(nextChoice);
       setCellCountDone(true);
       setInfo(labels.cellCountFinished);
     } catch (err) {
@@ -1280,13 +1288,23 @@ const RealtimeProjectsPage = () => {
     for (const item of filteredSingleItems) {
       const key = cellCountKey(item.dbName, item.relativePath);
       const row = cellCountRows[key];
+      const choice = countChoice[key] ?? "whole";
+      if (choice === "corrected" && row?.area_corrected_total_cells != null) {
+        total += row.area_corrected_total_cells;
+        continue;
+      }
+      if (row?.total_cells != null) {
+        total += row.total_cells;
+        continue;
+      }
+      // DeepScan上のカウントが未確定な画像は従来どおり class0 + 手入力class1 で代替
       const class0 = row?.class0_count ?? 0;
       const manual = Number.parseInt(manualClass1[key], 10);
       const parsed = Number.isFinite(manual) && manual >= 0 ? Math.floor(manual) : 0;
       total += class0 + parsed;
     }
     setFinalCellCount(total);
-  }, [filteredSingleItems, manualClass1, cellCountRows]);
+  }, [filteredSingleItems, manualClass1, cellCountRows, countChoice]);
 
   const singleCellRows = useMemo(() => {
     return filteredSingleItems.map((item) => {
@@ -1814,7 +1832,7 @@ const RealtimeProjectsPage = () => {
                 ) : (
                   <Stack spacing={2}>
                     <TableContainer sx={TABLE_CONTAINER_SX}>
-                      <Table size="small" sx={buildDataTableSx(760)}>
+                      <Table size="small" sx={buildDataTableSx(980)}>
                         <TableHead>
                           <TableRow>
                             <TableCell>{labels.files}</TableCell>
@@ -1822,6 +1840,9 @@ const RealtimeProjectsPage = () => {
                             <TableCell align="right">{labels.class0}</TableCell>
                             <TableCell align="right">{labels.aiClass1}</TableCell>
                             <TableCell align="right">{labels.manual}</TableCell>
+                            <TableCell align="right">{tt("全体カウント", "Whole count")}</TableCell>
+                            <TableCell align="right">{tt("範囲補正カウント", "Area-corrected")}</TableCell>
+                            <TableCell align="center">{tt("採用値", "Use")}</TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
@@ -1850,6 +1871,44 @@ const RealtimeProjectsPage = () => {
                                     onChange={(event) => updateManualClass1(key, event.target.value)}
                                     sx={{ width: 96 }}
                                   />
+                                </TableCell>
+                                <TableCell align="right">
+                                  <Typography variant="body2" fontWeight={600}>
+                                    {value?.total_cells ?? "-"}
+                                  </Typography>
+                                </TableCell>
+                                <TableCell align="right">
+                                  <Typography variant="body2" fontWeight={600} color={value?.area_corrected_total_cells != null ? "primary" : "text.secondary"}>
+                                    {value?.area_corrected_total_cells != null
+                                      ? `${value.area_corrected_total_cells}`
+                                      : "-"}
+                                  </Typography>
+                                  {value?.area_corrected_total_cells != null && value?.selection_cells != null && (
+                                    <Typography variant="caption" color="text.secondary" display="block">
+                                      {tt(`範囲内 ${value.selection_cells}`, `in area ${value.selection_cells}`)}
+                                    </Typography>
+                                  )}
+                                </TableCell>
+                                <TableCell align="center">
+                                  <Stack direction="row" spacing={0.5} justifyContent="center">
+                                    <Button
+                                      size="small"
+                                      variant={(countChoice[key] ?? "whole") === "whole" ? "contained" : "outlined"}
+                                      onClick={() => setCountChoice((prev) => ({ ...prev, [key]: "whole" }))}
+                                      sx={{ minWidth: 52, px: 0.75 }}
+                                    >
+                                      {tt("全体", "Whole")}
+                                    </Button>
+                                    <Button
+                                      size="small"
+                                      variant={countChoice[key] === "corrected" ? "contained" : "outlined"}
+                                      disabled={value?.area_corrected_total_cells == null}
+                                      onClick={() => setCountChoice((prev) => ({ ...prev, [key]: "corrected" }))}
+                                      sx={{ minWidth: 52, px: 0.75 }}
+                                    >
+                                      {tt("補正", "Corrected")}
+                                    </Button>
+                                  </Stack>
                                 </TableCell>
                               </TableRow>
                             );

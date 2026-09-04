@@ -189,6 +189,7 @@ type DeepScanStatus = {
   focus_profile?: FocusProfile | null;
   focus_map?: FocusMap | null;
   focus_area?: FocusArea | null;
+  area_selection?: { x1: number; y1: number; x2: number; y2: number } | null;
   roi_components_3d?: { [key: string]: unknown } | null;
 };
 
@@ -1173,6 +1174,88 @@ const DeepScanPage = () => {
     areaDragActiveRef.current = false;
   }, [dbName, currentTifParam]);
 
+  // 保存済みの選択範囲を画像ロード時に復元する
+  const loadedAreaSelectionKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const imageKey = `${dbName}::${status?.current_image_relative_path || ""}`;
+    if (!status || loadedAreaSelectionKeyRef.current === imageKey) return;
+    loadedAreaSelectionKeyRef.current = imageKey;
+    const saved = status.area_selection;
+    if (saved && [saved.x1, saved.y1, saved.x2, saved.y2].every((v) => typeof v === "number")) {
+      setAreaSelection({
+        x1: Math.min(saved.x1, saved.x2),
+        y1: Math.min(saved.y1, saved.y2),
+        x2: Math.max(saved.x1, saved.x2),
+        y2: Math.max(saved.y1, saved.y2),
+      });
+    }
+  }, [dbName, status, status?.current_image_relative_path]);
+
+  const persistAreaSelection = useCallback(
+    (rect: { x1: number; y1: number; x2: number; y2: number } | null) => {
+      if (!dbName) return;
+      const url = new URL(`deepscan/${encodeURIComponent(dbName)}/area-selection`, API_BASE_URL);
+      const tifTarget = status?.current_image_relative_path || currentTifParam;
+      if (tifTarget) url.searchParams.set("tif_name", tifTarget);
+      void fetch(url.toString(), {
+        method: "PUT",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(
+          rect
+            ? {
+                ...rect,
+                image_width: areaBaseDims?.width ?? 0,
+                image_height: areaBaseDims?.height ?? 0,
+              }
+            : {},
+        ),
+      }).catch(() => {
+        // 選択範囲の保存失敗は表示継続を妨げない
+      });
+    },
+    [areaBaseDims?.height, areaBaseDims?.width, currentTifParam, dbName, status?.current_image_relative_path],
+  );
+
+  const imageCellCounts = useMemo(() => {
+    let wholeCells = 0;
+    let wholeMissing = 0;
+    let selectionCells = 0;
+    (status?.rois ?? []).forEach((roi) => {
+      if (roi.manual_excluded || roi.excluded_by_focus_area) return;
+      const label = parseManualLabel(roi.manual_label) ?? roi.predicted_class;
+      let cells = 0;
+      if (label === 0) {
+        cells = 1;
+      } else if (label === 1) {
+        const count = roi.manual_cell_count ?? null;
+        if (count === null) {
+          wholeMissing += 1;
+        } else {
+          cells = count;
+        }
+      } else {
+        return;
+      }
+      wholeCells += cells;
+      if (areaSelection) {
+        const cx = (roi.roi_start_x + roi.roi_end_x) / 2;
+        const cy = (roi.roi_start_y + roi.roi_end_y) / 2;
+        if (cx >= areaSelection.x1 && cx <= areaSelection.x2 && cy >= areaSelection.y1 && cy <= areaSelection.y2) {
+          selectionCells += cells;
+        }
+      }
+    });
+    let corrected: number | null = null;
+    if (areaSelection && areaBaseDims) {
+      const selArea = (areaSelection.x2 - areaSelection.x1) * (areaSelection.y2 - areaSelection.y1);
+      const imgArea = areaBaseDims.width * areaBaseDims.height;
+      if (selArea > 0 && imgArea > 0) {
+        corrected = Math.round((selectionCells * imgArea) / selArea);
+      }
+    }
+    return { wholeCells, wholeMissing, selectionCells, corrected };
+  }, [status?.rois, areaSelection, areaBaseDims]);
+
   const previewBuckets = useMemo(() => {
     const buckets: Record<number, RealtimeROI[]> = { 0: [], 1: [], 2: [], 3: [] };
     const others: RealtimeROI[] = [];
@@ -1672,21 +1755,20 @@ const DeepScanPage = () => {
   const handleAreaPointerUp = useCallback(() => {
     if (!areaDragActiveRef.current) return;
     areaDragActiveRef.current = false;
-    setAreaDraft((prev) => {
-      if (prev) {
-        const rect = {
-          x1: Math.min(prev.x1, prev.x2),
-          y1: Math.min(prev.y1, prev.y2),
-          x2: Math.max(prev.x1, prev.x2),
-          y2: Math.max(prev.y1, prev.y2),
-        };
-        if (rect.x2 - rect.x1 >= 4 && rect.y2 - rect.y1 >= 4) {
-          setAreaSelection(rect);
-        }
+    if (areaDraft) {
+      const rect = {
+        x1: Math.min(areaDraft.x1, areaDraft.x2),
+        y1: Math.min(areaDraft.y1, areaDraft.y2),
+        x2: Math.max(areaDraft.x1, areaDraft.x2),
+        y2: Math.max(areaDraft.y1, areaDraft.y2),
+      };
+      if (rect.x2 - rect.x1 >= 4 && rect.y2 - rect.y1 >= 4) {
+        setAreaSelection(rect);
+        persistAreaSelection(rect);
       }
-      return null;
-    });
-  }, []);
+    }
+    setAreaDraft(null);
+  }, [areaDraft, persistAreaSelection]);
 
   const updateManualLabel = useCallback(
     async (roiId: number, label: string | null) => {
@@ -2138,14 +2220,18 @@ const DeepScanPage = () => {
                               </span>
                             </Tooltip>
                           )}
-                          {areaSelection && (
-                            <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
-                              {tt(
-                                `範囲内 ${(status?.rois ?? []).filter((roi) => roiInAreaSelection(roi)).length} ROI / ${Math.round((areaSelection.x2 - areaSelection.x1) * (areaSelection.y2 - areaSelection.y1)).toLocaleString()} px²`,
-                                `${(status?.rois ?? []).filter((roi) => roiInAreaSelection(roi)).length} ROI in area / ${Math.round((areaSelection.x2 - areaSelection.x1) * (areaSelection.y2 - areaSelection.y1)).toLocaleString()} px²`,
-                              )}
-                            </Typography>
-                          )}
+                          <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap", fontWeight: 600 }}>
+                            {tt(
+                              `セルカウント: ${imageCellCounts.wholeCells}${imageCellCounts.wholeMissing > 0 ? ` (未割当${imageCellCounts.wholeMissing})` : ""}`,
+                              `Cells: ${imageCellCounts.wholeCells}${imageCellCounts.wholeMissing > 0 ? ` (${imageCellCounts.wholeMissing} unassigned)` : ""}`,
+                            )}
+                            {areaSelection && imageCellCounts.corrected !== null
+                              ? tt(
+                                  ` ／ 範囲内 ${imageCellCounts.selectionCells} → 補正推定 ${imageCellCounts.corrected}`,
+                                  ` / in area ${imageCellCounts.selectionCells} → est. ${imageCellCounts.corrected}`,
+                                )
+                              : ""}
+                          </Typography>
                           <Button
                             variant={areaSelectMode ? "contained" : "outlined"}
                             size="small"
@@ -2159,7 +2245,10 @@ const DeepScanPage = () => {
                             <Button
                               variant="text"
                               size="small"
-                              onClick={() => setAreaSelection(null)}
+                              onClick={() => {
+                                setAreaSelection(null);
+                                persistAreaSelection(null);
+                              }}
                               sx={{ px: 1, whiteSpace: "nowrap" }}
                             >
                               {tt("解除", "Clear")}

@@ -102,6 +102,7 @@ def _build_status_payload(view: crud.DeepScanView, request: Request) -> dict:
         "focus_profile": view.focus_profile,
         "focus_map": view.focus_map,
         "focus_area": view.focus_area,
+        "area_selection": view.area_selection,
         "roi_components_3d": view.roi_components_3d,
     }
 
@@ -173,6 +174,19 @@ class ManualExcludedUpdateRequest(BaseModel):
     excluded: bool = Field(description="true で集計から除外、false で復帰")
 
 
+class AreaSelectionUpdateRequest(BaseModel):
+    x1: float | None = Field(default=None, description="選択範囲の左上X（処理解像度px）。全フィールドnullで選択解除。")
+    y1: float | None = None
+    x2: float | None = None
+    y2: float | None = None
+    image_width: int | None = Field(default=None, description="処理解像度の画像幅")
+    image_height: int | None = None
+
+
+class AreaSelectionResponse(BaseModel):
+    area_selection: dict | None
+
+
 class ManualExcludedUpdateResponse(BaseModel):
     record_id: int
     manual_excluded: bool
@@ -191,6 +205,11 @@ class DeepscanCellCountImageResponse(BaseModel):
     excluded_by_focus_area_count: int = 0
     missing_class1_cell_count: int = 0
     total_cells: int | None = None
+    has_area_selection: bool = False
+    selection_cells: int | None = None
+    selection_area_px: int | None = None
+    image_area_px: int | None = None
+    area_corrected_total_cells: int | None = None
     whole_area_px: int | None = None
     valid_area_px: int | None = None
     excluded_area_px: int | None = None
@@ -292,6 +311,32 @@ async def set_manual_cell_count(
     return ManualCellCountUpdateResponse(**result)
 
 
+@router.put("/{db_name}/area-selection", response_model=AreaSelectionResponse)
+async def set_area_selection(
+    db_name: str,
+    payload: AreaSelectionUpdateRequest,
+    tif_name: str | None = Query(None, description="表示対象TIFF (相対パスまたはファイル名)"),
+) -> AreaSelectionResponse:
+    if payload.x1 is None or payload.y1 is None or payload.x2 is None or payload.y2 is None:
+        selection = None
+    else:
+        selection = {
+            "x1": payload.x1,
+            "y1": payload.y1,
+            "x2": payload.x2,
+            "y2": payload.y2,
+            "image_width": payload.image_width or 0,
+            "image_height": payload.image_height or 0,
+        }
+    entry = await asyncio.to_thread(
+        crud.set_area_selection,
+        db_name,
+        tif_name=tif_name,
+        selection=selection,
+    )
+    return AreaSelectionResponse(area_selection=entry)
+
+
 @router.put("/{db_name}/records/{record_id}/manual-excluded", response_model=ManualExcludedUpdateResponse)
 async def set_manual_excluded(
     db_name: str,
@@ -341,6 +386,11 @@ async def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummaryRespon
                 excluded_by_focus_area_count=image.excluded_by_focus_area_count,
                 missing_class1_cell_count=image.missing_class1_cell_count,
                 total_cells=image.total_cells,
+                has_area_selection=image.has_area_selection,
+                selection_cells=image.selection_cells,
+                selection_area_px=image.selection_area_px,
+                image_area_px=image.image_area_px,
+                area_corrected_total_cells=image.area_corrected_total_cells,
                 whole_area_px=image.whole_area_px,
                 valid_area_px=image.valid_area_px,
                 excluded_area_px=image.excluded_area_px,

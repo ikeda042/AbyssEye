@@ -33,6 +33,7 @@ ROI_META_MANUAL_CELL_COUNT_KEY = "manual_cell_count"
 ROI_META_SUGGESTED_CELL_COUNT_KEY = "suggested_cell_count"
 ROI_META_CELL_COUNT_AUTO_ASSIGNED_KEY = "cell_count_auto_assigned"
 ROI_META_MANUAL_EXCLUDED_KEY = "manual_excluded"
+AREA_SELECTION_STORE_SUFFIX = "_area_selections.json"
 FOCUS_AREA_STORE_SUFFIX = "_focus_areas.json"
 FOCUS_AREA_SCHEMA_VERSION = 5
 FOCUS_AREA_DEFAULT_TILE_SIZE = 16
@@ -102,6 +103,11 @@ class DeepscanCellCountImageInfo:
     excluded_by_focus_area_count: int = 0
     missing_class1_cell_count: int = 0
     total_cells: int | None = None
+    has_area_selection: bool = False
+    selection_cells: int | None = None
+    selection_area_px: int | None = None
+    image_area_px: int | None = None
+    area_corrected_total_cells: int | None = None
     whole_area_px: int | None = None
     valid_area_px: int | None = None
     excluded_area_px: int | None = None
@@ -140,6 +146,7 @@ class DeepScanView:
     focus_map: dict[str, object] | None
     roi_components_3d: dict[str, object] | None
     focus_area: dict[str, object] | None = None
+    area_selection: dict[str, object] | None = None
 
 
 @dataclass
@@ -351,6 +358,69 @@ def update_manual_excluded(db_name: str, record_id: int, excluded: bool) -> dict
         raise HTTPException(status_code=500, detail=f"手動除外の保存に失敗しました: {exc}") from exc
 
     return {"record_id": int(record_id), "manual_excluded": bool(excluded)}
+
+
+def _area_selection_store_path(db_path: Path) -> Path:
+    return db_path.with_name(f"{db_path.stem}{AREA_SELECTION_STORE_SUFFIX}")
+
+
+def _load_area_selections(db_path: Path) -> dict[str, dict[str, object]]:
+    store_path = _area_selection_store_path(db_path)
+    if not store_path.is_file():
+        return {}
+    try:
+        payload = json.loads(store_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _get_saved_area_selection(db_path: Path, relative_path: str) -> dict[str, object] | None:
+    entry = _load_area_selections(db_path).get(relative_path)
+    return entry if isinstance(entry, dict) else None
+
+
+def set_area_selection(
+    db_name: str,
+    *,
+    tif_name: str | None,
+    selection: dict[str, float] | None,
+) -> dict[str, object] | None:
+    db_path = databases_crud.get_database_file_path(db_name)
+    _, _, current_image, _ = _resolve_tif_path(db_path, tif_name=tif_name)
+    if current_image is None:
+        raise HTTPException(status_code=404, detail="対象画像が見つかりません。")
+    relative_path = current_image.relative_path
+
+    store = _load_area_selections(db_path)
+    entry: dict[str, object] | None = None
+    if selection is None:
+        store.pop(relative_path, None)
+    else:
+        x1 = float(min(selection["x1"], selection["x2"]))
+        y1 = float(min(selection["y1"], selection["y2"]))
+        x2 = float(max(selection["x1"], selection["x2"]))
+        y2 = float(max(selection["y1"], selection["y2"]))
+        if x2 - x1 < 1 or y2 - y1 < 1:
+            raise HTTPException(status_code=400, detail="選択範囲が小さすぎます。")
+        entry = {
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "image_width": int(selection.get("image_width") or 0),
+            "image_height": int(selection.get("image_height") or 0),
+            "saved_at": datetime.now().isoformat(),
+        }
+        store[relative_path] = entry
+
+    try:
+        _area_selection_store_path(db_path).write_text(
+            json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"選択範囲の保存に失敗しました: {exc}") from exc
+    return entry
 
 
 def _chunked(values: list[str], chunk_size: int = 500) -> list[list[str]]:
@@ -1991,6 +2061,8 @@ def _cell_count_bucket(focus_area: dict[str, object] | None = None) -> dict[str,
 def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
     db_path = databases_crud.get_database_file_path(db_name)
     images = _list_bulk_images(db_path)
+    area_selections = _load_area_selections(db_path)
+    selection_cells_by_image: dict[str, int] = {}
 
     focus_area_by_image: dict[str, dict[str, object] | None] = {}
     available_counts: dict[str, dict[str, int | float | bool | None]] = {}
@@ -2127,11 +2199,24 @@ def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
             totals["excluded_by_focus_area"] += 1
             continue
 
+        selection = area_selections.get(relative_path)
+        in_selection = False
+        if isinstance(selection, dict):
+            try:
+                in_selection = (
+                    float(selection["x1"]) <= center_x <= float(selection["x2"])
+                    and float(selection["y1"]) <= center_y <= float(selection["y2"])
+                )
+            except (KeyError, TypeError, ValueError):
+                in_selection = False
+
         if label == 0:
             counts["included_class0_count"] = int(counts["included_class0_count"] or 0) + 1
             counts["total_cells"] = int(counts["total_cells"] or 0) + 1
             totals["included_class0"] += 1
             totals["total_cells"] += 1
+            if in_selection:
+                selection_cells_by_image[relative_path] = selection_cells_by_image.get(relative_path, 0) + 1
         elif label == 1:
             raw_meta = _deserialize_roi_meta(row["roi_meta"])
             manual_count = _safe_manual_cell_count(
@@ -2145,6 +2230,8 @@ def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
             else:
                 counts["total_cells"] = int(counts["total_cells"] or 0) + int(manual_count)
                 totals["total_cells"] += int(manual_count)
+                if in_selection:
+                    selection_cells_by_image[relative_path] = selection_cells_by_image.get(relative_path, 0) + int(manual_count)
 
     image_summaries: list[DeepscanCellCountImageInfo] = []
     seen_relative = set[str]()
@@ -2220,6 +2307,29 @@ def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
     if image_summaries and unknown_images:
         # Keep unknown image records in stable order after known images for visibility.
         image_summaries.sort(key=lambda item: (item.relative_path in unknown_images, item.relative_path))
+
+    # 保存済み選択範囲がある画像は、範囲内カウントを面積比で全体推定値へ補正する
+    for summary in image_summaries:
+        selection = area_selections.get(summary.relative_path)
+        if not isinstance(selection, dict):
+            continue
+        try:
+            sel_w = float(selection["x2"]) - float(selection["x1"])
+            sel_h = float(selection["y2"]) - float(selection["y1"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        sel_area = int(round(sel_w * sel_h))
+        img_w = int(selection.get("image_width") or 0)
+        img_h = int(selection.get("image_height") or 0)
+        img_area = img_w * img_h
+        if sel_area <= 0 or img_area <= 0:
+            continue
+        cells = int(selection_cells_by_image.get(summary.relative_path, 0))
+        summary.has_area_selection = True
+        summary.selection_cells = cells
+        summary.selection_area_px = sel_area
+        summary.image_area_px = img_area
+        summary.area_corrected_total_cells = int(round(cells * img_area / sel_area))
 
     area_images = [image for image in image_summaries if image.roi_count > 0]
     area_normalization_ready = bool(area_images) and all(image.focus_area_approved for image in area_images)
@@ -2588,6 +2698,10 @@ async def get_deepscan_view(
     focus_map = await asyncio.to_thread(_build_focus_map, images, current_index, focus_metric)
     focus_area = await asyncio.to_thread(_focus_area_for_status, db_path, tif_path, current_image, rois)
 
+    area_selection = (
+        _get_saved_area_selection(db_path, current_image.relative_path) if current_image else None
+    )
+
     return DeepScanView(
         status=status,
         available_images=images,
@@ -2597,4 +2711,5 @@ async def get_deepscan_view(
         focus_map=focus_map,
         roi_components_3d=roi_components_3d_payload,
         focus_area=focus_area,
+        area_selection=area_selection,
     )
