@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Query, UploadFile
+from fastapi import APIRouter, File, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -61,6 +61,44 @@ class DeleteFileResponse(BaseModel):
 class DeleteProjectResponse(BaseModel):
     deleted_project: str
     deleted_folders: int
+
+
+class ProjectInfoResponse(BaseModel):
+    name: str
+    created_at: str
+    created_by: str | None = None
+    notes: str | None = None
+    folder_count: int
+    file_count: int
+    db_count: int
+    total_size_bytes: int
+    updated_at: str | None = None
+    registered: bool
+
+    @classmethod
+    def from_dataclass(cls, item: crud.ProjectInfo) -> "ProjectInfoResponse":
+        return cls(
+            name=item.name,
+            created_at=item.created_at.isoformat(),
+            created_by=item.created_by,
+            notes=item.notes,
+            folder_count=item.folder_count,
+            file_count=item.file_count,
+            db_count=item.db_count,
+            total_size_bytes=item.total_size_bytes,
+            updated_at=item.updated_at.isoformat() if item.updated_at else None,
+            registered=item.registered,
+        )
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[ProjectInfoResponse]
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(..., description="プロジェクト名")
+    created_by: str | None = Field(default=None, description="作成者")
+    notes: str | None = Field(default=None, description="備考")
 
 
 class ProjectScopedRequest(BaseModel):
@@ -427,6 +465,22 @@ async def focus_merge(payload: FocusMergeRequest) -> FocusMergeResponse:
 async def extract_focus_merged(payload: FocusMergeRequest) -> FocusMergeExtractionResponse:
     result = await crud.extract_focus_merged_rois(payload.folder_name, payload.project_name)
     return FocusMergeExtractionResponse.from_dataclass(result)
+
+
+@router.get("/projects", response_model=ProjectListResponse)
+async def list_projects() -> ProjectListResponse:
+    projects = await crud.list_projects()
+    return ProjectListResponse(projects=[ProjectInfoResponse.from_dataclass(item) for item in projects])
+
+
+@router.post("/projects", response_model=ProjectInfoResponse, status_code=status.HTTP_201_CREATED)
+async def create_project(payload: ProjectCreateRequest) -> ProjectInfoResponse:
+    result = await crud.create_project(
+        payload.name,
+        created_by=payload.created_by,
+        notes=payload.notes,
+    )
+    return ProjectInfoResponse.from_dataclass(result)
 
 
 @router.delete("/projects/{project_name}", response_model=DeleteProjectResponse)

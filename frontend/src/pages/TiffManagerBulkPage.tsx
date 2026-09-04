@@ -35,6 +35,7 @@ import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import BiotechIcon from "@mui/icons-material/Biotech";
+import RefreshIcon from "@mui/icons-material/Refresh";
 
 import { API_BASE_URL } from "../config";
 import { type Language, useI18n } from "../i18n";
@@ -42,6 +43,7 @@ import { deleteRealtimeWatchProject } from "../realtimeWatch";
 import { buildDataTableSx, ELLIPSIS_TEXT_SX, PAGE_CONTAINER_SX, TABLE_CONTAINER_SX } from "../ui/layout";
 
 const endpoint = (path: string) => new URL(path, API_BASE_URL).toString();
+const ENABLE_SAME_FIELD_FOLDER_UI: boolean = false;
 
 type FolderEntry = {
   name: string;
@@ -127,6 +129,25 @@ type ProjectEntry = {
   createdAt: number;
   createdBy?: string;
   notes?: string;
+  folderCount?: number;
+  fileCount?: number;
+  dbCount?: number;
+  totalSizeBytes?: number;
+  updatedAt?: number | null;
+  registered?: boolean;
+};
+
+type ServerProjectEntry = {
+  name: string;
+  created_at: string;
+  created_by?: string | null;
+  notes?: string | null;
+  folder_count?: number;
+  file_count?: number;
+  db_count?: number;
+  total_size_bytes?: number;
+  updated_at?: string | null;
+  registered?: boolean;
 };
 
 const PROJECT_STORAGE_KEY = "abyssEye:data-projects:v1";
@@ -155,11 +176,19 @@ const loadProjects = (): ProjectEntry[] => {
         const createdBy = typeof createdByRaw === "string" ? createdByRaw.trim() : "";
         const notesRaw = (entry as { notes?: unknown }).notes;
         const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
+        const updatedAtRaw = (entry as { updatedAt?: unknown }).updatedAt;
+        const updatedAt = updatedAtRaw === null ? null : Number(updatedAtRaw);
         return {
           name,
           createdAt,
           createdBy: createdBy || undefined,
           notes: notes || undefined,
+          folderCount: Number((entry as { folderCount?: unknown }).folderCount) || 0,
+          fileCount: Number((entry as { fileCount?: unknown }).fileCount) || 0,
+          dbCount: Number((entry as { dbCount?: unknown }).dbCount) || 0,
+          totalSizeBytes: Number((entry as { totalSizeBytes?: unknown }).totalSizeBytes) || 0,
+          updatedAt: updatedAtRaw === undefined || Number.isNaN(updatedAt) ? null : updatedAt,
+          registered: Boolean((entry as { registered?: unknown }).registered),
         };
       })
       .filter((entry): entry is ProjectEntry => entry !== null);
@@ -190,6 +219,23 @@ const formatDateTime = (iso?: string, language: Language = "ja") => {
   if (Number.isNaN(date.getTime())) return iso;
   const locale = language === "ja" ? "ja-JP" : "en-US";
   return date.toLocaleString(locale, { hour12: false });
+};
+
+const serverProjectToEntry = (project: ServerProjectEntry): ProjectEntry => {
+  const createdAt = new Date(project.created_at).getTime();
+  const updatedAt = project.updated_at ? new Date(project.updated_at).getTime() : null;
+  return {
+    name: normalizeProjectName(project.name),
+    createdAt: Number.isNaN(createdAt) ? 0 : createdAt,
+    createdBy: project.created_by?.trim() || undefined,
+    notes: project.notes?.trim() || undefined,
+    folderCount: project.folder_count ?? 0,
+    fileCount: project.file_count ?? 0,
+    dbCount: project.db_count ?? 0,
+    totalSizeBytes: project.total_size_bytes ?? 0,
+    updatedAt: updatedAt !== null && Number.isNaN(updatedAt) ? null : updatedAt,
+    registered: project.registered ?? false,
+  };
 };
 
 const resolveSingleImageOrigin = (folder: FolderEntry): SingleImageOrigin =>
@@ -252,13 +298,19 @@ const TiffManagerBulkPage = () => {
     [activeProject, projectPrefix],
   );
 
-  const syncProjects = (updater: ProjectEntry[]) => {
+  const syncProjects = useCallback((updater: ProjectEntry[]) => {
     const normalized = updater
       .map((entry) => ({
         name: normalizeProjectName(entry.name),
         createdAt: entry.createdAt,
         createdBy: entry.createdBy?.trim() || undefined,
         notes: entry.notes?.trim() || undefined,
+        folderCount: entry.folderCount ?? 0,
+        fileCount: entry.fileCount ?? 0,
+        dbCount: entry.dbCount ?? 0,
+        totalSizeBytes: entry.totalSizeBytes ?? 0,
+        updatedAt: entry.updatedAt ?? null,
+        registered: entry.registered ?? false,
       }))
       .filter((entry) => entry.name)
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -266,7 +318,27 @@ const TiffManagerBulkPage = () => {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(normalized));
     }
-  };
+  }, []);
+
+  const fetchProjects = useCallback(async () => {
+    try {
+      const response = await fetch(endpoint("tiff-bulk/projects"), {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      const payload: { projects?: ServerProjectEntry[]; detail?: string } = await response.json().catch(() => ({}));
+      if (!response.ok || !Array.isArray(payload.projects)) {
+        throw new Error(payload.detail || tt("プロジェクト一覧の取得に失敗しました。", "Failed to fetch projects."));
+      }
+      syncProjects(payload.projects.map(serverProjectToEntry));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : tt("プロジェクト一覧の取得に失敗しました。", "Failed to fetch projects."));
+    }
+  }, [syncProjects, tt]);
+
+  useEffect(() => {
+    void fetchProjects();
+  }, [fetchProjects]);
 
   const fetchFolders = useCallback(async () => {
     if (!activeProject) {
@@ -427,19 +499,6 @@ const TiffManagerBulkPage = () => {
     setInfo(null);
   };
 
-  const purgeProjectArtifacts = useCallback(async (projectName: string) => {
-    const response = await fetch(endpoint(`tiff-bulk/projects/${encodeURIComponent(projectName)}`), {
-      method: "DELETE",
-    });
-    const payload: { deleted_project?: string; detail?: string } = await response.json().catch(() => ({}));
-    if (!response.ok || !payload.deleted_project) {
-      throw new Error(payload.detail || t("projects.deleteError"));
-    }
-    await deleteRealtimeWatchProject(projectName).catch(() => {
-      // Watch settings cleanup is best-effort here.
-    });
-  }, [t]);
-
   const resetProjectDialog = useCallback(() => {
     setProjectDialogError(null);
     setProjectDraftName("");
@@ -465,22 +524,26 @@ const TiffManagerBulkPage = () => {
       setProjectDialogError(t("projects.createError"));
       return;
     }
-    if (projects.some((project) => project.name.toLowerCase() === name.toLowerCase())) {
-      setProjectDialogError(t("projects.alreadyExists"));
-      return;
-    }
     try {
-      await purgeProjectArtifacts(name);
-      const next = [
-        ...projects,
-        {
-          name,
-          createdAt: Date.now(),
-          createdBy: createdBy || undefined,
-          notes: notes || undefined,
+      const response = await fetch(endpoint("tiff-bulk/projects"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
         },
-      ];
-      syncProjects(next);
+        body: JSON.stringify({
+          name,
+          created_by: createdBy || null,
+          notes: notes || null,
+        }),
+      });
+      const payload: ServerProjectEntry & { detail?: string } = await response
+        .json()
+        .catch(() => ({} as ServerProjectEntry & { detail?: string }));
+      if (!response.ok || !payload.name) {
+        throw new Error(payload.detail || t("projects.createError"));
+      }
+      await fetchProjects();
       setFolders([]);
       setResult(null);
       setError(null);
@@ -520,8 +583,7 @@ const TiffManagerBulkPage = () => {
         await deleteRealtimeWatchProject(target).catch(() => {
           // Realtime watcher settings are best-effort to delete.
         });
-        const nextProjects = projects.filter((project) => project.name !== target);
-        syncProjects(nextProjects);
+        await fetchProjects();
         setInfo(t("projects.deleteSuccess", { name: target }));
       } catch (err) {
         setError(err instanceof Error ? err.message : t("projects.deleteError"));
@@ -529,7 +591,7 @@ const TiffManagerBulkPage = () => {
         setDeletingProject(null);
       }
     },
-    [projects, syncProjects, t],
+    [fetchProjects, t],
   );
 
   const deleteFolderRequest = useCallback(
@@ -605,8 +667,8 @@ const TiffManagerBulkPage = () => {
     [visibleSingleImageFolders],
   );
 
-  const allVisibleSingleImageFoldersExtracted = useMemo(
-    () => visibleSingleImageFolders.length > 0 && visibleSingleImageFolders.every((folder) => Boolean(folder.has_extraction_db)),
+  const visibleInferableSingleImageFolders = useMemo(
+    () => visibleSingleImageFolders.filter((folder) => Boolean(folder.has_extraction_db)),
     [visibleSingleImageFolders],
   );
 
@@ -681,9 +743,11 @@ const TiffManagerBulkPage = () => {
 
   const multiImageFolders = useMemo(
     () =>
-      filteredFolders.filter(
-        (folder) => folder.realtime_folder_mode === "stack" || (!folder.realtime_folder_mode && folder.file_count > 1),
-      ),
+      ENABLE_SAME_FIELD_FOLDER_UI
+        ? filteredFolders.filter(
+            (folder) => folder.realtime_folder_mode === "stack" || (!folder.realtime_folder_mode && folder.file_count > 1),
+          )
+        : [],
     [filteredFolders],
   );
 
@@ -1029,27 +1093,28 @@ const TiffManagerBulkPage = () => {
 
   const handleBatchInferenceSingleImages = useCallback(async () => {
     if (visibleSingleImageFolders.length === 0) return;
-    if (currentSingleImageOrigin === "upload" && !allVisibleSingleImageFoldersExtracted) {
-      setError(tt("先に未抽出画像のROI抽出を完了してください。", "Finish ROI extraction for new uploaded images first."));
-      return;
-    }
-    if (currentSingleImageOrigin === "realtime" && visibleSingleImageFolders.some((folder) => !folder.has_extraction_db)) {
-      setError(tt("リアルタイム画像のROI情報が未作成です。", "ROI data is not ready for some realtime images."));
+    if (visibleInferableSingleImageFolders.length === 0) {
+      setError(
+        currentSingleImageOrigin === "realtime"
+          ? tt("推論可能なROI情報がありません。", "No ROI data is ready for inference.")
+          : tt("ROI抽出済みの画像がありません。", "No extracted images are ready for inference."),
+      );
       return;
     }
 
+    const skippedCount = visibleSingleImageFolders.length - visibleInferableSingleImageFolders.length;
     setError(null);
     setInfo(null);
     setResult(null);
     setInferHintFolder(null);
     setBatchInferRunning(true);
     try {
-      for (const folder of visibleSingleImageFolders) {
+      for (const folder of visibleInferableSingleImageFolders) {
         await runInferenceForFolder(folder.name);
       }
       setCompletedInferenceFolders((prev) => {
         const next = new Set(prev);
-        for (const folder of visibleSingleImageFolders) {
+        for (const folder of visibleInferableSingleImageFolders) {
           next.add(folder.name);
         }
         return Array.from(next);
@@ -1057,12 +1122,12 @@ const TiffManagerBulkPage = () => {
       setInfo(
         currentSingleImageOrigin === "realtime"
           ? tt(
-              `リアルタイム画像 ${visibleSingleImageFolders.length} 件の推論を完了しました。`,
-              `Completed inference for ${visibleSingleImageFolders.length} realtime image entries.`,
+              `リアルタイム画像 ${visibleInferableSingleImageFolders.length} 件の推論を完了しました。${skippedCount > 0 ? `未抽出 ${skippedCount} 件はスキップしました。` : ""}`,
+              `Completed inference for ${visibleInferableSingleImageFolders.length} realtime image entries.${skippedCount > 0 ? ` Skipped ${skippedCount} non-extracted entries.` : ""}`,
             )
           : tt(
-              `アップロード画像 ${visibleSingleImageFolders.length} 件の推論を完了しました。`,
-              `Completed inference for ${visibleSingleImageFolders.length} uploaded image entries.`,
+              `アップロード画像 ${visibleInferableSingleImageFolders.length} 件の推論を完了しました。${skippedCount > 0 ? `未抽出 ${skippedCount} 件はスキップしました。` : ""}`,
+              `Completed inference for ${visibleInferableSingleImageFolders.length} uploaded image entries.${skippedCount > 0 ? ` Skipped ${skippedCount} non-extracted entries.` : ""}`,
             ),
       );
       await fetchFolders();
@@ -1072,12 +1137,12 @@ const TiffManagerBulkPage = () => {
       setBatchInferRunning(false);
     }
   }, [
-    allVisibleSingleImageFoldersExtracted,
     currentSingleImageOrigin,
     fetchFolders,
     runInferenceForFolder,
     t,
     tt,
+    visibleInferableSingleImageFolders,
     visibleSingleImageFolders,
   ]);
 
@@ -1181,7 +1246,7 @@ const TiffManagerBulkPage = () => {
           </Box>
 
           <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 } }}>
-            <Stack spacing={2}>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25}>
               <Button
                 variant="contained"
                 startIcon={<AddCircleOutlineIcon />}
@@ -1189,6 +1254,14 @@ const TiffManagerBulkPage = () => {
                 sx={{ alignSelf: "flex-start" }}
               >
                 {tt("プロジェクトを作成", "Create project")}
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<RefreshIcon />}
+                onClick={() => void fetchProjects()}
+                sx={{ alignSelf: "flex-start" }}
+              >
+                {tt("一覧を更新", "Refresh list")}
               </Button>
             </Stack>
           </Paper>
@@ -1485,15 +1558,17 @@ const TiffManagerBulkPage = () => {
                     >
                       {isUploading ? t("bulk.uploading") : tt("画像", "Image")}
                     </Button>
-                    <Button
-                      variant="contained"
-                      startIcon={<DriveFolderUploadIcon />}
-                      onClick={handleOpenDirectoryDialog}
-                      disabled={isUploading}
-                      sx={{ flex: 1, minWidth: 0, whiteSpace: "nowrap" }}
-                    >
-                      {isUploading ? t("bulk.uploading") : tt("同視野画像フォルダ", "Same-field image folder")}
-                    </Button>
+                    {ENABLE_SAME_FIELD_FOLDER_UI && (
+                      <Button
+                        variant="contained"
+                        startIcon={<DriveFolderUploadIcon />}
+                        onClick={handleOpenDirectoryDialog}
+                        disabled={isUploading}
+                        sx={{ flex: 1, minWidth: 0, whiteSpace: "nowrap" }}
+                      >
+                        {isUploading ? t("bulk.uploading") : tt("同視野画像フォルダ", "Same-field image folder")}
+                      </Button>
+                    )}
                   </Stack>
                 </Stack>
               </Box>
@@ -1613,8 +1688,7 @@ const TiffManagerBulkPage = () => {
                         {batchInferRunning ? tt("処理中...", "Processing...") : tt("ROI抽出", "ROI extraction")}
                       </Button>
                     ) : null}
-                    {(currentSingleImageOrigin === "realtime" || allVisibleSingleImageFoldersExtracted) &&
-                    visibleSingleImageFolders.length > 0 ? (
+                    {visibleInferableSingleImageFolders.length > 0 ? (
                       <Button
                         variant="contained"
                         size="medium"
@@ -1877,209 +1951,211 @@ const TiffManagerBulkPage = () => {
               </Paper>
             </Box>
 
-            <Paper variant="outlined" sx={{ p: { xs: 1, md: 1.5 } }}>
-              <Stack spacing={1.5}>
-                <Box>
-                  <Typography variant="h6" fontWeight={500}>
-                    {tt("同視野フォルダリスト", "Same-field folder list")}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {tt("同視野の複数画像フォルダのみをここに表示します。", "Only same-field multi-image folders are listed here.")}
-                  </Typography>
-                </Box>
-
-                {multiImageFolders.length === 0 ? (
-                  <Box textAlign="center" py={4}>
+            {ENABLE_SAME_FIELD_FOLDER_UI && (
+              <Paper variant="outlined" sx={{ p: { xs: 1, md: 1.5 } }}>
+                <Stack spacing={1.5}>
+                  <Box>
+                    <Typography variant="h6" fontWeight={500}>
+                      {tt("同視野フォルダリスト", "Same-field folder list")}
+                    </Typography>
                     <Typography variant="body2" color="text.secondary">
-                      {tt("複数画像フォルダはありません。", "No multi-image folders found.")}
+                      {tt("同視野の複数画像フォルダのみをここに表示します。", "Only same-field multi-image folders are listed here.")}
                     </Typography>
                   </Box>
-                ) : (
-                  <>
-                    <Stack
-                      direction={{ xs: "column", md: "row" }}
-                      spacing={1}
-                      justifyContent="flex-end"
-                      alignItems={{ xs: "stretch", md: "center" }}
-                    >
-                      <Stack direction="row" spacing={0.75} alignItems="center" justifyContent="flex-end" flexWrap="wrap">
-                        {multiImageDeleteMode ? (
-                          <>
-                            <Typography variant="caption" color="text.secondary">
-                              {tt(`${selectedMultiImageFolders.length} 件選択中`, `${selectedMultiImageFolders.length} selected`)}
-                            </Typography>
+
+                  {multiImageFolders.length === 0 ? (
+                    <Box textAlign="center" py={4}>
+                      <Typography variant="body2" color="text.secondary">
+                        {tt("複数画像フォルダはありません。", "No multi-image folders found.")}
+                      </Typography>
+                    </Box>
+                  ) : (
+                    <>
+                      <Stack
+                        direction={{ xs: "column", md: "row" }}
+                        spacing={1}
+                        justifyContent="flex-end"
+                        alignItems={{ xs: "stretch", md: "center" }}
+                      >
+                        <Stack direction="row" spacing={0.75} alignItems="center" justifyContent="flex-end" flexWrap="wrap">
+                          {multiImageDeleteMode ? (
+                            <>
+                              <Typography variant="caption" color="text.secondary">
+                                {tt(`${selectedMultiImageFolders.length} 件選択中`, `${selectedMultiImageFolders.length} selected`)}
+                              </Typography>
+                              <Button
+                                variant="contained"
+                                color="error"
+                                size="small"
+                                startIcon={<DeleteOutlineIcon fontSize="small" />}
+                                onClick={() => void handleDeleteSelectedMultiImages()}
+                                disabled={selectedMultiImageFolders.length === 0 || deletingSelectedMultiImages}
+                              >
+                                {deletingSelectedMultiImages ? t("bulk.deleting") : t("bulk.delete")}
+                              </Button>
+                              <Button
+                                variant="outlined"
+                                size="small"
+                                onClick={handleCancelMultiImageDeleteMode}
+                                disabled={deletingSelectedMultiImages}
+                              >
+                                {tt("キャンセル", "Cancel")}
+                              </Button>
+                            </>
+                          ) : (
                             <Button
-                              variant="contained"
+                              variant="outlined"
                               color="error"
                               size="small"
                               startIcon={<DeleteOutlineIcon fontSize="small" />}
-                              onClick={() => void handleDeleteSelectedMultiImages()}
-                              disabled={selectedMultiImageFolders.length === 0 || deletingSelectedMultiImages}
-                            >
-                              {deletingSelectedMultiImages ? t("bulk.deleting") : t("bulk.delete")}
-                            </Button>
-                            <Button
-                              variant="outlined"
-                              size="small"
-                              onClick={handleCancelMultiImageDeleteMode}
-                              disabled={deletingSelectedMultiImages}
-                            >
-                              {tt("キャンセル", "Cancel")}
-                            </Button>
-                          </>
-                        ) : (
-                          <Button
-                            variant="outlined"
-                            color="error"
-                            size="small"
-                            startIcon={<DeleteOutlineIcon fontSize="small" />}
-                            onClick={() => {
-                              setMultiImageDeleteMode(true);
-                              setSelectedMultiImageFolders([]);
-                            }}
-                            disabled={multiImageFolders.length === 0 || batchInferRunning || batchCellCountRunning || Boolean(deletingFolder) || Boolean(mergingFolder)}
-                          >
-                            {t("bulk.delete")}
-                          </Button>
-                        )}
-                      </Stack>
-                    </Stack>
-
-                  <TableContainer sx={TABLE_CONTAINER_SX}>
-                    <Table size="small" sx={buildDataTableSx(860)}>
-                      <TableHead>
-                        <TableRow>
-                          {multiImageDeleteMode ? (
-                            <TableCell padding="checkbox" align="center">
-                              <Checkbox
-                                color="error"
-                                checked={
-                                  multiImageFolders.length > 0 &&
-                                  multiImageFolders.every((folder) => selectedMultiImageFolders.includes(folder.name))
-                                }
-                                indeterminate={
-                                  selectedMultiImageFolders.length > 0 &&
-                                  !multiImageFolders.every((folder) => selectedMultiImageFolders.includes(folder.name))
-                                }
-                                disabled={deletingSelectedMultiImages}
-                                onChange={toggleAllMultiImageDeleteSelection}
-                              />
-                            </TableCell>
-                          ) : null}
-                          <TableCell>{tt("名前", "Name")}</TableCell>
-                          <TableCell align="right" sx={{ width: 92 }} />
-                          <TableCell align="right" sx={{ width: 180 }} />
-                          <TableCell align="center" sx={{ width: 110 }}>{tt("種類", "Type")}</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {multiImageFolders.map((folder) => {
-                          const displayName = scopedFolderName(folder.name);
-                          const isBusy =
-                            deletingFolder === folder.name ||
-                            mergingFolder === folder.name ||
-                            batchInferRunning ||
-                            batchCellCountRunning ||
-                            deletingSelectedMultiImages;
-                          const isSelectedForDelete = selectedMultiImageFolders.includes(folder.name);
-                          return (
-                            <TableRow
-                              key={folder.name}
-                              hover={!multiImageDeleteMode}
-                              selected={multiImageDeleteMode && isSelectedForDelete}
-                              onClick={
-                                multiImageDeleteMode && !deletingSelectedMultiImages
-                                  ? () => toggleMultiImageDeleteSelection(folder.name)
-                                  : undefined
-                              }
-                              sx={{
-                                ...(multiImageDeleteMode ? { cursor: deletingSelectedMultiImages ? "default" : "pointer" } : undefined),
-                                "& > td": {
-                                  py: 1.5,
-                                },
+                              onClick={() => {
+                                setMultiImageDeleteMode(true);
+                                setSelectedMultiImageFolders([]);
                               }}
+                              disabled={multiImageFolders.length === 0 || batchInferRunning || batchCellCountRunning || Boolean(deletingFolder) || Boolean(mergingFolder)}
                             >
-                                {multiImageDeleteMode ? (
-                                  <TableCell padding="checkbox" align="center">
-                                    <Checkbox
-                                      color="error"
-                                      checked={isSelectedForDelete}
-                                      disabled={deletingSelectedMultiImages}
-                                      onClick={(event) => event.stopPropagation()}
-                                      onChange={() => toggleMultiImageDeleteSelection(folder.name)}
-                                    />
+                              {t("bulk.delete")}
+                            </Button>
+                          )}
+                        </Stack>
+                      </Stack>
+
+                      <TableContainer sx={TABLE_CONTAINER_SX}>
+                        <Table size="small" sx={buildDataTableSx(860)}>
+                          <TableHead>
+                            <TableRow>
+                              {multiImageDeleteMode ? (
+                                <TableCell padding="checkbox" align="center">
+                                  <Checkbox
+                                    color="error"
+                                    checked={
+                                      multiImageFolders.length > 0 &&
+                                      multiImageFolders.every((folder) => selectedMultiImageFolders.includes(folder.name))
+                                    }
+                                    indeterminate={
+                                      selectedMultiImageFolders.length > 0 &&
+                                      !multiImageFolders.every((folder) => selectedMultiImageFolders.includes(folder.name))
+                                    }
+                                    disabled={deletingSelectedMultiImages}
+                                    onChange={toggleAllMultiImageDeleteSelection}
+                                  />
+                                </TableCell>
+                              ) : null}
+                              <TableCell>{tt("名前", "Name")}</TableCell>
+                              <TableCell align="right" sx={{ width: 92 }} />
+                              <TableCell align="right" sx={{ width: 180 }} />
+                              <TableCell align="center" sx={{ width: 110 }}>{tt("種類", "Type")}</TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {multiImageFolders.map((folder) => {
+                              const displayName = scopedFolderName(folder.name);
+                              const isBusy =
+                                deletingFolder === folder.name ||
+                                mergingFolder === folder.name ||
+                                batchInferRunning ||
+                                batchCellCountRunning ||
+                                deletingSelectedMultiImages;
+                              const isSelectedForDelete = selectedMultiImageFolders.includes(folder.name);
+                              return (
+                                <TableRow
+                                  key={folder.name}
+                                  hover={!multiImageDeleteMode}
+                                  selected={multiImageDeleteMode && isSelectedForDelete}
+                                  onClick={
+                                    multiImageDeleteMode && !deletingSelectedMultiImages
+                                      ? () => toggleMultiImageDeleteSelection(folder.name)
+                                      : undefined
+                                  }
+                                  sx={{
+                                    ...(multiImageDeleteMode ? { cursor: deletingSelectedMultiImages ? "default" : "pointer" } : undefined),
+                                    "& > td": {
+                                      py: 1.5,
+                                    },
+                                  }}
+                                >
+                                  {multiImageDeleteMode ? (
+                                    <TableCell padding="checkbox" align="center">
+                                      <Checkbox
+                                        color="error"
+                                        checked={isSelectedForDelete}
+                                        disabled={deletingSelectedMultiImages}
+                                        onClick={(event) => event.stopPropagation()}
+                                        onChange={() => toggleMultiImageDeleteSelection(folder.name)}
+                                      />
+                                    </TableCell>
+                                  ) : null}
+                                  <TableCell sx={{ maxWidth: 560 }}>
+                                    <Tooltip title={folder.name}>
+                                      <Typography noWrap fontWeight={500} sx={ELLIPSIS_TEXT_SX}>
+                                        {displayName}
+                                      </Typography>
+                                    </Tooltip>
                                   </TableCell>
-                                ) : null}
-                                <TableCell sx={{ maxWidth: 560 }}>
-                                  <Tooltip title={folder.name}>
-                                    <Typography noWrap fontWeight={500} sx={ELLIPSIS_TEXT_SX}>
-                                      {displayName}
-                                    </Typography>
-                                  </Tooltip>
-                                </TableCell>
-                                <TableCell align="right">
-                                  <Button
-                                    variant="outlined"
-                                    size="small"
-                                    onClick={() => handleOpenInference(folder)}
-                                    disabled={isBusy || multiImageDeleteMode}
-                                    sx={{ minWidth: 0 }}
-                                  >
-                                    {tt("一覧", "List")}
-                                  </Button>
-                                </TableCell>
-                                <TableCell align="right">
-                                  <Box
-                                    sx={{
-                                      position: "relative",
-                                      minHeight: 54,
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "flex-end",
-                                    }}
-                                  >
+                                  <TableCell align="right">
                                     <Button
                                       variant="outlined"
                                       size="small"
-                                      color="secondary"
-                                      onClick={() => {
-                                        void handleFocusMerge(folder.name);
-                                      }}
+                                      onClick={() => handleOpenInference(folder)}
                                       disabled={isBusy || multiImageDeleteMode}
                                       sx={{ minWidth: 0 }}
                                     >
-                                      {mergingFolder === folder.name ? tt("作成中...", "Creating...") : t("bulk.extractFocusMerged")}
+                                      {tt("一覧", "List")}
                                     </Button>
-                                    <Typography
-                                      variant="caption"
-                                      color="text.secondary"
+                                  </TableCell>
+                                  <TableCell align="right">
+                                    <Box
                                       sx={{
-                                        position: "absolute",
-                                        right: 0,
-                                        bottom: 0,
-                                        lineHeight: 1.2,
-                                        visibility: folder.has_focus_merged ? "visible" : "hidden",
+                                        position: "relative",
+                                        minHeight: 54,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "flex-end",
                                       }}
                                     >
-                                      {tt("生成済", "Generated")}
-                                    </Typography>
-                                  </Box>
-                                </TableCell>
-                                <TableCell align="center">
-                                  <Box component="span" sx={getFolderOriginBadgeSx(folder)}>
-                                    {getFolderOriginLabel(folder)}
-                                  </Box>
-                                </TableCell>
-                              </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
-                  </TableContainer>
-                  </>
-                )}
-              </Stack>
-            </Paper>
+                                      <Button
+                                        variant="outlined"
+                                        size="small"
+                                        color="secondary"
+                                        onClick={() => {
+                                          void handleFocusMerge(folder.name);
+                                        }}
+                                        disabled={isBusy || multiImageDeleteMode}
+                                        sx={{ minWidth: 0 }}
+                                      >
+                                        {mergingFolder === folder.name ? tt("作成中...", "Creating...") : t("bulk.extractFocusMerged")}
+                                      </Button>
+                                      <Typography
+                                        variant="caption"
+                                        color="text.secondary"
+                                        sx={{
+                                          position: "absolute",
+                                          right: 0,
+                                          bottom: 0,
+                                          lineHeight: 1.2,
+                                          visibility: folder.has_focus_merged ? "visible" : "hidden",
+                                        }}
+                                      >
+                                        {tt("生成済", "Generated")}
+                                      </Typography>
+                                    </Box>
+                                  </TableCell>
+                                  <TableCell align="center">
+                                    <Box component="span" sx={getFolderOriginBadgeSx(folder)}>
+                                      {getFolderOriginLabel(folder)}
+                                    </Box>
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </TableContainer>
+                    </>
+                  )}
+                </Stack>
+              </Paper>
+            )}
           </Stack>
         )}
 

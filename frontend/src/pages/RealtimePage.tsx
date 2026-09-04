@@ -188,6 +188,7 @@ const getDefaultRealtimeCounters = (): RealtimeCounters => ({
 });
 
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
+const ENABLE_SAME_FIELD_FOLDER_UI: boolean = false;
 const overlayStaggerSeconds = 0.008;
 const overlayScanDelayOffset = overlayStaggerSeconds * 10;
 
@@ -537,17 +538,18 @@ const RealtimePage = () => {
   const previousStatusRef = useRef<RealtimeStatus | null>(null);
 
   const activeProject = selectedProject ? normalizeProjectName(selectedProject) : "";
+  const effectiveStackMode = ENABLE_SAME_FIELD_FOLDER_UI && stackMode;
 
   const nextSampleName = useCallback((): string => {
     if (!activeProject) return "";
-    if (stackMode) {
+    if (effectiveStackMode) {
       if (counters.stackSessionActive) {
         return `${formatSequenceNumber(counters.stackFieldIndex)}_${formatSequenceNumber(counters.stackImageIndex)}`;
       }
       return `${formatSequenceNumber(counters.singleNext)}_${formatSequenceNumber(counters.stackImageIndex)}`;
     }
     return formatSequenceNumber(counters.singleNext);
-  }, [activeProject, counters.singleNext, counters.stackFieldIndex, counters.stackImageIndex, counters.stackSessionActive, stackMode]);
+  }, [activeProject, counters.singleNext, counters.stackFieldIndex, counters.stackImageIndex, counters.stackSessionActive, effectiveStackMode]);
 
   const nextStackFieldName = useCallback((): string => {
     if (!activeProject) return "";
@@ -617,10 +619,10 @@ const RealtimePage = () => {
   }, [nextSampleName, activeProject, sampleNameEdited]);
 
   useEffect(() => {
-    if (!stackMode) {
+    if (!effectiveStackMode) {
       setCounters((current) => (current.stackSessionActive ? { ...current, stackSessionActive: false, stackImageIndex: 1 } : current));
     }
-  }, [stackMode]);
+  }, [effectiveStackMode]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1219,11 +1221,11 @@ const RealtimePage = () => {
       if (activeProject) {
         payload.project_name = activeProject;
       }
-      if (stackMode) {
+      if (effectiveStackMode) {
         const stackFolder = nextStackFieldName();
         if (stackFolder) payload.field_name = stackFolder;
       }
-      payload.stack_mode = stackMode;
+      payload.stack_mode = effectiveStackMode;
       const response = await fetch(useCurrentEndpoint, {
         method: "POST",
         headers: {
@@ -1241,7 +1243,7 @@ const RealtimePage = () => {
         upsertProject(activeProject);
       }
       setCounters((current) => {
-        if (!stackMode) {
+        if (!effectiveStackMode) {
           return {
             ...current,
             stackSessionActive: false,
@@ -1283,7 +1285,7 @@ const RealtimePage = () => {
     labels.copyFailed,
     labels.projectSelectFirst,
     labels.restoredImage,
-    stackMode,
+    effectiveStackMode,
     nextSampleName,
     nextStackFieldName,
     sampleName,
@@ -2037,42 +2039,46 @@ const RealtimePage = () => {
                           size="small"
                           fullWidth
                         />
-                        <FormControlLabel
-                          control={
-                            <Switch
-                              size="medium"
-                              checked={stackMode}
-                              onChange={(_, checked) => setStackMode(checked)}
-                              color="secondary"
+                        {ENABLE_SAME_FIELD_FOLDER_UI && (
+                          <>
+                            <FormControlLabel
+                              control={
+                                <Switch
+                                  size="medium"
+                                  checked={stackMode}
+                                  onChange={(_, checked) => setStackMode(checked)}
+                                  color="secondary"
+                                />
+                              }
+                              label={labels.stackMode}
+                              sx={{
+                                width: "fit-content",
+                                ml: 0,
+                                "& .MuiFormControlLabel-label": {
+                                  fontWeight: 600,
+                                  fontSize: 14,
+                                  letterSpacing: "0.01em",
+                                  color: stackMode ? "secondary.main" : "text.secondary",
+                                },
+                              }}
                             />
-                          }
-                          label={labels.stackMode}
-                          sx={{
-                            width: "fit-content",
-                            ml: 0,
-                            "& .MuiFormControlLabel-label": {
-                              fontWeight: 600,
-                              fontSize: 14,
-                              letterSpacing: "0.01em",
-                              color: stackMode ? "secondary.main" : "text.secondary",
-                            },
-                          }}
-                        />
-                        <Box
-                          sx={{
-                            minHeight: { xs: 38, sm: 32 },
-                            display: "flex",
-                            alignItems: "flex-start",
-                          }}
-                        >
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            sx={{ visibility: stackMode ? "visible" : "hidden" }}
-                          >
-                            {labels.stackModeHint}
-                          </Typography>
-                        </Box>
+                            <Box
+                              sx={{
+                                minHeight: { xs: 38, sm: 32 },
+                                display: "flex",
+                                alignItems: "flex-start",
+                              }}
+                            >
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                sx={{ visibility: stackMode ? "visible" : "hidden" }}
+                              >
+                                {labels.stackModeHint}
+                              </Typography>
+                            </Box>
+                          </>
+                        )}
                         <Button
                           variant="contained"
                           onClick={handleUseCurrent}

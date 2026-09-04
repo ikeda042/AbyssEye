@@ -20,8 +20,8 @@ const RoiEntryPage = () => {
       {
         title: tt("データベース", "Database"),
         description: tt(
-          "単一画像ファイルと同視野画像ファイルをプロジェクトごとに整理して処理します。",
-          "Organize and process single-image files and same-field image files by project.",
+          "単一画像ファイルをプロジェクトごとに整理して処理します。",
+          "Organize and process single-image files by project.",
         ),
         path: "/tiff-manager-bulk",
         accent,
