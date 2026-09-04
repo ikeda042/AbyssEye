@@ -57,6 +57,7 @@ type RealtimeROI = {
   manual_added?: boolean;
   manual_cell_count?: number | null;
   suggested_cell_count?: number | null;
+  manual_excluded?: boolean;
   excluded_by_focus_area?: boolean;
 };
 
@@ -230,6 +231,12 @@ const buildManualLabelEndpoint = (dbName: string, recordId: number) =>
 const buildManualCellCountEndpoint = (dbName: string, recordId: number) =>
   new URL(
     `deepscan/${encodeURIComponent(dbName)}/records/${recordId}/manual-cell-count`,
+    API_BASE_URL,
+  ).toString();
+
+const buildManualExcludedEndpoint = (dbName: string, recordId: number) =>
+  new URL(
+    `deepscan/${encodeURIComponent(dbName)}/records/${recordId}/manual-excluded`,
     API_BASE_URL,
   ).toString();
 const buildManualRoiAddEndpoint = (dbName: string) =>
@@ -541,8 +548,8 @@ const DeepScanPage = () => {
       ),
       previewLabelMode: tt("ラベル表示基準", "Label display mode"),
       dragToReassign: tt(
-        "推論画像を別のクラス枠へドラッグ＆ドロップすると manual_label を更新します。",
-        "Drag an inference preview image to another class bucket to update its manual_label.",
+        "推論画像を別のクラス枠へドラッグ＆ドロップすると manual_label を更新します。ボックスの外へドロップすると集計から除外します。",
+        "Drag an inference preview image to another class bucket to update its manual_label. Drop outside the boxes to exclude it from counting.",
       ),
       targetDb: tt("対象DB", "Target DB"),
       updatedAt: tt("更新時刻", "Updated at"),
@@ -1135,7 +1142,12 @@ const DeepScanPage = () => {
   const previewBuckets = useMemo(() => {
     const buckets: Record<number, RealtimeROI[]> = { 0: [], 1: [], 2: [], 3: [] };
     const others: RealtimeROI[] = [];
+    const excluded: RealtimeROI[] = [];
     (status?.rois ?? []).forEach((roi) => {
+      if (roi.manual_excluded) {
+        excluded.push(roi);
+        return;
+      }
       const { label } = resolveLabel(roi, previewLabelMode);
       if (label >= 0 && label < 4) {
         const bucketKey = label as 0 | 1 | 2 | 3;
@@ -1151,7 +1163,7 @@ const DeepScanPage = () => {
       3: buckets[3].length,
       others: others.length,
     };
-    return { buckets, others, counts };
+    return { buckets, others, excluded, counts };
   }, [status, previewLabelMode]);
 
   const overlayKeyPrefix = useMemo(() => {
@@ -1689,6 +1701,63 @@ const DeepScanPage = () => {
     [dbName, currentTifParam, tt],
   );
 
+  const updateManualExcluded = useCallback(
+    async (roiId: number, excluded: boolean) => {
+      if (!dbName) return;
+      try {
+        const response = await fetch(buildManualExcludedEndpoint(dbName, roiId), {
+          method: "PUT",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ excluded }),
+        });
+        if (!response.ok) {
+          const detail = (await response.json().catch(() => null))?.detail;
+          throw new Error(detail || tt("除外状態の保存に失敗しました。", "Failed to save exclusion."));
+        }
+        const applyExcluded = (roi: RealtimeROI) =>
+          roi.roi_id === roiId ? { ...roi, manual_excluded: excluded } : roi;
+        setStatus((prev) => {
+          if (!prev || !prev.rois) return prev;
+          return { ...prev, rois: prev.rois.map(applyExcluded) };
+        });
+        const cacheKey = `${dbName}::${currentTifParam || "__default__"}`;
+        const cached = statusCacheRef.current.get(cacheKey);
+        if (cached && cached.rois) {
+          statusCacheRef.current.set(cacheKey, { ...cached, rois: cached.rois.map(applyExcluded) });
+        }
+      } catch (err) {
+        setManualLabelError(err instanceof Error ? err.message : tt("除外状態の保存に失敗しました。", "Failed to save exclusion."));
+      }
+    },
+    [dbName, currentTifParam, tt],
+  );
+
+  const handlePageDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!draggingRoiId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  };
+
+  const handlePageDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    // クラスカード・細胞数ボックス上のドロップは各ハンドラが stopPropagation するため、
+    // ここに届くのは「どのボックスにも属さない場所」へのドロップ = 手動除外。
+    event.preventDefault();
+    setDragOverClass(null);
+    setDragOverCellCount(null);
+    setDraggingRoiId(null);
+    cellCountDragContextRef.current = null;
+    dragPointerRef.current = null;
+    const roiIdRaw = event.dataTransfer.getData("text/deepscan-roi-id");
+    const roiId = Number(roiIdRaw);
+    if (!Number.isInteger(roiId)) return;
+    const roi = status?.rois?.find((item) => item.roi_id === roiId);
+    if (!roi || roi.manual_excluded) return;
+    void updateManualExcluded(roiId, true);
+  };
+
   const handleBucketDragOver = (event: React.DragEvent<HTMLDivElement>, classIndex: number) => {
     if (!draggingRoiId) return;
     event.preventDefault();
@@ -1710,6 +1779,7 @@ const DeepScanPage = () => {
 
   const handleBucketDrop = (event: React.DragEvent<HTMLDivElement>, classIndex: number) => {
     event.preventDefault();
+    event.stopPropagation();
     setDragOverClass(null);
     setDraggingRoiId(null);
     const roiIdRaw = event.dataTransfer.getData("text/deepscan-roi-id");
@@ -1717,6 +1787,9 @@ const DeepScanPage = () => {
     if (!Number.isInteger(roiId)) return;
     const roi = status?.rois?.find((item) => item.roi_id === roiId);
     if (!roi) return;
+    if (roi.manual_excluded) {
+      void updateManualExcluded(roiId, false);
+    }
     const currentManual = parseManualLabel(roi.manual_label);
     if (currentManual === classIndex) return;
     void updateManualLabel(roiId, String(classIndex));
@@ -1808,6 +1881,9 @@ const DeepScanPage = () => {
     if (!Number.isInteger(roiId)) return;
     const roi = status?.rois?.find((item) => item.roi_id === roiId);
     if (!roi) return;
+    if (roi.manual_excluded) {
+      void updateManualExcluded(roiId, false);
+    }
     const currentClass = parseManualLabel(roi.manual_label) ?? roi.predicted_class;
     if (currentClass !== 1) {
       void updateManualLabel(roiId, "1");
@@ -1819,7 +1895,12 @@ const DeepScanPage = () => {
 
   return (
     <ThemeProvider theme={deepScanTheme}>
-      <Box ref={pageContainerRef} sx={{ position: "relative" }}>
+      <Box
+        ref={pageContainerRef}
+        sx={{ position: "relative" }}
+        onDragOver={handlePageDragOver}
+        onDrop={handlePageDrop}
+      >
       <Container maxWidth={false} sx={PAGE_CONTAINER_SX}>
         <Stack spacing={2}>
           <Breadcrumbs aria-label="breadcrumb" separator="›" sx={{ fontSize: 14 }}>
@@ -2877,6 +2958,53 @@ const DeepScanPage = () => {
                   </Card>
                 );
               })}
+              {previewBuckets.excluded.length > 0 && (
+                <Card variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, borderStyle: "dashed" }}>
+                  <Stack spacing={1}>
+                    <Typography variant="subtitle1" fontWeight={500} color="text.secondary">
+                      {tt("除外済み", "Excluded")} ({previewBuckets.excluded.length})
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {tt(
+                        "ボックスの外へドラッグしたROIです。集計には含まれません。クラスボックスへドラッグで復帰できます。",
+                        "ROIs dragged outside the boxes. Not counted. Drag back into a class box to restore.",
+                      )}
+                    </Typography>
+                    <Box
+                      sx={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(10, minmax(0, 1fr))",
+                        gap: 0.75,
+                      }}
+                    >
+                      {previewBuckets.excluded.map((roi) => (
+                        <Box
+                          key={`excluded-${roi.roi_id}`}
+                          sx={{
+                            border: "1px solid #e2e8f0",
+                            borderRadius: 1,
+                            overflow: "hidden",
+                            cursor: "grab",
+                            opacity: draggingRoiId === roi.roi_id ? 0.55 : 0.7,
+                            filter: "grayscale(45%)",
+                            "&:active": { cursor: "grabbing" },
+                          }}
+                          draggable
+                          onDragStart={(event) => handleRoiDragStart(event, roi.roi_id)}
+                          onDragEnd={handleRoiDragEnd}
+                        >
+                          <Box
+                            component="img"
+                            src={roiDisplaySources[roi.roi_id] || `data:image/png;base64,${roi.png_base64}`}
+                            alt={`Excluded ROI ${roi.roi_id}`}
+                            sx={{ width: "100%", aspectRatio: "1 / 1", objectFit: "cover", display: "block" }}
+                          />
+                        </Box>
+                      ))}
+                    </Box>
+                  </Stack>
+                </Card>
+              )}
             </Box>
           </Stack>
         ) : dbName ? (

@@ -32,6 +32,7 @@ ROI_META_REVIEWED_IN_DEEPSCAN_AT_KEY = "reviewed_in_deepscan_at"
 ROI_META_MANUAL_CELL_COUNT_KEY = "manual_cell_count"
 ROI_META_SUGGESTED_CELL_COUNT_KEY = "suggested_cell_count"
 ROI_META_CELL_COUNT_AUTO_ASSIGNED_KEY = "cell_count_auto_assigned"
+ROI_META_MANUAL_EXCLUDED_KEY = "manual_excluded"
 FOCUS_AREA_STORE_SUFFIX = "_focus_areas.json"
 FOCUS_AREA_SCHEMA_VERSION = 5
 FOCUS_AREA_DEFAULT_TILE_SIZE = 16
@@ -312,6 +313,44 @@ def update_manual_cell_count(db_name: str, record_id: int, manual_cell_count: in
         raise HTTPException(status_code=500, detail=f"manual cell count の保存に失敗しました: {exc}") from exc
 
     return {"record_id": int(record_id), "manual_cell_count": manual_cell_count}
+
+
+def update_manual_excluded(db_name: str, record_id: int, excluded: bool) -> dict[str, int | bool]:
+    if record_id <= 0:
+        raise HTTPException(status_code=400, detail="record_id は1以上で指定してください。")
+
+    db_path = databases_crud.get_database_file_path(db_name)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            columns = _columns_for_table(conn, "roi_records")
+            if "roi_meta" not in columns:
+                raise HTTPException(status_code=500, detail="ROIメタデータ列が見つかりません。")
+
+            row = conn.execute(
+                "SELECT id, roi_meta FROM roi_records WHERE id = ?",
+                (record_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="指定されたレコードが見つかりません。")
+
+            meta = _deserialize_roi_meta(row["roi_meta"])
+            if not isinstance(meta, dict):
+                meta = {}
+            if excluded:
+                meta[ROI_META_MANUAL_EXCLUDED_KEY] = True
+            else:
+                meta.pop(ROI_META_MANUAL_EXCLUDED_KEY, None)
+
+            conn.execute(
+                "UPDATE roi_records SET roi_meta = ? WHERE id = ?",
+                (json.dumps(meta, ensure_ascii=False), record_id),
+            )
+            conn.commit()
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=f"手動除外の保存に失敗しました: {exc}") from exc
+
+    return {"record_id": int(record_id), "manual_excluded": bool(excluded)}
 
 
 def _chunked(values: list[str], chunk_size: int = 500) -> list[list[str]]:
@@ -1818,6 +1857,7 @@ def _load_rois_for_image(db_name: str, db_path: Path, image_relative_path: str) 
         suggested_cell_count = _safe_suggested_cell_count(
             raw_meta.get(ROI_META_SUGGESTED_CELL_COUNT_KEY) if isinstance(raw_meta, dict) else None
         )
+        manual_excluded = bool(raw_meta.get(ROI_META_MANUAL_EXCLUDED_KEY)) if isinstance(raw_meta, dict) else False
         rois.append(
             realtime_crud.RealtimeROI(
                 roi_id=record_id,
@@ -1838,6 +1878,7 @@ def _load_rois_for_image(db_name: str, db_path: Path, image_relative_path: str) 
                 manual_added=manual_added,
                 manual_cell_count=manual_cell_count,
                 suggested_cell_count=suggested_cell_count,
+                manual_excluded=manual_excluded,
             )
         )
 
@@ -2034,6 +2075,12 @@ def get_cell_count_summary(db_name: str) -> DeepscanCellCountSummary:
             continue
 
         record_id = _safe_int_or_none(row["id"])
+
+        summary_meta = _deserialize_roi_meta(row["roi_meta"])
+        if isinstance(summary_meta, dict) and summary_meta.get(ROI_META_MANUAL_EXCLUDED_KEY):
+            # 手動除外されたROIは集計対象から完全に外す
+            continue
+
         label = _label_for_cell_count(
             raw_manual=row["manual_label"],
             raw_ai=row["ai_label"],

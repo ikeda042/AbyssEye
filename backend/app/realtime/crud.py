@@ -85,6 +85,7 @@ class RealtimeROI:
     manual_added: bool = False
     manual_cell_count: int | None = None
     suggested_cell_count: int | None = None
+    manual_excluded: bool = False
 
 
 @dataclass

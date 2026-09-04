@@ -42,6 +42,7 @@ type AreaRoi = {
   manual_cell_count?: number | null;
   suggested_cell_count?: number | null;
   excluded_by_focus_area?: boolean;
+  manual_excluded?: boolean;
 };
 
 type AvailableImage = {
@@ -233,7 +234,10 @@ const AreaCountPage = () => {
     };
   }, [dbNameParam, tifNameParam, labels.loadError]);
 
-  const rois = useMemo(() => (status?.rois ?? []).filter((roi) => !roi.excluded_by_focus_area), [status?.rois]);
+  const rois = useMemo(
+    () => (status?.rois ?? []).filter((roi) => !roi.excluded_by_focus_area && !roi.manual_excluded),
+    [status?.rois],
+  );
   const imageDims = useMemo(() => {
     const first = rois[0];
     if (first && first.image_width_px > 0 && first.image_height_px > 0) {

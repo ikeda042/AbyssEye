@@ -52,6 +52,7 @@ def _build_status_payload(view: crud.DeepScanView, request: Request) -> dict:
                 "manual_added": roi.manual_added,
                 "manual_cell_count": roi.manual_cell_count,
                 "suggested_cell_count": roi.suggested_cell_count,
+                "manual_excluded": roi.manual_excluded,
                 "excluded_by_focus_area": crud._is_roi_excluded_by_focus_area(roi, view.focus_area),
             }
             for roi in status.rois
@@ -168,6 +169,15 @@ class ManualCellCountUpdateResponse(BaseModel):
     manual_cell_count: int | None
 
 
+class ManualExcludedUpdateRequest(BaseModel):
+    excluded: bool = Field(description="true で集計から除外、false で復帰")
+
+
+class ManualExcludedUpdateResponse(BaseModel):
+    record_id: int
+    manual_excluded: bool
+
+
 class DeepscanCellCountImageResponse(BaseModel):
     relative_path: str
     tif_name: str
@@ -280,6 +290,21 @@ async def set_manual_cell_count(
         payload.manual_cell_count,
     )
     return ManualCellCountUpdateResponse(**result)
+
+
+@router.put("/{db_name}/records/{record_id}/manual-excluded", response_model=ManualExcludedUpdateResponse)
+async def set_manual_excluded(
+    db_name: str,
+    record_id: int,
+    payload: ManualExcludedUpdateRequest,
+) -> ManualExcludedUpdateResponse:
+    result = await asyncio.to_thread(
+        crud.update_manual_excluded,
+        db_name,
+        record_id,
+        payload.excluded,
+    )
+    return ManualExcludedUpdateResponse(**result)
 
 
 @router.get("/{db_name}/cell-count-summary", response_model=DeepscanCellCountSummaryResponse)
