@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Optional Apple Silicon Metal plugin.
+# Keep TensorFlow pinned in requirements.txt; tensorflow-metal can break with newer TensorFlow releases.
+tensorflow-metal==1.2.0; sys_platform == "darwin" and platform_machine == "arm64"

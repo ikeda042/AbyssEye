@@ -13,6 +13,7 @@ import {
   DialogTitle,
   InputAdornment,
   Link,
+  MenuItem,
   Paper,
   Stack,
   Table,
@@ -82,6 +83,9 @@ type RetrainingJob = {
   epochs: number;
   batch_size: number;
   learning_rate: number;
+  compute_device_requested: string;
+  compute_device_resolved: string | null;
+  compute_device_note: string | null;
   activate_on_complete: boolean;
   active_model_relative_path: string | null;
   active_model_absolute_path: string | null;
@@ -115,6 +119,20 @@ const normalizeProjectName = (raw: string) => {
   const trimmed = (raw || "").trim();
   return trimmed ? trimmed.split(/[\\/]/).at(-1)!.trim().replace("#", "").replace("__", "_") : "";
 };
+
+const normalizeModelIdentity = (raw: string | null | undefined) => {
+  const cleaned = String(raw || "").trim().replace(/\\/g, "/").replace(/\/+$/g, "");
+  if (!cleaned) return "";
+  const parts = cleaned.split("/").filter(Boolean);
+  const modelsIndex = parts.lastIndexOf("models");
+  if (modelsIndex >= 0 && modelsIndex < parts.length - 1) {
+    return parts.slice(modelsIndex + 1).join("/");
+  }
+  return parts.at(-1) || cleaned;
+};
+
+const uniqueModelIdentities = (values: string[]) =>
+  Array.from(new Set(values.map(normalizeModelIdentity).filter(Boolean)));
 
 const loadProjects = (): ProjectEntry[] => {
   if (typeof window === "undefined") return [];
@@ -201,6 +219,7 @@ const RetrainingPage = () => {
   const [epochs, setEpochs] = useState(8);
   const [batchSize, setBatchSize] = useState(32);
   const [learningRate, setLearningRate] = useState("0.0001");
+  const [computeDevice, setComputeDevice] = useState("auto");
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
@@ -561,6 +580,7 @@ const RetrainingPage = () => {
           epochs,
           batch_size: batchSize,
           learning_rate: parsedLearningRate,
+          compute_device: computeDevice,
           activate_on_complete: false,
         }),
       });
@@ -576,7 +596,7 @@ const RetrainingPage = () => {
     } finally {
       setStartingJob(false);
     }
-  }, [batchSize, epochs, fetchJobs, learningRate, runName, selectedSource, tt, upsertJob]);
+  }, [batchSize, computeDevice, epochs, fetchJobs, learningRate, runName, selectedSource, tt, upsertJob]);
 
   const handleRegisterJob = useCallback(async (jobId: string) => {
     setRegisteringJobId(jobId);
@@ -618,11 +638,17 @@ const RetrainingPage = () => {
 
   const modelMismatchMessage = useMemo(() => {
     if (!selectedSource || !sourceMetadata || !activeModel || !sourceMetadata.ai_model_names.length) return null;
-    if (sourceMetadata.ai_model_names.includes(activeModel.absolute_path)) return null;
-    const sourceModels = sourceMetadata.ai_model_names.join(", ");
+    const sourceModels = uniqueModelIdentities(sourceMetadata.ai_model_names);
+    const activeModelIds = new Set(
+      [activeModel.relative_path, activeModel.absolute_path, activeModel.name]
+        .map(normalizeModelIdentity)
+        .filter(Boolean),
+    );
+    if (sourceModels.some((modelId) => activeModelIds.has(modelId))) return null;
+    const currentModel = normalizeModelIdentity(activeModel.relative_path) || normalizeModelIdentity(activeModel.absolute_path);
     return tt(
-      `選択中データの ai_model_name は現在の対象モデルと一致していません。データ側: ${sourceModels} / 現在: ${activeModel.absolute_path}`,
-      `The selected data source was annotated with a different ai_model_name. Source: ${sourceModels} / Current: ${activeModel.absolute_path}`,
+      `選択中データのモデルIDは現在の対象モデルと一致していません。データ側: ${sourceModels.join(", ")} / 現在: ${currentModel}`,
+      `The selected data source was annotated with a different model ID. Source: ${sourceModels.join(", ")} / Current: ${currentModel}`,
     );
   }, [activeModel, selectedSource, sourceMetadata, tt]);
 
@@ -768,10 +794,10 @@ const RetrainingPage = () => {
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
                       {tt(
-                        "含まれる ai_model_name",
-                        "Included ai_model_name values",
+                        "含まれるモデルID",
+                        "Included model IDs",
                       )}
-                      : {sourceMetadata.ai_model_names.length ? sourceMetadata.ai_model_names.join(", ") : "-"}
+                      : {sourceMetadata.ai_model_names.length ? uniqueModelIdentities(sourceMetadata.ai_model_names).join(", ") : "-"}
                     </Typography>
                   </Stack>
                 ) : null}
@@ -958,7 +984,25 @@ const RetrainingPage = () => {
                   size="small"
                   sx={{ width: 160 }}
                 />
+                <TextField
+                  select
+                  label={tt("実行デバイス", "Compute device")}
+                  value={computeDevice}
+                  onChange={(event) => setComputeDevice(event.target.value)}
+                  size="small"
+                  sx={{ width: 170 }}
+                >
+                  <MenuItem value="auto">{tt("Auto", "Auto")}</MenuItem>
+                  <MenuItem value="cpu">{tt("CPU", "CPU")}</MenuItem>
+                  <MenuItem value="gpu">{tt("GPU", "GPU")}</MenuItem>
+                </TextField>
               </Stack>
+              <Typography variant="body2" color="text.secondary">
+                {tt(
+                  "Auto は TensorFlow がGPUを検出した場合のみGPUを使い、検出できない場合はCPUで実行します。",
+                  "Auto uses GPU only when TensorFlow detects one; otherwise retraining runs on CPU.",
+                )}
+              </Typography>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "center" }}>
                 <Button
                   variant="contained"
@@ -994,6 +1038,9 @@ const RetrainingPage = () => {
                       {tt("出力モデル", "Output model")}: {latestJob.output_model_relative_path || tt("未追加", "Not added yet")}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
+                      {tt("実行デバイス", "Compute device")}: {latestJob.compute_device_resolved || latestJob.compute_device_requested || "-"}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
                       {tt("最良指標", "Best metric")}: {(() => {
                         const training = getNestedRecord(getNestedRecord(latestJob.summary)?.training);
                         const metricName = typeof training?.best_metric_name === "string" ? training.best_metric_name : "-";
@@ -1025,6 +1072,11 @@ const RetrainingPage = () => {
                     {latestJob.initialization_note ? (
                       <Typography variant="body2" color="warning.main">
                         {latestJob.initialization_note}
+                      </Typography>
+                    ) : null}
+                    {latestJob.compute_device_note ? (
+                      <Typography variant="body2" color="text.secondary">
+                        {latestJob.compute_device_note}
                       </Typography>
                     ) : null}
                     {(() => {
@@ -1068,6 +1120,7 @@ const RetrainingPage = () => {
                       <TableCell>{tt("実行名", "Run")}</TableCell>
                       <TableCell>{tt("再学習元", "Source")}</TableCell>
                       <TableCell align="center">{tt("状態", "Status")}</TableCell>
+                      <TableCell align="center">{tt("実行デバイス", "Device")}</TableCell>
                       <TableCell align="right">{tt("作成日時", "Created at")}</TableCell>
                       <TableCell align="center">{tt("Test精度 比較", "Test accuracy comparison")}</TableCell>
                       <TableCell>{tt("出力モデル", "Output model")}</TableCell>
@@ -1077,7 +1130,7 @@ const RetrainingPage = () => {
                   <TableBody>
                     {jobsLoading ? (
                       <TableRow>
-                        <TableCell colSpan={7}>
+                        <TableCell colSpan={8}>
                           <Typography variant="body2" color="text.secondary" textAlign="center" py={2}>
                             {tt("再学習ジョブを読み込み中です...", "Loading retraining jobs...")}
                           </Typography>
@@ -1085,7 +1138,7 @@ const RetrainingPage = () => {
                       </TableRow>
                     ) : jobs.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7}>
+                        <TableCell colSpan={8}>
                           <Typography variant="body2" color="text.secondary" textAlign="center" py={2}>
                             {tt("まだ再学習ジョブはありません。", "No retraining jobs yet.")}
                           </Typography>
@@ -1126,6 +1179,16 @@ const RetrainingPage = () => {
                               {job.error ? (
                                 <Typography variant="caption" color="error.main">
                                   {tt("失敗", "Failed")}
+                                </Typography>
+                              ) : null}
+                            </TableCell>
+                            <TableCell align="center">
+                              <Typography variant="body2">
+                                {job.compute_device_resolved || job.compute_device_requested || "-"}
+                              </Typography>
+                              {job.compute_device_requested && job.compute_device_resolved && job.compute_device_requested !== job.compute_device_resolved ? (
+                                <Typography variant="caption" color="text.secondary">
+                                  {job.compute_device_requested}
                                 </Typography>
                               ) : null}
                             </TableCell>

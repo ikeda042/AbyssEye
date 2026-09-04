@@ -23,6 +23,9 @@ frontend/dist/
 # Uploaded retraining archives should stay local
 /backend/app/retraining_uploads/
 
+# Local retraining run outputs
+/backend/app/retraining_runs/
+
 # R console history files
 .Rhistory
 **/.Rhistory
