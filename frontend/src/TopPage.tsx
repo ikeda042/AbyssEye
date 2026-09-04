@@ -5,6 +5,7 @@ import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import Inventory2Icon from "@mui/icons-material/Inventory2";
 import ApiIcon from "@mui/icons-material/Api";
 import AutoGraphIcon from "@mui/icons-material/AutoGraph";
+import HighlightAltIcon from "@mui/icons-material/HighlightAlt";
 import { API_BASE_URL } from "./config";
 import { useI18n } from "./i18n";
 import PageShell from "./ui/PageShell";
@@ -51,6 +52,16 @@ const TopPage = () => {
         path: "/retraining",
         accent,
         icon: <AutoGraphIcon />,
+      },
+      {
+        title: tt("範囲カウント", "Area count"),
+        description: tt(
+          "画像上で範囲を選択し、その面積内だけの細胞数を集計します。",
+          "Select an area on an image and count cells only within it.",
+        ),
+        path: "/area-count",
+        accent,
+        icon: <HighlightAltIcon />,
       },
       {
         title: "Swagger",

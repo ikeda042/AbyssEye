@@ -11,6 +11,7 @@ import AnnotationPage from "./pages/AnnotationPage";
 import ModelManagerPage from "./pages/ModelManagerPage";
 import RealtimePage from "./pages/RealtimePage";
 import DeepScanPage from "./pages/DeepScanPage";
+import AreaCountPage from "./pages/AreaCountPage";
 import DevPage from "./pages/DevPage";
 import RetrainingPage from "./pages/RetrainingPage";
 import SwaggerPage from "./pages/SwaggerPage";
@@ -228,6 +229,7 @@ const App = () => {
               <Route path="/realtime/projects" element={<Navigate to="/databases" replace />} />
               <Route path="/realtime" element={<RealtimePage />} />
               <Route path="/deepscan" element={<DeepScanPage />} />
+              <Route path="/area-count" element={<AreaCountPage />} />
               <Route path="/dev" element={<DevPage />} />
               <Route path="/temptext" element={<DevPage />} />
             </Routes>
