@@ -44,6 +44,31 @@ class ROIExtractor:
     WIDTH = 48
     GREEN_RATE = 0.07
     MIN_DISTANCE = 0
+    # ROIサイズの基準となる処理解像度。48x48 はこの解像度での大きさとして扱い、
+    # 処理解像度が異なる画像では同じ視野範囲になるよう比例スケールする。
+    REF_PROCESSED_WIDTH = 2880
+    REF_PROCESSED_HEIGHT = 1800
+
+    @classmethod
+    def scale_roi_size_for_image(
+        cls,
+        base_width: int,
+        base_height: int,
+        image_width: int,
+        image_height: int,
+    ) -> tuple[int, int]:
+        if image_width <= 0 or image_height <= 0:
+            return max(8, int(base_width)), max(8, int(base_height))
+        scale = min(
+            image_width / cls.REF_PROCESSED_WIDTH,
+            image_height / cls.REF_PROCESSED_HEIGHT,
+        )
+        if scale <= 0:
+            scale = 1.0
+        return (
+            max(8, int(round(base_width * scale))),
+            max(8, int(round(base_height * scale))),
+        )
 
     @staticmethod
     def _bbox_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
@@ -91,8 +116,9 @@ class ROIExtractor:
         nms_iou_threshold: float = 0.15,
     ) -> list[dict[str, Iterable[int]]]:
         height, width = img_rgb.shape[:2]
-        patch_w = max(8, int(cls.WIDTH if roi_width is None else roi_width))
-        patch_h = max(8, int(cls.HEIGHT if roi_height is None else roi_height))
+        base_w = max(8, int(cls.WIDTH if roi_width is None else roi_width))
+        base_h = max(8, int(cls.HEIGHT if roi_height is None else roi_height))
+        patch_w, patch_h = cls.scale_roi_size_for_image(base_w, base_h, width, height)
         min_dist = max(0, int(cls.MIN_DISTANCE if min_distance is None else min_distance))
         iou_threshold = float(max(0.0, min(0.95, nms_iou_threshold)))
 

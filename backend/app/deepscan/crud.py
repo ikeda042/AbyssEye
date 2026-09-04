@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from ..databases import crud as databases_crud
 from ..inference import crud as inference_crud
 from ..realtime import crud as realtime_crud
+from ..roi_extract.roi_module import ROIExtractor
 
 APP_DIR = Path(__file__).resolve().parents[1]
 TIFF_DIR = APP_DIR / "tiff_manager"
@@ -2301,7 +2302,11 @@ def add_manual_roi(
                 resized_bgr = img_bgr
             resized_rgb = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2RGB)
 
-            x1, y1, x2, y2 = _normalize_roi_box(center_x, center_y, roi_width, roi_height, processed_w, processed_h)
+            # 自動抽出と同様に、処理解像度に応じてROIサイズをスケールする
+            scaled_roi_w, scaled_roi_h = ROIExtractor.scale_roi_size_for_image(
+                roi_width, roi_height, processed_w, processed_h
+            )
+            x1, y1, x2, y2 = _normalize_roi_box(center_x, center_y, scaled_roi_w, scaled_roi_h, processed_w, processed_h)
             png_blob = _encode_manual_patch(resized_rgb, x1, y1, x2, y2)
             center_px_x = (x1 + x2) // 2
             center_px_y = (y1 + y2) // 2
