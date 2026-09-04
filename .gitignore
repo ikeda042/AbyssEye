@@ -18,10 +18,25 @@ frontend/node_modules/
 frontend/dist/
 
 # Runtime inference cache
+/backend/app/databases/*
+!/backend/app/databases/crud.py
+!/backend/app/databases/router.py
 /backend/app/databases/*_inference_cache.json
+/backend/app/databases/_project_registry.json
+/backend/app/tiff_manager/*
+!/backend/app/tiff_manager/__init__.py
+!/backend/app/tiff_manager/crud.py
+!/backend/app/tiff_manager/router.py
+/backend/app/tiff_manager_buld/*
+!/backend/app/tiff_manager_buld/__init__.py
+!/backend/app/tiff_manager_buld/crud.py
+!/backend/app/tiff_manager_buld/router.py
 
 # Uploaded retraining archives should stay local
 /backend/app/retraining_uploads/
+
+# Local retraining run outputs
+/backend/app/retraining_runs/
 
 # R console history files
 .Rhistory

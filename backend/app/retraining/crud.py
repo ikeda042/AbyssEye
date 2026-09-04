@@ -8,10 +8,11 @@ import random
 import shutil
 import sqlite3
 import zipfile
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Literal
+from pathlib import Path, PurePosixPath
+from typing import Any, ContextManager, Literal
 from uuid import uuid4
 
 import numpy as np
@@ -38,10 +39,12 @@ BATCH_MODE_LEARNING_RATE = 1e-3
 BATCH_MODE_ES_PATIENCE = 10
 FINE_TUNE_ES_PATIENCE = 3
 MAX_EPOCHS = 300
+DEFAULT_COMPUTE_DEVICE = "auto"
 RANDOM_SEED = 42
 MIN_RETRAIN_TOTAL_ROIS = 20
 MIN_RETRAIN_CLASS_COUNT = 2
 RECOMMENDED_MIN_CLASS_SAMPLES = 5
+RetrainingComputeDevice = Literal["auto", "cpu", "gpu"]
 
 
 @dataclass
@@ -78,6 +81,9 @@ class RetrainingJob:
     batch_size: int
     learning_rate: float
     training_mode: str
+    compute_device_requested: str
+    compute_device_resolved: str | None
+    compute_device_note: str | None
     activate_on_complete: bool
     active_model_relative_path: str | None
     active_model_absolute_path: str | None
@@ -179,8 +185,59 @@ def _sanitize_archive_name(raw_name: str) -> str:
 def _normalize_model_path(value: object) -> str | None:
     if not isinstance(value, str):
         return None
-    cleaned = value.strip()
-    return cleaned or None
+    cleaned = value.strip().replace("\\", "/").rstrip("/")
+    if not cleaned:
+        return None
+    parts = [part for part in cleaned.split("/") if part]
+    if not parts:
+        return None
+    if "models" in parts:
+        models_index = len(parts) - 1 - parts[::-1].index("models")
+        model_parts = parts[models_index + 1:]
+        if model_parts:
+            return "/".join(model_parts)
+    return parts[-1]
+
+
+def _normalize_compute_device(value: object) -> RetrainingComputeDevice:
+    if not isinstance(value, str):
+        return DEFAULT_COMPUTE_DEVICE
+    cleaned = value.strip().lower()
+    if cleaned in {"", "auto", "default"}:
+        return "auto"
+    if cleaned in {"cpu", "cpu:0", "/cpu:0"}:
+        return "cpu"
+    if cleaned in {"gpu", "gpu:0", "/gpu:0", "cuda", "metal"}:
+        return "gpu"
+    raise HTTPException(status_code=400, detail="compute_device は auto/cpu/gpu のいずれかで指定してください。")
+
+
+def _set_gpu_memory_growth(tf: Any) -> list[Any]:
+    gpus = tf.config.list_physical_devices("GPU")
+    for gpu in gpus:
+        try:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        except Exception:
+            pass
+    return gpus
+
+
+def _training_device_scope(tf: Any, compute_device: RetrainingComputeDevice) -> tuple[ContextManager[Any], str, str | None]:
+    if compute_device == "cpu":
+        return tf.device("/CPU:0"), "cpu", "CPUを指定して再学習を実行しました。"
+
+    gpus = _set_gpu_memory_growth(tf)
+    if compute_device == "gpu":
+        if not gpus:
+            raise HTTPException(
+                status_code=500,
+                detail="GPUを指定しましたが、TensorFlowがGPUを検出できませんでした。CPUで実行する場合は compute_device を cpu または auto にしてください。",
+            )
+        return tf.device("/GPU:0"), "gpu", f"GPUを指定して再学習を実行しました。検出GPU数: {len(gpus)}"
+
+    if gpus:
+        return tf.device("/GPU:0"), "gpu", f"Auto設定でGPUを使用しました。検出GPU数: {len(gpus)}"
+    return nullcontext(), "cpu", "Auto設定ですが、TensorFlowがGPUを検出しなかったためCPUで実行しました。"
 
 
 def _empty_class_counts() -> dict[str, int]:
@@ -197,6 +254,64 @@ def _parse_class_label(value: object) -> int | None:
     if label < 0 or label >= NUM_CLASSES:
         return None
     return label
+
+
+def _decode_zip_member_name(member: str) -> str:
+    try:
+        return member.encode("cp437").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return member
+
+
+def _is_zip_metadata_member(member: str) -> bool:
+    path = PurePosixPath(_decode_zip_member_name(member))
+    parts = path.parts
+    if not parts:
+        return True
+    if parts[0] == "__MACOSX":
+        return True
+    if path.name == ".DS_Store" or path.name.startswith("._"):
+        return True
+    return False
+
+
+def _find_training_dataset_prefix(names: list[str]) -> tuple[str, str] | None:
+    candidates: dict[str, str] = {}
+    for member in names:
+        if _is_zip_metadata_member(member):
+            continue
+        parts = PurePosixPath(_decode_zip_member_name(member)).parts
+        if len(parts) < 2:
+            continue
+        if parts[-2:] == (DATASET_SUBDIR, DATASET_LABELS_CSV):
+            candidates[PurePosixPath(*parts[:-1]).as_posix()] = member
+
+    if not candidates:
+        return None
+    if DATASET_SUBDIR in candidates:
+        return DATASET_SUBDIR, candidates[DATASET_SUBDIR]
+    if len(candidates) == 1:
+        prefix = next(iter(candidates))
+        return prefix, candidates[prefix]
+
+    raise HTTPException(
+        status_code=400,
+        detail="ZIP内に複数の _training_dataset/labels.csv が見つかりました。1つの保存プロジェクトZIPを指定してください。",
+    )
+
+
+def _zip_member_relative_to_dataset(member: str, dataset_prefix: str) -> PurePosixPath | None:
+    if _is_zip_metadata_member(member) or member.endswith("/"):
+        return None
+    try:
+        relative = PurePosixPath(_decode_zip_member_name(member)).relative_to(PurePosixPath(dataset_prefix))
+    except ValueError:
+        return None
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise HTTPException(status_code=400, detail=f"ZIP内のパスが不正です: {member}")
+    if relative.name == ".DS_Store" or relative.name.startswith("._"):
+        return None
+    return relative
 
 
 def _build_retraining_quality(
@@ -348,8 +463,9 @@ def get_uploaded_archive_metadata(filename: str) -> RetrainingSourceMetadata:
 
     try:
         with zipfile.ZipFile(archive_path, "r") as zf:
-            target_name = f"{DATASET_SUBDIR}/{DATASET_LABELS_CSV}"
-            if target_name not in zf.namelist():
+            names = zf.namelist()
+            dataset_ref = _find_training_dataset_prefix(names)
+            if dataset_ref is None:
                 return _build_source_metadata(
                     source_name=safe_name,
                     source_type="archive",
@@ -358,8 +474,9 @@ def get_uploaded_archive_metadata(filename: str) -> RetrainingSourceMetadata:
                     ai_model_names=[],
                     has_training_dataset=False,
                 )
+            dataset_prefix, labels_member = dataset_ref
             has_training_dataset = True
-            with zf.open(target_name) as fp:
+            with zf.open(labels_member) as fp:
                 text = fp.read().decode("utf-8-sig")
             reader = csv.DictReader(io.StringIO(text))
             for row in reader:
@@ -502,6 +619,9 @@ def _deserialize_job(payload: dict[str, Any]) -> RetrainingJob:
         batch_size=int(payload.get("batch_size") or DEFAULT_BATCH_SIZE),
         learning_rate=float(payload.get("learning_rate") or DEFAULT_LEARNING_RATE),
         training_mode=str(payload.get("training_mode") or "fine_tune"),
+        compute_device_requested=_normalize_compute_device(payload.get("compute_device_requested")),
+        compute_device_resolved=payload.get("compute_device_resolved") if isinstance(payload.get("compute_device_resolved"), str) else None,
+        compute_device_note=payload.get("compute_device_note") if isinstance(payload.get("compute_device_note"), str) else None,
         activate_on_complete=bool(payload.get("activate_on_complete", False)),
         active_model_relative_path=payload.get("active_model_relative_path") if isinstance(payload.get("active_model_relative_path"), str) else None,
         active_model_absolute_path=payload.get("active_model_absolute_path") if isinstance(payload.get("active_model_absolute_path"), str) else None,
@@ -685,17 +805,18 @@ def _extract_dataset_from_archive(archive_path: Path, dataset_dir: Path) -> None
     if not archive_path.is_file():
         raise HTTPException(status_code=404, detail=f"{archive_path.name} が見つかりません。")
     dataset_dir.mkdir(parents=True, exist_ok=True)
-    labels_member = f"{DATASET_SUBDIR}/{DATASET_LABELS_CSV}"
     try:
         with zipfile.ZipFile(archive_path, "r") as zf:
             names = zf.namelist()
-            if labels_member not in names:
+            dataset_ref = _find_training_dataset_prefix(names)
+            if dataset_ref is None:
                 raise HTTPException(status_code=400, detail="_training_dataset/labels.csv が見つかりません。")
+            dataset_prefix, _labels_member = dataset_ref
             for member in names:
-                if not member.startswith(f"{DATASET_SUBDIR}/") or member.endswith("/"):
+                relative = _zip_member_relative_to_dataset(member, dataset_prefix)
+                if relative is None:
                     continue
-                relative = Path(member).relative_to(DATASET_SUBDIR)
-                target_path = dataset_dir / relative
+                target_path = dataset_dir / Path(*relative.parts)
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(member) as src, target_path.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
@@ -1222,11 +1343,13 @@ def _train_retraining_job_sync(
     batch_size: int,
     learning_rate: float,
     training_mode: str,
+    compute_device: RetrainingComputeDevice,
     active_model_path: str | None,
 ) -> dict[str, Any]:
     tf, keras = _get_tensorflow_modules()
     tf.keras.utils.set_random_seed(RANDOM_SEED)
     is_batch_mode = training_mode == "batch"
+    device_scope, resolved_device, device_note = _training_device_scope(tf, compute_device)
 
     examples = _load_dataset_examples(dataset_dir)
     if is_batch_mode:
@@ -1243,119 +1366,120 @@ def _train_retraining_job_sync(
     if x_train.size == 0 or y_train.size == 0:
         raise HTTPException(status_code=400, detail="再学習に使える train データがありません。")
 
-    baseline_predictor: inference_crud._Predictor | None = None
-    baseline_comparison: dict[str, Any] | None = None
-    if active_model_path:
-        try:
-            baseline_predictor = inference_crud._load_model(str(Path(active_model_path).resolve()))
-        except Exception as exc:
-            baseline_comparison = {
-                "baseline_error": str(exc),
-            }
-
-    if is_batch_mode:
-        # batch モード: アクティブモデルを無視し、提供データセットのみでスクラッチ学習（論文プロトコル）
-        model = _build_resnet18_classifier(NUM_CLASSES)
-        initialization_mode = "batch_scratch"
-        initialization_note = "論文プロトコル準拠のスクラッチ学習（既存モデルの重みは使用しません）。"
-    else:
-        model, initialization_mode, initialization_note = _build_training_model(active_model_path, NUM_CLASSES)
-    model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
-        loss=keras.losses.SparseCategoricalCrossentropy(),
-        metrics=[keras.metrics.SparseCategoricalAccuracy(name="accuracy")],
-    )
-
-    has_validation = x_val.size > 0 and y_val.size > 0
-    callbacks: list[keras.callbacks.Callback] = []
-    if has_validation:
-        if is_batch_mode:
-            # 論文: EarlyStopping(monitor=val_loss, patience=10) + ModelCheckpoint(val_loss best)。
-            # restore_best_weights=True が ModelCheckpoint ベスト保存と同等の役割を果たす。
-            callbacks.append(
-                keras.callbacks.EarlyStopping(
-                    monitor="val_loss",
-                    mode="min",
-                    patience=BATCH_MODE_ES_PATIENCE,
-                    restore_best_weights=True,
-                )
-            )
-        else:
-            callbacks.append(
-                keras.callbacks.EarlyStopping(
-                    monitor="val_accuracy",
-                    mode="max",
-                    patience=FINE_TUNE_ES_PATIENCE,
-                    restore_best_weights=True,
-                )
-            )
-
-    if is_batch_mode:
-        # 論文と同じくデータ拡張ジェネレータで学習（class_weight は全クラス 1.0 相当なので指定しない）
-        datagen = _build_paper_datagen(tf)
-        fit_kwargs = {
-            "x": datagen.flow(x_train, y_train, batch_size=batch_size, seed=RANDOM_SEED),
-            "steps_per_epoch": max(1, len(x_train) // batch_size),
-            "epochs": epochs,
-            "verbose": 0,
-        }
-    else:
-        fit_kwargs = {
-            "x": x_train,
-            "y": y_train,
-            "epochs": epochs,
-            "batch_size": batch_size,
-            "verbose": 0,
-            "class_weight": _compute_class_weight(train_examples),
-        }
-    if has_validation:
-        fit_kwargs["validation_data"] = (x_val, y_val)
-    if callbacks:
-        fit_kwargs["callbacks"] = callbacks
-
-    history = model.fit(**fit_kwargs)
-
-    model_path = run_dir / "model.keras"
-    model.save(model_path)
-
-    evaluations = {
-        "train": _evaluate_split(model, x_train, y_train),
-        "val": _evaluate_split(model, x_val, y_val),
-        "test": _evaluate_split(model, x_test, y_test),
-    }
-
-    baseline_evaluations = {
-        "train": _evaluate_predictor_split(baseline_predictor, x_train, y_train) if baseline_predictor else None,
-        "val": _evaluate_predictor_split(baseline_predictor, x_val, y_val) if baseline_predictor else None,
-        "test": _evaluate_predictor_split(baseline_predictor, x_test, y_test) if baseline_predictor else None,
-    }
-
-    comparison_payload: dict[str, Any] = {
-        "baseline": baseline_evaluations,
-        "retrained": evaluations,
-        "delta": {
-            split_name: _build_evaluation_delta(baseline_evaluations.get(split_name), evaluations.get(split_name))
-            for split_name in ("train", "val", "test")
-        },
-    }
-    if baseline_comparison:
-        comparison_payload.update(baseline_comparison)
-
-    confusion_matrix_path: Path | None = None
-    if x_test.size > 0 and y_test.size > 0:
-        test_pred = _predict_classes(model, x_test)
-        confusion_matrix = _compute_confusion_matrix(y_test, test_pred, NUM_CLASSES)
-        confusion_matrix_path = run_dir / "confusion_matrix.csv"
-        _write_confusion_matrix_csv(confusion_matrix_path, confusion_matrix)
-        if baseline_predictor:
-            baseline_test_pred = _predict_classes_with_predictor(baseline_predictor, x_test)
-            changed_count = int(np.sum((baseline_test_pred != test_pred).astype(np.int32)))
-            comparison_payload["prediction_changes"] = {
-                "test": {
-                    "count": changed_count,
-                    "ratio": float(changed_count / len(test_pred)) if len(test_pred) else 0.0,
+    with device_scope:
+        baseline_predictor: inference_crud._Predictor | None = None
+        baseline_comparison: dict[str, Any] | None = None
+        if active_model_path:
+            try:
+                baseline_predictor = inference_crud._load_model(str(Path(active_model_path).resolve()))
+            except Exception as exc:
+                baseline_comparison = {
+                    "baseline_error": str(exc),
                 }
+
+        if is_batch_mode:
+            # batch モード: アクティブモデルを無視し、提供データセットのみでスクラッチ学習（論文プロトコル）
+            model = _build_resnet18_classifier(NUM_CLASSES)
+            initialization_mode = "batch_scratch"
+            initialization_note = "論文プロトコル準拠のスクラッチ学習（既存モデルの重みは使用しません）。"
+        else:
+            model, initialization_mode, initialization_note = _build_training_model(active_model_path, NUM_CLASSES)
+        model.compile(
+            optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+            loss=keras.losses.SparseCategoricalCrossentropy(),
+            metrics=[keras.metrics.SparseCategoricalAccuracy(name="accuracy")],
+        )
+
+        has_validation = x_val.size > 0 and y_val.size > 0
+        callbacks: list[keras.callbacks.Callback] = []
+        if has_validation:
+            if is_batch_mode:
+                # 論文: EarlyStopping(monitor=val_loss, patience=10) + ModelCheckpoint(val_loss best)。
+                # restore_best_weights=True が ModelCheckpoint ベスト保存と同等の役割を果たす。
+                callbacks.append(
+                    keras.callbacks.EarlyStopping(
+                        monitor="val_loss",
+                        mode="min",
+                        patience=BATCH_MODE_ES_PATIENCE,
+                        restore_best_weights=True,
+                    )
+                )
+            else:
+                callbacks.append(
+                    keras.callbacks.EarlyStopping(
+                        monitor="val_accuracy",
+                        mode="max",
+                        patience=FINE_TUNE_ES_PATIENCE,
+                        restore_best_weights=True,
+                    )
+                )
+
+        if is_batch_mode:
+            # 論文と同じくデータ拡張ジェネレータで学習（class_weight は全クラス 1.0 相当なので指定しない）
+            datagen = _build_paper_datagen(tf)
+            fit_kwargs = {
+                "x": datagen.flow(x_train, y_train, batch_size=batch_size, seed=RANDOM_SEED),
+                "steps_per_epoch": max(1, len(x_train) // batch_size),
+                "epochs": epochs,
+                "verbose": 0,
             }
+        else:
+            fit_kwargs = {
+                "x": x_train,
+                "y": y_train,
+                "epochs": epochs,
+                "batch_size": batch_size,
+                "verbose": 0,
+                "class_weight": _compute_class_weight(train_examples),
+            }
+        if has_validation:
+            fit_kwargs["validation_data"] = (x_val, y_val)
+        if callbacks:
+            fit_kwargs["callbacks"] = callbacks
+
+        history = model.fit(**fit_kwargs)
+
+        model_path = run_dir / "model.keras"
+        model.save(model_path)
+
+        evaluations = {
+            "train": _evaluate_split(model, x_train, y_train),
+            "val": _evaluate_split(model, x_val, y_val),
+            "test": _evaluate_split(model, x_test, y_test),
+        }
+
+        baseline_evaluations = {
+            "train": _evaluate_predictor_split(baseline_predictor, x_train, y_train) if baseline_predictor else None,
+            "val": _evaluate_predictor_split(baseline_predictor, x_val, y_val) if baseline_predictor else None,
+            "test": _evaluate_predictor_split(baseline_predictor, x_test, y_test) if baseline_predictor else None,
+        }
+
+        comparison_payload: dict[str, Any] = {
+            "baseline": baseline_evaluations,
+            "retrained": evaluations,
+            "delta": {
+                split_name: _build_evaluation_delta(baseline_evaluations.get(split_name), evaluations.get(split_name))
+                for split_name in ("train", "val", "test")
+            },
+        }
+        if baseline_comparison:
+            comparison_payload.update(baseline_comparison)
+
+        confusion_matrix_path: Path | None = None
+        if x_test.size > 0 and y_test.size > 0:
+            test_pred = _predict_classes(model, x_test)
+            confusion_matrix = _compute_confusion_matrix(y_test, test_pred, NUM_CLASSES)
+            confusion_matrix_path = run_dir / "confusion_matrix.csv"
+            _write_confusion_matrix_csv(confusion_matrix_path, confusion_matrix)
+            if baseline_predictor:
+                baseline_test_pred = _predict_classes_with_predictor(baseline_predictor, x_test)
+                changed_count = int(np.sum((baseline_test_pred != test_pred).astype(np.int32)))
+                comparison_payload["prediction_changes"] = {
+                    "test": {
+                        "count": changed_count,
+                        "ratio": float(changed_count / len(test_pred)) if len(test_pred) else 0.0,
+                    }
+                }
 
     history_csv_path = run_dir / "training_history.csv"
     _write_history_csv(history_csv_path, history)
@@ -1389,6 +1513,11 @@ def _train_retraining_job_sync(
             "best_metric_value": best_metric_value,
             "history_keys": list(history.history.keys()),
         },
+        "compute": {
+            "device_requested": compute_device,
+            "device_resolved": resolved_device,
+            "device_note": device_note,
+        },
         "evaluation": evaluations,
         "comparison": comparison_payload,
         "artifacts": {
@@ -1416,6 +1545,8 @@ def _train_retraining_job_sync(
         "confusion_matrix_csv_path": str(confusion_matrix_path) if confusion_matrix_path else None,
         "initialization_mode": initialization_mode,
         "initialization_note": initialization_note,
+        "compute_device_resolved": resolved_device,
+        "compute_device_note": device_note,
     }
 
 
@@ -1481,10 +1612,13 @@ async def _run_retraining_job(job_id: str) -> None:
                 batch_size=job.batch_size,
                 learning_rate=job.learning_rate,
                 training_mode=job.training_mode,
+                compute_device=job.compute_device_requested,  # type: ignore[arg-type]
                 active_model_path=job.active_model_absolute_path,
             )
 
             job.phase = "saving_results"
+            job.compute_device_resolved = result["compute_device_resolved"]
+            job.compute_device_note = result["compute_device_note"]
             job.output_model_name = result["model_name"]
             job.output_model_relative_path = result["model_relative_path"]
             job.output_model_absolute_path = result["model_absolute_path"]
@@ -1524,6 +1658,7 @@ async def start_retraining_job(
     epochs: int | None = None,
     batch_size: int | None = None,
     learning_rate: float | None = None,
+    compute_device: str = DEFAULT_COMPUTE_DEVICE,
     activate_on_complete: bool = False,
 ) -> RetrainingJob:
     source_name = source_name.strip()
@@ -1547,6 +1682,7 @@ async def start_retraining_job(
         raise HTTPException(status_code=400, detail="batch_size は 1 以上 512 以下で指定してください。")
     if learning_rate <= 0:
         raise HTTPException(status_code=400, detail="learning_rate は 0 より大きくしてください。")
+    normalized_compute_device = _normalize_compute_device(compute_device)
 
     metadata = await _resolve_source_metadata(source_type, source_name)
     if not metadata.can_retrain:
@@ -1574,6 +1710,9 @@ async def start_retraining_job(
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,
+        compute_device_requested=normalized_compute_device,
+        compute_device_resolved=None,
+        compute_device_note=None,
         activate_on_complete=activate_on_complete,
         active_model_relative_path=active_model.relative_path if active_model else None,
         active_model_absolute_path=str(active_model.absolute_path) if active_model else None,

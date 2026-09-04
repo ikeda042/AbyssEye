@@ -9,6 +9,7 @@ import math
 import shutil
 import sqlite3
 import tempfile
+import threading
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,6 +33,7 @@ APP_DIR = Path(__file__).resolve().parents[1]
 TIFF_STORAGE_DIR = Path(__file__).resolve().parent
 DATABASE_DIR = APP_DIR / "databases"
 ALLOWED_EXTENSIONS = {".tif", ".tiff"}
+PROJECT_REGISTRY_FILENAME = "_project_registry.json"
 DEFAULT_SCALE = 0.5
 FOCUS_MERGED_FILENAME = "__focus_merged.tif"
 REALTIME_FOLDER_META_FILENAME = "__realtime_folder_meta.json"
@@ -41,6 +43,7 @@ FOLDER_SOURCE_REALTIME = "realtime"
 FOLDER_SOURCE_UPLOAD = "upload"
 ROI_META_REVIEWED_IN_DEEPSCAN_KEY = "reviewed_in_deepscan"
 ROI_META_REVIEWED_IN_DEEPSCAN_AT_KEY = "reviewed_in_deepscan_at"
+PROJECT_REGISTRY_LOCK = threading.Lock()
 
 
 def _read_tiff_unchanged(path: Path) -> np.ndarray | None:
@@ -190,6 +193,20 @@ class ProjectDeleteResult:
 
 
 @dataclass
+class ProjectInfo:
+    name: str
+    created_at: datetime
+    created_by: str | None
+    notes: str | None
+    folder_count: int
+    file_count: int
+    db_count: int
+    total_size_bytes: int
+    updated_at: datetime | None
+    registered: bool
+
+
+@dataclass
 class Class1ExportResult:
     folder_name: str
     db_name: str
@@ -257,6 +274,63 @@ def _sanitize_component(name: str, *, field: str) -> str:
     if cleaned in {".", ".."}:
         raise HTTPException(status_code=400, detail=f"不正な{field}です。")
     return cleaned
+
+
+def _normalize_project_name(project_name: str) -> str:
+    safe_project = _sanitize_component(project_name, field="プロジェクト名")
+    return safe_project.replace("__", "_")
+
+
+def _project_registry_path() -> Path:
+    return DATABASE_DIR / PROJECT_REGISTRY_FILENAME
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _read_project_registry_unlocked() -> dict[str, dict[str, str | None]]:
+    registry_path = _project_registry_path()
+    if not registry_path.is_file():
+        return {}
+    try:
+        payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
+    registry: dict[str, dict[str, str | None]] = {}
+    for raw_name, raw_meta in payload.items():
+        if not isinstance(raw_name, str) or not isinstance(raw_meta, dict):
+            continue
+        try:
+            name = _normalize_project_name(raw_name)
+        except HTTPException:
+            continue
+        created_at = raw_meta.get("created_at")
+        created_by = raw_meta.get("created_by")
+        notes = raw_meta.get("notes")
+        registry[name] = {
+            "created_at": created_at if isinstance(created_at, str) else None,
+            "created_by": created_by.strip() if isinstance(created_by, str) and created_by.strip() else None,
+            "notes": notes.strip() if isinstance(notes, str) and notes.strip() else None,
+        }
+    return registry
+
+
+def _write_project_registry_unlocked(registry: dict[str, dict[str, str | None]]) -> None:
+    _ensure_dirs()
+    registry_path = _project_registry_path()
+    registry_path.write_text(
+        json.dumps(registry, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def _db_name_for_folder(folder_name: str) -> str:
@@ -422,6 +496,132 @@ def _iter_source_tiff_files(folder_path: Path) -> Iterable[Path]:
     for path in _iter_tiff_files(folder_path):
         if path.name != FOCUS_MERGED_FILENAME:
             yield path
+
+
+def _discover_project_names_from_storage() -> set[str]:
+    names: set[str] = set()
+    if TIFF_STORAGE_DIR.exists():
+        for path in TIFF_STORAGE_DIR.iterdir():
+            if not path.is_dir() or "__" not in path.name:
+                continue
+            candidate = path.name.split("__", 1)[0]
+            try:
+                names.add(_normalize_project_name(candidate))
+            except HTTPException:
+                continue
+
+    if DATABASE_DIR.exists():
+        for path in DATABASE_DIR.iterdir():
+            if not path.is_file() or "__" not in path.name:
+                continue
+            candidate = path.name.split("__", 1)[0]
+            try:
+                names.add(_normalize_project_name(candidate))
+            except HTTPException:
+                continue
+    return names
+
+
+def _iter_project_folders(project_name: str) -> list[Path]:
+    if not TIFF_STORAGE_DIR.exists():
+        return []
+    prefix = _project_prefix(project_name)
+    return sorted(
+        [path for path in TIFF_STORAGE_DIR.iterdir() if path.is_dir() and path.name.startswith(prefix)],
+        key=lambda path: path.name.lower(),
+    )
+
+
+def _is_project_database_artifact(path: Path, project_name: str) -> bool:
+    if path.name in {PROJECT_REGISTRY_FILENAME, "__init__.py", "crud.py", "router.py", "__pycache__"}:
+        return False
+    prefix = _project_prefix(project_name)
+    return path.name.startswith(prefix) or databases_crud._matches_project_scope(path.name, project_name)
+
+
+def _iter_project_database_artifacts(project_name: str) -> list[Path]:
+    if not DATABASE_DIR.exists():
+        return []
+    artifacts: list[Path] = []
+    for path in DATABASE_DIR.iterdir():
+        if not _is_project_database_artifact(path, project_name):
+            continue
+        artifacts.append(path)
+    return sorted(artifacts, key=lambda path: path.name.lower())
+
+
+def _project_storage_stats(project_name: str) -> dict[str, int | datetime | None]:
+    folders = _iter_project_folders(project_name)
+    db_artifacts = _iter_project_database_artifacts(project_name)
+    total_size = 0
+    file_count = 0
+    mtimes: list[float] = []
+
+    for folder in folders:
+        try:
+            mtimes.append(folder.stat().st_mtime)
+        except OSError:
+            pass
+        for path in folder.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            total_size += stat.st_size
+            mtimes.append(stat.st_mtime)
+            if path.suffix.lower() in ALLOWED_EXTENSIONS and path.name != FOCUS_MERGED_FILENAME:
+                file_count += 1
+
+    db_count = 0
+    for path in db_artifacts:
+        paths = [path]
+        if path.is_dir():
+            paths = [child for child in path.rglob("*") if child.is_file()]
+        for artifact in paths:
+            try:
+                stat = artifact.stat()
+            except OSError:
+                continue
+            total_size += stat.st_size
+            mtimes.append(stat.st_mtime)
+            if artifact.suffix.lower() == ".db":
+                db_count += 1
+
+    updated_at = datetime.fromtimestamp(max(mtimes)) if mtimes else None
+    return {
+        "folder_count": len(folders),
+        "file_count": file_count,
+        "db_count": db_count,
+        "total_size_bytes": total_size,
+        "updated_at": updated_at,
+    }
+
+
+def _build_project_info(
+    name: str,
+    metadata: dict[str, str | None] | None,
+    *,
+    registered: bool,
+) -> ProjectInfo:
+    stats = _project_storage_stats(name)
+    created_at = _parse_datetime(metadata.get("created_at") if metadata else None)
+    updated_at = stats["updated_at"] if isinstance(stats["updated_at"], datetime) else None
+    if created_at is None:
+        created_at = updated_at or datetime.fromtimestamp(0)
+    return ProjectInfo(
+        name=name,
+        created_at=created_at,
+        created_by=metadata.get("created_by") if metadata else None,
+        notes=metadata.get("notes") if metadata else None,
+        folder_count=int(stats["folder_count"] or 0),
+        file_count=int(stats["file_count"] or 0),
+        db_count=int(stats["db_count"] or 0),
+        total_size_bytes=int(stats["total_size_bytes"] or 0),
+        updated_at=updated_at,
+        registered=registered,
+    )
 
 
 def _focus_merge_candidate_files(folder_path: Path) -> list[Path]:
@@ -869,6 +1069,53 @@ async def list_uploaded_folders(project_name: str | None = None) -> list[FolderI
     return folders
 
 
+async def list_projects() -> list[ProjectInfo]:
+    def _list() -> list[ProjectInfo]:
+        _ensure_dirs()
+        with PROJECT_REGISTRY_LOCK:
+            registry = _read_project_registry_unlocked()
+        discovered_names = _discover_project_names_from_storage()
+        all_names = set(registry) | discovered_names
+        projects = [
+            _build_project_info(name, registry.get(name), registered=name in registry)
+            for name in sorted(all_names, key=lambda value: value.lower())
+        ]
+        return projects
+
+    return await asyncio.to_thread(_list)
+
+
+async def create_project(
+    project_name: str,
+    *,
+    created_by: str | None = None,
+    notes: str | None = None,
+) -> ProjectInfo:
+    safe_project = _normalize_project_name(project_name)
+    created_by_clean = created_by.strip() if isinstance(created_by, str) and created_by.strip() else None
+    notes_clean = notes.strip() if isinstance(notes, str) and notes.strip() else None
+
+    def _create() -> ProjectInfo:
+        _ensure_dirs()
+        with PROJECT_REGISTRY_LOCK:
+            registry = _read_project_registry_unlocked()
+            discovered_names = _discover_project_names_from_storage()
+            lower_existing = {name.lower() for name in set(registry) | discovered_names}
+            if safe_project.lower() in lower_existing:
+                raise HTTPException(status_code=409, detail="このプロジェクト名は既に使用されています。")
+
+            metadata = {
+                "created_at": datetime.now().isoformat(),
+                "created_by": created_by_clean,
+                "notes": notes_clean,
+            }
+            registry[safe_project] = metadata
+            _write_project_registry_unlocked(registry)
+            return _build_project_info(safe_project, metadata, registered=True)
+
+    return await asyncio.to_thread(_create)
+
+
 async def list_files_in_folder(folder_name: str, project_name: str | None = None) -> list[str]:
     folder_path = _resolve_folder(_scoped_folder_name(folder_name, project_name))
     files = sorted(str(path.relative_to(folder_path)) for path in _iter_source_tiff_files(folder_path))
@@ -975,12 +1222,11 @@ async def delete_focus_merged(folder_name: str, project_name: str | None = None)
 
 
 async def delete_project(project_name: str) -> ProjectDeleteResult:
-    safe_project = _sanitize_component(project_name, field="プロジェクト名")
+    safe_project = _normalize_project_name(project_name)
     prefix = _project_prefix(safe_project)
 
     def _remove() -> int:
-        if not TIFF_STORAGE_DIR.exists():
-            return 0
+        _ensure_dirs()
         folders = sorted(
             [
                 path
@@ -1001,18 +1247,25 @@ async def delete_project(project_name: str) -> ProjectDeleteResult:
                 merged_db_path.unlink()
             removed += 1
 
-        if DATABASE_DIR.exists():
-            for db_path in DATABASE_DIR.glob("*.db"):
-                if not db_path.is_file():
-                    continue
-                if db_path.name.startswith(prefix) or databases_crud._matches_project_scope(db_path.name, safe_project):
-                    try:
-                        db_path.unlink()
-                    except FileNotFoundError:
-                        pass
+        for artifact_path in _iter_project_database_artifacts(safe_project):
+            if artifact_path.is_dir():
+                shutil.rmtree(artifact_path, ignore_errors=True)
+                continue
+            try:
+                artifact_path.unlink()
+            except FileNotFoundError:
+                pass
         return removed
 
     deleted_folders = await asyncio.to_thread(_remove)
+
+    def _unregister() -> None:
+        with PROJECT_REGISTRY_LOCK:
+            registry = _read_project_registry_unlocked()
+            if registry.pop(safe_project, None) is not None:
+                _write_project_registry_unlocked(registry)
+
+    await asyncio.to_thread(_unregister)
     return ProjectDeleteResult(deleted_project=safe_project, deleted_folders=deleted_folders)
 
 

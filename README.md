@@ -31,6 +31,11 @@ cd AbyssEye
    ```bash
    pip install -r backend/requirements.txt
    ```
+   Apple Silicon Mac で TensorFlow Metal を試す場合だけ、代わりに次を実行します:
+   ```bash
+   pip install -r backend/requirements-metal.txt
+   ```
+   ただし、macOS の TensorFlow GPU 実行は環境依存です。GPU が検出されない場合は、再学習画面の `実行デバイス` を `Auto` または `CPU` にしてください。
 3. API サーバーを起動します:
    ```bash
    python backend/main.py
@@ -60,6 +65,15 @@ Vite は `3000` が埋まっていても、空いている次のポートで起�
 cd frontend
 VITE_BACKEND_PORT=8001 npm run dev
 ```
+
+GPU 付きPCなど、別のPCで起動しているバックエンドAPIを使う場合は、フロントエンド起動時に接続先を指定できます。
+
+```bash
+cd frontend
+VITE_BACKEND_ORIGIN=http://GPU_PC_IP_ADDRESS:8000 npm run dev
+```
+
+この場合、再学習はブラウザを開いているPCではなく、`VITE_BACKEND_ORIGIN` で指定したバックエンドPC上で実行されます。
 
 ## 4. 再起動だけしたいとき
 

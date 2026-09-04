@@ -67,6 +67,9 @@ class RetrainingJobResponse(BaseModel):
     batch_size: int
     learning_rate: float
     training_mode: str
+    compute_device_requested: str
+    compute_device_resolved: str | None
+    compute_device_note: str | None
     activate_on_complete: bool
     active_model_relative_path: str | None
     active_model_absolute_path: str | None
@@ -101,6 +104,9 @@ class RetrainingJobResponse(BaseModel):
             batch_size=item.batch_size,
             learning_rate=item.learning_rate,
             training_mode=item.training_mode,
+            compute_device_requested=item.compute_device_requested,
+            compute_device_resolved=item.compute_device_resolved,
+            compute_device_note=item.compute_device_note,
             activate_on_complete=item.activate_on_complete,
             active_model_relative_path=item.active_model_relative_path,
             active_model_absolute_path=item.active_model_absolute_path,
@@ -192,6 +198,7 @@ class StartRetrainingJobRequest(BaseModel):
     epochs: int | None = Field(default=None, ge=1, le=crud.MAX_EPOCHS, description="未指定ならモード既定値（batch: 300 / fine_tune: 8）")
     batch_size: int | None = Field(default=None, ge=1, le=512, description="未指定ならモード既定値（batch: 64 / fine_tune: 32）")
     learning_rate: float | None = Field(default=None, gt=0, description="未指定ならモード既定値（batch: 1e-3 / fine_tune: 1e-4）")
+    compute_device: Literal["auto", "cpu", "gpu"] = Field(default=crud.DEFAULT_COMPUTE_DEVICE, description="再学習を実行するTensorFlowデバイス")
     activate_on_complete: bool = Field(default=False, description="学習完了後にモデルを有効化する")
 
 
@@ -255,6 +262,7 @@ async def start_retraining_job(request: StartRetrainingJobRequest) -> Retraining
         epochs=request.epochs,
         batch_size=request.batch_size,
         learning_rate=request.learning_rate,
+        compute_device=request.compute_device,
         activate_on_complete=request.activate_on_complete,
     )
     return RetrainingJobResponse.from_dataclass(result)

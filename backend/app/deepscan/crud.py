@@ -2500,9 +2500,10 @@ def delete_manual_roi(db_name: str, record_id: int, *, tif_name: str | None = No
             columns = _columns_for_table(conn, "roi_records")
             has_image_filename = "image_filename" in columns
             has_num_rois = "num_rois" in columns
+            image_filename_expr = "image_filename" if has_image_filename else "NULL AS image_filename"
 
             row = conn.execute(
-                "SELECT id, image_filename, roi_meta FROM roi_records WHERE id = ?",
+                f"SELECT id, {image_filename_expr}, roi_meta FROM roi_records WHERE id = ?",
                 (record_id,),
             ).fetchone()
             if row is None:

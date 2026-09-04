@@ -9,7 +9,7 @@ pydantic
 numpy
 opencv-python-headless
 Pillow
-tensorflow
+tensorflow==2.18.1
 scipy
 scikit-image
 

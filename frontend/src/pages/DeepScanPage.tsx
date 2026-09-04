@@ -272,6 +272,7 @@ const storageKeys = {
 };
 
 const classColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444"];
+const ENABLE_AREA_NORMALIZATION_UI: boolean = false;
 const overlayStaggerSeconds = 0.008;
 const overlayScanDelayOffset = overlayStaggerSeconds * 10;
 const ROI_DISPLAY_CACHE_LIMIT = 4000;
@@ -1271,7 +1272,7 @@ const DeepScanPage = () => {
     ? projectSingleImagePager?.items.length ?? 0
     : availableImages.length;
   const frameRois = useMemo(() => status?.rois ?? [], [status?.rois]);
-  const focusArea = status?.focus_area ?? null;
+  const focusArea = ENABLE_AREA_NORMALIZATION_UI ? status?.focus_area ?? null : null;
   const focusAreaExcludedPercent =
     focusArea && Number.isFinite(focusArea.excluded_area_ratio)
       ? `${(focusArea.excluded_area_ratio * 100).toFixed(1)}%`
@@ -2317,7 +2318,7 @@ const DeepScanPage = () => {
                             const width = (roi.roi_end_x - roi.roi_start_x) * scaleX;
                             const height = (roi.roi_end_y - roi.roi_start_y) * scaleY;
                             const { label } = resolveLabel(roi, frameLabelMode);
-                            const isFocusExcluded = Boolean(roi.excluded_by_focus_area);
+                            const isFocusExcluded = ENABLE_AREA_NORMALIZATION_UI && Boolean(roi.excluded_by_focus_area);
                             const color = isFocusExcluded ? "#94a3b8" : classColors[label] ?? "#6366f1";
                             const isManualAdded = Boolean(roi.manual_added);
                             const isSelected = selectedOverlayRoiId === roi.roi_id;
@@ -2952,7 +2953,7 @@ const DeepScanPage = () => {
                           display: "block",
                         }}
                       />
-                      {roi.excluded_by_focus_area && (
+                      {ENABLE_AREA_NORMALIZATION_UI && roi.excluded_by_focus_area && (
                         <Typography
                           variant="caption"
                           color="warning.main"
@@ -3291,7 +3292,7 @@ const DeepScanPage = () => {
                   Cell count: {selectedOverlayRoiMeta.manual_cell_count ?? "-"}
                 </Typography>
               )}
-              {selectedOverlayRoiMeta.excluded_by_focus_area && (
+              {ENABLE_AREA_NORMALIZATION_UI && selectedOverlayRoiMeta.excluded_by_focus_area && (
                 <Typography variant="caption" color="warning.main" sx={{ display: "block", mt: 0.35, fontWeight: 700 }}>
                   Excluded from area-normalized count
                 </Typography>

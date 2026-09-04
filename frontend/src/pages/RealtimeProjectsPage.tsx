@@ -58,6 +58,7 @@ const buildDeepscanStatusEndpoint = (dbName: string, tifName?: string) => {
 };
 const FOCUS_MERGED_TIF_NAME = "__focus_merged.tif";
 const PROJECT_STORAGE_KEY = "abyssEye:data-projects:v1";
+const ENABLE_SAME_FIELD_FOLDER_UI: boolean = false;
 
 type FolderEntry = {
   name: string;
@@ -968,9 +969,11 @@ const RealtimeProjectsPage = () => {
 
   const filteredStackFolders = useMemo(
     () =>
-      filteredFolders.filter(
-        (folder) => folder.realtime_folder_mode === "stack" || (!folder.realtime_folder_mode && folder.file_count > 1),
-      ),
+      ENABLE_SAME_FIELD_FOLDER_UI
+        ? filteredFolders.filter(
+            (folder) => folder.realtime_folder_mode === "stack" || (!folder.realtime_folder_mode && folder.file_count > 1),
+          )
+        : [],
     [filteredFolders],
   );
 
@@ -1936,147 +1939,149 @@ const RealtimeProjectsPage = () => {
             </Stack>
           </Paper>
 
-          <Paper variant="outlined" sx={{ p: 2 }}>
-            <Stack spacing={2}>
-              <Typography variant="h6" fontWeight={600}>
-                {labels.stackSplit}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {labels.hideMergedTip}
-              </Typography>
-              {isLoading ? (
-                <Box display="flex" justifyContent="center" py={6}>
-                  <CircularProgress />
-                </Box>
-              ) : stackFolderRows.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                  {labels.noItems}
+          {ENABLE_SAME_FIELD_FOLDER_UI && (
+            <Paper variant="outlined" sx={{ p: 2 }}>
+              <Stack spacing={2}>
+                <Typography variant="h6" fontWeight={600}>
+                  {labels.stackSplit}
                 </Typography>
-              ) : (
-                <TableContainer sx={TABLE_CONTAINER_SX}>
-                  <Table size="small" sx={buildDataTableSx(980)}>
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>{labels.folder}</TableCell>
-                        <TableCell>{labels.files}</TableCell>
-                        <TableCell align="center">{labels.actionExtract}</TableCell>
-                        <TableCell align="center">{labels.actionMerge}</TableCell>
-                        <TableCell align="center">{labels.actionDelete}</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {stackFolderRows.map((entry) => {
-                        const folder = entry.folder;
-                        const isBusy =
-                          isExtractingFolder === folder.name || isMergingFolder === folder.name || deletingFolder === folder.name;
-                        const imageFiles = entry.imageFiles;
-                        return (
-                          <TableRow key={folder.name} hover>
-                            <TableCell sx={{ verticalAlign: "top", maxWidth: 220 }}>
-                              <Tooltip title={folder.name}>
-                                <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
-                                  {scopedFolderName(folder.name)}
+                <Typography variant="body2" color="text.secondary">
+                  {labels.hideMergedTip}
+                </Typography>
+                {isLoading ? (
+                  <Box display="flex" justifyContent="center" py={6}>
+                    <CircularProgress />
+                  </Box>
+                ) : stackFolderRows.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    {labels.noItems}
+                  </Typography>
+                ) : (
+                  <TableContainer sx={TABLE_CONTAINER_SX}>
+                    <Table size="small" sx={buildDataTableSx(980)}>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>{labels.folder}</TableCell>
+                          <TableCell>{labels.files}</TableCell>
+                          <TableCell align="center">{labels.actionExtract}</TableCell>
+                          <TableCell align="center">{labels.actionMerge}</TableCell>
+                          <TableCell align="center">{labels.actionDelete}</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {stackFolderRows.map((entry) => {
+                          const folder = entry.folder;
+                          const isBusy =
+                            isExtractingFolder === folder.name || isMergingFolder === folder.name || deletingFolder === folder.name;
+                          const imageFiles = entry.imageFiles;
+                          return (
+                            <TableRow key={folder.name} hover>
+                              <TableCell sx={{ verticalAlign: "top", maxWidth: 220 }}>
+                                <Tooltip title={folder.name}>
+                                  <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
+                                    {scopedFolderName(folder.name)}
+                                  </Typography>
+                                </Tooltip>
+                                <Typography variant="caption" color="text.secondary">
+                                  {folder.has_focus_merged ? tt("単一画像リストへ追加済み", "Added to single-image list") : labels.noFileInfo}
                                 </Typography>
-                              </Tooltip>
-                              <Typography variant="caption" color="text.secondary">
-                                {folder.has_focus_merged ? tt("単一画像リストへ追加済み", "Added to single-image list") : labels.noFileInfo}
-                              </Typography>
-                              {projectFilesError[folder.name] ? (
-                                <Typography variant="caption" color="error">
-                                  {projectFilesError[folder.name]}
-                                </Typography>
-                              ) : null}
-                            </TableCell>
-                            <TableCell>
-                              {projectFilesLoading[folder.name] ? (
-                                <CircularProgress size={14} />
-                              ) : imageFiles.length === 0 ? (
-                                <Typography color="text.secondary" variant="body2">
-                                  {tt("ファイルなし", "No files")}
-                                </Typography>
-                              ) : (
-                                <Stack spacing={0.6}>
-                                  {imageFiles.map((file) => {
-                                    const disabled = !folder.has_extraction_db;
-                                    const deletingThisFile = deletingFileKey === `${folder.name}::${file}`;
-                                    return (
-                                      <Stack
-                                        key={`${folder.name}::${file}`}
-                                        direction="row"
-                                        spacing={0.5}
-                                        alignItems="center"
-                                      >
-                                        <Button
-                                          size="small"
-                                          variant="text"
-                                          disabled={disabled || deletingThisFile}
-                                          endIcon={<OpenInNewIcon fontSize="small" />}
-                                          onClick={() => openDeepScan(`${folder.name}_bulk.db`, file)}
-                                          sx={{ justifyContent: "flex-start", flex: 1, minWidth: 0 }}
+                                {projectFilesError[folder.name] ? (
+                                  <Typography variant="caption" color="error">
+                                    {projectFilesError[folder.name]}
+                                  </Typography>
+                                ) : null}
+                              </TableCell>
+                              <TableCell>
+                                {projectFilesLoading[folder.name] ? (
+                                  <CircularProgress size={14} />
+                                ) : imageFiles.length === 0 ? (
+                                  <Typography color="text.secondary" variant="body2">
+                                    {tt("ファイルなし", "No files")}
+                                  </Typography>
+                                ) : (
+                                  <Stack spacing={0.6}>
+                                    {imageFiles.map((file) => {
+                                      const disabled = !folder.has_extraction_db;
+                                      const deletingThisFile = deletingFileKey === `${folder.name}::${file}`;
+                                      return (
+                                        <Stack
+                                          key={`${folder.name}::${file}`}
+                                          direction="row"
+                                          spacing={0.5}
+                                          alignItems="center"
                                         >
-                                          <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
-                                            {file}
-                                          </Typography>
-                                        </Button>
-                                        <IconButton
-                                          size="small"
-                                          color="error"
-                                          disabled={isBusy || deletingThisFile}
-                                          title={labels.actionDelete}
-                                          onClick={() => void runDeleteFile(folder.name, file)}
-                                        >
-                                          <DeleteOutlineIcon fontSize="small" />
-                                        </IconButton>
-                                      </Stack>
-                                    );
-                                  })}
+                                          <Button
+                                            size="small"
+                                            variant="text"
+                                            disabled={disabled || deletingThisFile}
+                                            endIcon={<OpenInNewIcon fontSize="small" />}
+                                            onClick={() => openDeepScan(`${folder.name}_bulk.db`, file)}
+                                            sx={{ justifyContent: "flex-start", flex: 1, minWidth: 0 }}
+                                          >
+                                            <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
+                                              {file}
+                                            </Typography>
+                                          </Button>
+                                          <IconButton
+                                            size="small"
+                                            color="error"
+                                            disabled={isBusy || deletingThisFile}
+                                            title={labels.actionDelete}
+                                            onClick={() => void runDeleteFile(folder.name, file)}
+                                          >
+                                            <DeleteOutlineIcon fontSize="small" />
+                                          </IconButton>
+                                        </Stack>
+                                      );
+                                    })}
+                                  </Stack>
+                                )}
+                              </TableCell>
+                              <TableCell align="center">
+                                <Stack spacing={0.5} alignItems="center">
+                                  <Button
+                                    variant="outlined"
+                                    size="small"
+                                    startIcon={<ScienceIcon fontSize="small" />}
+                                    onClick={() => void runExtract(folder.name)}
+                                    disabled={isBusy || projectNameParam.length === 0}
+                                  >
+                                    {isExtractingFolder === folder.name ? labels.actionExtracting : labels.actionExtract}
+                                  </Button>
                                 </Stack>
-                              )}
-                            </TableCell>
-                            <TableCell align="center">
-                              <Stack spacing={0.5} alignItems="center">
-                                <Button
-                                  variant="outlined"
-                                  size="small"
-                                  startIcon={<ScienceIcon fontSize="small" />}
-                                  onClick={() => void runExtract(folder.name)}
-                                  disabled={isBusy || projectNameParam.length === 0}
+                              </TableCell>
+                              <TableCell align="center">
+                                <Stack spacing={0.5} alignItems="center">
+                                  <Button
+                                    variant="outlined"
+                                    size="small"
+                                    onClick={() => void runFocusMerge(folder.name)}
+                                    disabled={isBusy || projectNameParam.length === 0}
+                                  >
+                                    {isMergingFolder === folder.name ? labels.actionExtracting : labels.actionMerge}
+                                  </Button>
+                                </Stack>
+                              </TableCell>
+                              <TableCell align="center">
+                                <IconButton
+                                  color="error"
+                                  onClick={() => void runDeleteFolder(folder.name)}
+                                  disabled={isBusy}
+                                  title={labels.actionDelete}
                                 >
-                                  {isExtractingFolder === folder.name ? labels.actionExtracting : labels.actionExtract}
-                                </Button>
-                              </Stack>
-                            </TableCell>
-                            <TableCell align="center">
-                              <Stack spacing={0.5} alignItems="center">
-                                <Button
-                                  variant="outlined"
-                                  size="small"
-                                  onClick={() => void runFocusMerge(folder.name)}
-                                  disabled={isBusy || projectNameParam.length === 0}
-                                >
-                                  {isMergingFolder === folder.name ? labels.actionExtracting : labels.actionMerge}
-                                </Button>
-                              </Stack>
-                            </TableCell>
-                            <TableCell align="center">
-                              <IconButton
-                                color="error"
-                                onClick={() => void runDeleteFolder(folder.name)}
-                                disabled={isBusy}
-                                title={labels.actionDelete}
-                              >
-                                <DeleteOutlineIcon fontSize="small" />
-                              </IconButton>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              )}
-            </Stack>
-          </Paper>
+                                  <DeleteOutlineIcon fontSize="small" />
+                                </IconButton>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+              </Stack>
+            </Paper>
+          )}
         </Box>
       </Stack>
     </Container>
