@@ -2052,6 +2052,20 @@ const DeepScanPage = () => {
                           <Button
                             variant="outlined"
                             size="small"
+                            disabled={!dbName}
+                            onClick={() => {
+                              const params = new URLSearchParams({ db_name: dbName });
+                              const tifTarget = status?.current_image_relative_path || currentTifParam;
+                              if (tifTarget) params.set("tif_name", tifTarget);
+                              navigate(`/area-count?${params.toString()}`);
+                            }}
+                            sx={{ px: 1.25, whiteSpace: "nowrap" }}
+                          >
+                            {tt("範囲カウント", "Area count")}
+                          </Button>
+                          <Button
+                            variant="outlined"
+                            size="small"
                             onClick={() => handleMoveImage(-1)}
                             disabled={!hasImagePager || currentImageIndex <= 0}
                             sx={{ minWidth: 36, px: 1 }}
