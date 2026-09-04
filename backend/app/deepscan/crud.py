@@ -30,6 +30,7 @@ ROI_META_REVIEWED_IN_DEEPSCAN_KEY = "reviewed_in_deepscan"
 ROI_META_REVIEWED_IN_DEEPSCAN_AT_KEY = "reviewed_in_deepscan_at"
 ROI_META_MANUAL_CELL_COUNT_KEY = "manual_cell_count"
 ROI_META_SUGGESTED_CELL_COUNT_KEY = "suggested_cell_count"
+ROI_META_CELL_COUNT_AUTO_ASSIGNED_KEY = "cell_count_auto_assigned"
 FOCUS_AREA_STORE_SUFFIX = "_focus_areas.json"
 FOCUS_AREA_SCHEMA_VERSION = 5
 FOCUS_AREA_DEFAULT_TILE_SIZE = 16
@@ -1894,13 +1895,23 @@ def _ensure_suggested_cell_counts_for_image(db_name: str, db_path: Path, image_r
                 meta = _deserialize_roi_meta(row["roi_meta"])
                 if not isinstance(meta, dict):
                     meta = {}
-                existing = _safe_suggested_cell_count(meta.get(ROI_META_SUGGESTED_CELL_COUNT_KEY))
-                if existing is not None:
-                    continue
+                changed = False
+                suggested = _safe_suggested_cell_count(meta.get(ROI_META_SUGGESTED_CELL_COUNT_KEY))
+                if suggested is None:
+                    suggested = _estimate_cells_in_class1_patch(row["png_blob"])
+                    meta[ROI_META_SUGGESTED_CELL_COUNT_KEY] = int(suggested)
+                    changed = True
 
-                suggested = _estimate_cells_in_class1_patch(row["png_blob"])
-                meta[ROI_META_SUGGESTED_CELL_COUNT_KEY] = int(suggested)
-                updates.append((json.dumps(meta, ensure_ascii=False), record_id))
+                # 未割り当てのROIはAI推定値を初期値として自動割り当てる。
+                # 一度自動割り当てしたらフラグを残し、ユーザーが未割当へ戻した場合は再割り当てしない。
+                manual = _safe_manual_cell_count(meta.get(ROI_META_MANUAL_CELL_COUNT_KEY))
+                if manual is None and not meta.get(ROI_META_CELL_COUNT_AUTO_ASSIGNED_KEY):
+                    meta[ROI_META_MANUAL_CELL_COUNT_KEY] = int(suggested)
+                    meta[ROI_META_CELL_COUNT_AUTO_ASSIGNED_KEY] = True
+                    changed = True
+
+                if changed:
+                    updates.append((json.dumps(meta, ensure_ascii=False), record_id))
 
             if updates:
                 conn.executemany("UPDATE roi_records SET roi_meta = ? WHERE id = ?", updates)

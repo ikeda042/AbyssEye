@@ -2723,15 +2723,6 @@ const DeepScanPage = () => {
                           display: "block",
                         }}
                       />
-                      {classIndex === 1 && roi.manual_cell_count == null && roi.suggested_cell_count != null && (
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: "block", px: 0.5, py: 0.35, lineHeight: 1.2 }}
-                        >
-                          {`Suggested: ${roi.suggested_cell_count}`}
-                        </Typography>
-                      )}
                       {roi.excluded_by_focus_area && (
                         <Typography
                           variant="caption"
@@ -3021,10 +3012,7 @@ const DeepScanPage = () => {
               ) : null}
               {selectedOverlayRoiMeta.predicted_class === 1 && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.35 }}>
-                  Suggested cell count: {selectedOverlayRoiMeta.suggested_cell_count ?? "-"}
-                  {selectedOverlayRoiMeta.manual_cell_count != null
-                    ? ` / Manual: ${selectedOverlayRoiMeta.manual_cell_count}`
-                    : ""}
+                  Cell count: {selectedOverlayRoiMeta.manual_cell_count ?? "-"}
                 </Typography>
               )}
               {selectedOverlayRoiMeta.excluded_by_focus_area && (
