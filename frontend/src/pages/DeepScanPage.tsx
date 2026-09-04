@@ -2282,20 +2282,50 @@ const DeepScanPage = () => {
                         };
                         const scaleX = imageLayout.displayWidth / areaBaseDims.width;
                         const scaleY = imageLayout.displayHeight / areaBaseDims.height;
+                        const selW = Math.round(rect.x2 - rect.x1);
+                        const selH = Math.round(rect.y2 - rect.y1);
+                        const rectLeft = imageLayout.offsetX + rect.x1 * scaleX;
+                        const rectTop = imageLayout.offsetY + rect.y1 * scaleY;
+                        const rectWidth = Math.max(1, (rect.x2 - rect.x1) * scaleX);
+                        const labelAbove = rectTop >= 24;
                         return (
-                          <Box
-                            sx={{
-                              position: "absolute",
-                              left: imageLayout.offsetX + rect.x1 * scaleX,
-                              top: imageLayout.offsetY + rect.y1 * scaleY,
-                              width: Math.max(1, (rect.x2 - rect.x1) * scaleX),
-                              height: Math.max(1, (rect.y2 - rect.y1) * scaleY),
-                              border: "1.5px solid #0ea5e9",
-                              backgroundColor: "rgba(14,165,233,0.10)",
-                              pointerEvents: "none",
-                              zIndex: 12,
-                            }}
-                          />
+                          <>
+                            <Box
+                              sx={{
+                                position: "absolute",
+                                left: rectLeft,
+                                top: rectTop,
+                                width: rectWidth,
+                                height: Math.max(1, (rect.y2 - rect.y1) * scaleY),
+                                border: "1.5px solid #0ea5e9",
+                                backgroundColor: "rgba(14,165,233,0.10)",
+                                pointerEvents: "none",
+                                zIndex: 12,
+                              }}
+                            />
+                            <Box
+                              sx={{
+                                position: "absolute",
+                                left: rectLeft + rectWidth,
+                                top: labelAbove ? rectTop - 22 : rectTop + 2,
+                                transform: "translateX(-100%)",
+                                px: 0.75,
+                                py: 0.2,
+                                backgroundColor: "rgba(14,165,233,0.92)",
+                                color: "#fff",
+                                fontSize: 11.5,
+                                fontWeight: 600,
+                                lineHeight: 1.5,
+                                whiteSpace: "nowrap",
+                                borderRadius: 0.5,
+                                pointerEvents: "none",
+                                zIndex: 13,
+                                fontVariantNumeric: "tabular-nums",
+                              }}
+                            >
+                              {`${selW}×${selH} px / ${areaBaseDims.width}×${areaBaseDims.height} px`}
+                            </Box>
+                          </>
                         );
                       })()}
                       {deepVisionOverlayEnabled && imageLayout && (frameRois.length ?? 0) > 0 && (
