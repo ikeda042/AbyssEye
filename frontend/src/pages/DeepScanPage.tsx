@@ -520,6 +520,10 @@ const DeepScanPage = () => {
   const [focusAreaError, setFocusAreaError] = useState<string | null>(null);
   const [focusAreaMessage, setFocusAreaMessage] = useState<string | null>(null);
   const [manualRoiMode, setManualRoiMode] = useState(false);
+  const [areaSelectMode, setAreaSelectMode] = useState(false);
+  const [areaSelection, setAreaSelection] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [areaDraft, setAreaDraft] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const areaDragActiveRef = useRef(false);
   const [manualRoiSaving, setManualRoiSaving] = useState(false);
   const [manualRoiError, setManualRoiError] = useState<string | null>(null);
   const [draggingRoiId, setDraggingRoiId] = useState<number | null>(null);
@@ -1139,11 +1143,41 @@ const DeepScanPage = () => {
     });
   }, [dbName, currentTifParam, fetchStatus, labels.dbNameRequired]);
 
+  const areaBaseDims = useMemo(() => {
+    const refRoi = status?.rois?.[0];
+    const width = refRoi?.image_width_px || status?.processed_shape?.width || status?.original_shape?.width || 0;
+    const height = refRoi?.image_height_px || status?.processed_shape?.height || status?.original_shape?.height || 0;
+    return width > 0 && height > 0 ? { width, height } : null;
+  }, [
+    status?.rois,
+    status?.processed_shape?.width,
+    status?.processed_shape?.height,
+    status?.original_shape?.width,
+    status?.original_shape?.height,
+  ]);
+
+  const roiInAreaSelection = useCallback(
+    (roi: RealtimeROI) => {
+      if (!areaSelection) return true;
+      const cx = (roi.roi_start_x + roi.roi_end_x) / 2;
+      const cy = (roi.roi_start_y + roi.roi_end_y) / 2;
+      return cx >= areaSelection.x1 && cx <= areaSelection.x2 && cy >= areaSelection.y1 && cy <= areaSelection.y2;
+    },
+    [areaSelection],
+  );
+
+  useEffect(() => {
+    setAreaSelection(null);
+    setAreaDraft(null);
+    areaDragActiveRef.current = false;
+  }, [dbName, currentTifParam]);
+
   const previewBuckets = useMemo(() => {
     const buckets: Record<number, RealtimeROI[]> = { 0: [], 1: [], 2: [], 3: [] };
     const others: RealtimeROI[] = [];
     const excluded: RealtimeROI[] = [];
     (status?.rois ?? []).forEach((roi) => {
+      if (!roiInAreaSelection(roi)) return;
       if (roi.manual_excluded) {
         excluded.push(roi);
         return;
@@ -1164,7 +1198,7 @@ const DeepScanPage = () => {
       others: others.length,
     };
     return { buckets, others, excluded, counts };
-  }, [status, previewLabelMode]);
+  }, [status, previewLabelMode, roiInAreaSelection]);
 
   const overlayKeyPrefix = useMemo(() => {
     if (!status) return "overlay";
@@ -1598,6 +1632,60 @@ const DeepScanPage = () => {
     selectedOverlayRoiId,
     status?.current_image_relative_path,
   ]);
+
+  const areaPointFromEvent = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>): { x: number; y: number } | null => {
+      if (!imageLayout || !areaBaseDims) return null;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const localX = event.clientX - rect.left - imageLayout.offsetX;
+      const localY = event.clientY - rect.top - imageLayout.offsetY;
+      const x = Math.max(0, Math.min(areaBaseDims.width, (localX / imageLayout.displayWidth) * areaBaseDims.width));
+      const y = Math.max(0, Math.min(areaBaseDims.height, (localY / imageLayout.displayHeight) * areaBaseDims.height));
+      return { x, y };
+    },
+    [areaBaseDims, imageLayout],
+  );
+
+  const handleAreaPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!areaSelectMode) return;
+      const point = areaPointFromEvent(event);
+      if (!point) return;
+      areaDragActiveRef.current = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setAreaDraft({ x1: point.x, y1: point.y, x2: point.x, y2: point.y });
+    },
+    [areaPointFromEvent, areaSelectMode],
+  );
+
+  const handleAreaPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!areaDragActiveRef.current) return;
+      const point = areaPointFromEvent(event);
+      if (!point) return;
+      setAreaDraft((prev) => (prev ? { ...prev, x2: point.x, y2: point.y } : prev));
+    },
+    [areaPointFromEvent],
+  );
+
+  const handleAreaPointerUp = useCallback(() => {
+    if (!areaDragActiveRef.current) return;
+    areaDragActiveRef.current = false;
+    setAreaDraft((prev) => {
+      if (prev) {
+        const rect = {
+          x1: Math.min(prev.x1, prev.x2),
+          y1: Math.min(prev.y1, prev.y2),
+          x2: Math.max(prev.x1, prev.x2),
+          y2: Math.max(prev.y1, prev.y2),
+        };
+        if (rect.x2 - rect.x1 >= 4 && rect.y2 - rect.y1 >= 4) {
+          setAreaSelection(rect);
+        }
+      }
+      return null;
+    });
+  }, []);
 
   const updateManualLabel = useCallback(
     async (roiId: number, label: string | null) => {
@@ -2049,20 +2137,33 @@ const DeepScanPage = () => {
                               </span>
                             </Tooltip>
                           )}
+                          {areaSelection && (
+                            <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+                              {tt(
+                                `範囲内 ${(status?.rois ?? []).filter((roi) => roiInAreaSelection(roi)).length} ROI / ${Math.round((areaSelection.x2 - areaSelection.x1) * (areaSelection.y2 - areaSelection.y1)).toLocaleString()} px²`,
+                                `${(status?.rois ?? []).filter((roi) => roiInAreaSelection(roi)).length} ROI in area / ${Math.round((areaSelection.x2 - areaSelection.x1) * (areaSelection.y2 - areaSelection.y1)).toLocaleString()} px²`,
+                              )}
+                            </Typography>
+                          )}
                           <Button
-                            variant="outlined"
+                            variant={areaSelectMode ? "contained" : "outlined"}
                             size="small"
                             disabled={!dbName}
-                            onClick={() => {
-                              const params = new URLSearchParams({ db_name: dbName });
-                              const tifTarget = status?.current_image_relative_path || currentTifParam;
-                              if (tifTarget) params.set("tif_name", tifTarget);
-                              navigate(`/area-count?${params.toString()}`);
-                            }}
+                            onClick={() => setAreaSelectMode((prev) => !prev)}
                             sx={{ px: 1.25, whiteSpace: "nowrap" }}
                           >
-                            {tt("範囲カウント", "Area count")}
+                            {tt("範囲選択", "Select area")}
                           </Button>
+                          {areaSelection && (
+                            <Button
+                              variant="text"
+                              size="small"
+                              onClick={() => setAreaSelection(null)}
+                              sx={{ px: 1, whiteSpace: "nowrap" }}
+                            >
+                              {tt("解除", "Clear")}
+                            </Button>
+                          )}
                           <Button
                             variant="outlined"
                             size="small"
@@ -2089,7 +2190,13 @@ const DeepScanPage = () => {
                     </Stack>
                     <Box
                       ref={imageContainerRef}
-                      onClick={(event) => void handleImageClickForManualRoi(event)}
+                      onClick={(event) => {
+                        if (areaSelectMode) return;
+                        void handleImageClickForManualRoi(event);
+                      }}
+                      onPointerDown={handleAreaPointerDown}
+                      onPointerMove={handleAreaPointerMove}
+                      onPointerUp={handleAreaPointerUp}
                       sx={{
                         flex: "0 0 auto",
                         position: "relative",
@@ -2105,7 +2212,8 @@ const DeepScanPage = () => {
                         backgroundColor: (theme) =>
                           theme.palette.mode === "dark" ? "rgba(148,163,184,0.08)" : "#0f172a0d",
                         overflow: "hidden",
-                        cursor: manualRoiMode ? "crosshair" : "default",
+                        cursor: areaSelectMode || manualRoiMode ? "crosshair" : "default",
+                        touchAction: areaSelectMode ? "none" : undefined,
                       }}
                     >
                       <Box
@@ -2163,16 +2271,42 @@ const DeepScanPage = () => {
                           })}
                         </Box>
                       )}
+                      {(areaDraft || areaSelection) && imageLayout && areaBaseDims && (() => {
+                        const raw = areaDraft ?? areaSelection!;
+                        const rect = {
+                          x1: Math.min(raw.x1, raw.x2),
+                          y1: Math.min(raw.y1, raw.y2),
+                          x2: Math.max(raw.x1, raw.x2),
+                          y2: Math.max(raw.y1, raw.y2),
+                        };
+                        const scaleX = imageLayout.displayWidth / areaBaseDims.width;
+                        const scaleY = imageLayout.displayHeight / areaBaseDims.height;
+                        return (
+                          <Box
+                            sx={{
+                              position: "absolute",
+                              left: imageLayout.offsetX + rect.x1 * scaleX,
+                              top: imageLayout.offsetY + rect.y1 * scaleY,
+                              width: Math.max(1, (rect.x2 - rect.x1) * scaleX),
+                              height: Math.max(1, (rect.y2 - rect.y1) * scaleY),
+                              border: "1.5px solid #0ea5e9",
+                              backgroundColor: "rgba(14,165,233,0.10)",
+                              pointerEvents: "none",
+                              zIndex: 12,
+                            }}
+                          />
+                        );
+                      })()}
                       {deepVisionOverlayEnabled && imageLayout && (frameRois.length ?? 0) > 0 && (
                         <Box
                           key={overlayKey}
                           sx={{
                             position: "absolute",
                             inset: 0,
-                            pointerEvents: "auto",
+                            pointerEvents: areaSelectMode ? "none" : "auto",
                           }}
                         >
-                          {frameRois.map((roi, index) => {
+                          {frameRois.filter((roi) => roiInAreaSelection(roi)).map((roi, index) => {
                             const baseWidth = roi.image_width_px || 0;
                             const baseHeight = roi.image_height_px || 0;
                             if (!baseWidth || !baseHeight) return null;

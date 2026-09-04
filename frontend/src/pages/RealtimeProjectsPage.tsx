@@ -1001,16 +1001,6 @@ const RealtimeProjectsPage = () => {
     [navigate, projectNameParam],
   );
 
-  const openAreaCount = useCallback(
-    (dbName: string, tifName: string) => {
-      if (!dbName) return;
-      const params = new URLSearchParams({ db_name: dbName });
-      if (tifName) params.set("tif_name", tifName);
-      navigate(`/area-count?${params.toString()}`);
-    },
-    [navigate],
-  );
-
   const runExtract = useCallback(
     async (folderName: string) => {
       setError(null);
@@ -1792,25 +1782,15 @@ const RealtimeProjectsPage = () => {
                               )}
                             </TableCell>
                             <TableCell align="right">
-                              <Stack direction="row" spacing={0.75} justifyContent="flex-end">
-                                <Button
-                                  size="small"
-                                  variant="outlined"
-                                  onClick={() => openAreaCount(item.dbName, item.relativePath)}
-                                  disabled={!item.dbName}
-                                >
-                                  {tt("範囲カウント", "Area count")}
-                                </Button>
-                                <Button
-                                  size="small"
-                                  variant="outlined"
-                                  endIcon={<OpenInNewIcon fontSize="small" />}
-                                  onClick={() => openDeepScan(item.dbName, item.relativePath)}
-                                  disabled={!item.relativePath || !item.dbName}
-                                >
-                                  {labels.open}
-                                </Button>
-                              </Stack>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                endIcon={<OpenInNewIcon fontSize="small" />}
+                                onClick={() => openDeepScan(item.dbName, item.relativePath)}
+                                disabled={!item.relativePath || !item.dbName}
+                              >
+                                {labels.open}
+                              </Button>
                             </TableCell>
                           </TableRow>
                         );
