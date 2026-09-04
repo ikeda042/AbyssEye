@@ -62,6 +62,18 @@ class WatchProjectUpsertRequest(BaseModel):
     api_url: str | None = Field(default=None, description="PowerShell watcher が送信する API URL")
     enabled: bool = Field(default=False, description="監視を有効化するか")
     poll_interval_seconds: float = Field(default=1.0, description="監視間隔（秒）")
+    description: str | None = Field(default=None, description="プロジェクト概要。省略時は既存値を維持、空文字でクリア。")
+
+
+class WatchProjectRenameRequest(BaseModel):
+    new_project_name: str = Field(description="変更後のプロジェクト名")
+
+
+class WatchProjectRenameResponse(BaseModel):
+    old_project_name: str
+    new_project_name: str
+    renamed_folders: int
+    renamed_files: int
 
 
 class WatchProjectResponse(BaseModel):
@@ -72,6 +84,7 @@ class WatchProjectResponse(BaseModel):
     poll_interval_seconds: float
     created_at: str
     updated_at: str
+    description: str | None = None
     running: bool
     accessible: bool
     status: str
@@ -92,6 +105,7 @@ class WatchProjectResponse(BaseModel):
             poll_interval_seconds=snapshot.poll_interval_seconds,
             created_at=snapshot.created_at.isoformat(),
             updated_at=snapshot.updated_at.isoformat(),
+            description=snapshot.description,
             running=snapshot.running,
             accessible=snapshot.accessible,
             status=snapshot.status,
@@ -268,8 +282,19 @@ async def upsert_watch_project(
         api_url=payload.api_url,
         enabled=payload.enabled,
         poll_interval_seconds=payload.poll_interval_seconds,
+        description=payload.description,
+        update_description="description" in payload.model_fields_set,
     )
     return WatchProjectResponse.from_snapshot(snapshot)
+
+
+@router.post("/watch-projects/{project_name}/rename", response_model=WatchProjectRenameResponse)
+async def rename_watch_project(
+    project_name: str,
+    payload: WatchProjectRenameRequest,
+) -> WatchProjectRenameResponse:
+    result = await watch_projects.rename_project(project_name, payload.new_project_name)
+    return WatchProjectRenameResponse(**result)  # type: ignore[arg-type]
 
 
 @router.delete("/watch-projects/{project_name}", response_class=Response, status_code=204)

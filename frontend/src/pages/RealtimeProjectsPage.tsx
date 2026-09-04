@@ -42,6 +42,7 @@ import {
   getRealtimeWatchMacCommandScript,
   getRealtimeWatchPowerShellScript,
   listRealtimeWatchProjects,
+  renameRealtimeWatchProject,
   saveRealtimeWatchProject,
   type RealtimeWatchProject,
 } from "../realtimeWatch";
@@ -228,6 +229,12 @@ const RealtimeProjectsPage = () => {
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
   const [deletingFileKey, setDeletingFileKey] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [descriptionSaving, setDescriptionSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsInfo, setSettingsInfo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [cellCountRunning, setCellCountRunning] = useState(false);
@@ -273,6 +280,22 @@ const RealtimeProjectsPage = () => {
       projectClear: t("projects.clear"),
       back: t("projects.back"),
       breadcrumbHome: t("common.home"),
+      settingsTitle: tt("プロジェクト設定", "Project settings"),
+      renameLabel: tt("プロジェクト名", "Project name"),
+      renameButton: tt("名前を変更", "Rename"),
+      renaming: tt("変更中...", "Renaming..."),
+      renameSuccess: tt("プロジェクト名を変更しました。", "Renamed the project."),
+      renameError: tt("プロジェクト名の変更に失敗しました。", "Failed to rename the project."),
+      renameWatcherHint: tt(
+        "名前変更後は watcher スクリプト（.ps1 / .command）を再ダウンロードしてください。旧名のスクリプトは旧プロジェクトを再作成します。",
+        "After renaming, re-download the watcher scripts (.ps1 / .command). Scripts with the old name will recreate the old project.",
+      ),
+      descriptionLabel: tt("概要", "Description"),
+      descriptionPlaceholder: tt("プロジェクトの概要を入力", "Enter a project description"),
+      descriptionSave: tt("概要を保存", "Save description"),
+      descriptionSaved: tt("概要を保存しました。", "Saved the description."),
+      descriptionSaveError: tt("概要の保存に失敗しました。", "Failed to save the description."),
+      descriptionColumn: tt("概要", "Description"),
       watchTitle: tt("リアルタイム監視", "Realtime watcher"),
       watchDescription: tt(
         "CCD 画像の転送先フォルダをここで設定すると、バックエンドが新着 TIFF を直接取り込みます。",
@@ -719,6 +742,75 @@ const RealtimeProjectsPage = () => {
     },
     [labels.watchMissingPathError, labels.watchSaved, selectedWatchApiUrl, syncProjects],
   );
+
+  useEffect(() => {
+    setRenameName(projectNameParam);
+    setSettingsError(null);
+    setSettingsInfo(null);
+  }, [projectNameParam]);
+
+  useEffect(() => {
+    setDescriptionDraft(selectedWatchProject?.description ?? "");
+  }, [projectNameParam, selectedWatchProject?.description]);
+
+  const handleRenameProject = useCallback(async () => {
+    const newName = normalizeProjectName(renameName);
+    if (!newName || newName === projectNameParam) return;
+    if (projects.some((project) => project.name.toLowerCase() === newName.toLowerCase())) {
+      setSettingsError(labels.projectAlreadyExists);
+      return;
+    }
+    setRenaming(true);
+    setSettingsError(null);
+    setSettingsInfo(null);
+    try {
+      const result = await renameRealtimeWatchProject(projectNameParam, newName);
+      const renamedTo = result.new_project_name;
+      syncProjects(
+        projects.map((project) => (project.name === projectNameParam ? { ...project, name: renamedTo } : project)),
+      );
+      setWatchProjects((prev) => {
+        const next = { ...prev };
+        const previous = next[watchProjectKey(projectNameParam)];
+        delete next[watchProjectKey(projectNameParam)];
+        if (previous) {
+          next[watchProjectKey(renamedTo)] = { ...previous, project_name: renamedTo };
+        }
+        return next;
+      });
+      setSettingsInfo(labels.renameSuccess);
+      setSearchParams({ project: renamedTo });
+    } catch (err) {
+      setSettingsError(err instanceof Error ? err.message : labels.renameError);
+    } finally {
+      setRenaming(false);
+    }
+  }, [labels.projectAlreadyExists, labels.renameError, labels.renameSuccess, projectNameParam, projects, renameName, setSearchParams, syncProjects]);
+
+  const handleSaveDescription = useCallback(async () => {
+    if (!projectNameParam) return;
+    setDescriptionSaving(true);
+    setSettingsError(null);
+    setSettingsInfo(null);
+    try {
+      const saved = await saveRealtimeWatchProject(projectNameParam, {
+        watch_path: selectedWatchPath.trim() || null,
+        api_url: selectedWatchApiUrl.trim() || null,
+        enabled: selectedWatchEnabled,
+        poll_interval_seconds: 1,
+        description: descriptionDraft.trim(),
+      });
+      setWatchProjects((prev) => ({
+        ...prev,
+        [watchProjectKey(saved.project_name)]: saved,
+      }));
+      setSettingsInfo(labels.descriptionSaved);
+    } catch (err) {
+      setSettingsError(err instanceof Error ? err.message : labels.descriptionSaveError);
+    } finally {
+      setDescriptionSaving(false);
+    }
+  }, [descriptionDraft, labels.descriptionSaveError, labels.descriptionSaved, projectNameParam, selectedWatchApiUrl, selectedWatchEnabled, selectedWatchPath]);
 
   const handleDeleteProject = useCallback(
     async (rawName: string) => {
@@ -1332,6 +1424,7 @@ const RealtimeProjectsPage = () => {
                   <TableHead>
                     <TableRow>
                       <TableCell>{t("projects.table.name")}</TableCell>
+                      <TableCell>{labels.descriptionColumn}</TableCell>
                       <TableCell align="right">{t("projects.table.createdAt")}</TableCell>
                       <TableCell align="center">{t("projects.table.open")}</TableCell>
                       <TableCell align="center">{t("projects.table.delete")}</TableCell>
@@ -1344,6 +1437,13 @@ const RealtimeProjectsPage = () => {
                           <Tooltip title={project.name}>
                             <Typography noWrap sx={ELLIPSIS_TEXT_SX}>
                               {project.name}
+                            </Typography>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title={watchProjects[watchProjectKey(project.name)]?.description || ""}>
+                            <Typography noWrap color="text.secondary" variant="body2" sx={{ ...ELLIPSIS_TEXT_SX, maxWidth: 320 }}>
+                              {watchProjects[watchProjectKey(project.name)]?.description || "-"}
                             </Typography>
                           </Tooltip>
                         </TableCell>
@@ -1404,6 +1504,11 @@ const RealtimeProjectsPage = () => {
             <Typography variant="body2" color="text.secondary">
               {projectNameParam}
             </Typography>
+            {selectedWatchProject?.description ? (
+              <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "pre-wrap" }}>
+                {selectedWatchProject.description}
+              </Typography>
+            ) : null}
           </Box>
           <Button
             size="small"
@@ -1414,6 +1519,54 @@ const RealtimeProjectsPage = () => {
             {labels.backToProjects}
           </Button>
         </Stack>
+
+        <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 } }}>
+          <Stack spacing={1.5}>
+            <Typography variant="h6" fontWeight={600}>
+              {labels.settingsTitle}
+            </Typography>
+            {settingsError && <Alert severity="error">{settingsError}</Alert>}
+            {settingsInfo && <Alert severity="success">{settingsInfo}</Alert>}
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} alignItems={{ xs: "stretch", sm: "center" }}>
+              <TextField
+                size="small"
+                label={labels.renameLabel}
+                value={renameName}
+                onChange={(event) => setRenameName(event.target.value)}
+                sx={{ maxWidth: 420, width: "100%" }}
+              />
+              <Button
+                variant="outlined"
+                onClick={() => void handleRenameProject()}
+                disabled={
+                  renaming ||
+                  !normalizeProjectName(renameName) ||
+                  normalizeProjectName(renameName) === projectNameParam
+                }
+              >
+                {renaming ? labels.renaming : labels.renameButton}
+              </Button>
+            </Stack>
+            <Typography variant="caption" color="text.secondary">
+              {labels.renameWatcherHint}
+            </Typography>
+            <TextField
+              size="small"
+              label={labels.descriptionLabel}
+              placeholder={labels.descriptionPlaceholder}
+              value={descriptionDraft}
+              onChange={(event) => setDescriptionDraft(event.target.value)}
+              fullWidth
+              multiline
+              minRows={2}
+            />
+            <Box>
+              <Button variant="contained" onClick={() => void handleSaveDescription()} disabled={descriptionSaving}>
+                {descriptionSaving ? labels.watchSaving : labels.descriptionSave}
+              </Button>
+            </Box>
+          </Stack>
+        </Paper>
 
         <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 } }}>
           <Stack spacing={1.5}>

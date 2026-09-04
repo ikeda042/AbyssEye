@@ -1016,6 +1016,68 @@ async def delete_project(project_name: str) -> ProjectDeleteResult:
     return ProjectDeleteResult(deleted_project=safe_project, deleted_folders=deleted_folders)
 
 
+def _renamed_scoped_name(name: str, old_project: str, new_project: str) -> str | None:
+    """プロジェクトスコープを持つ名前をリネーム後の名前に変換する。対象外なら None。"""
+    legacy_prefix = f"{old_project}__"
+    if name.startswith(legacy_prefix):
+        return f"{new_project}__{name[len(legacy_prefix):]}"
+
+    # 新命名: YYYYMMDD_<project> / YYYYMMDD_<project>_...
+    stem = Path(name).stem
+    suffix = name[len(stem):]
+    if len(stem) > 9 and stem[:8].isdigit() and stem[8] == "_":
+        tail = stem[9:]
+        if tail == old_project:
+            return f"{stem[:9]}{new_project}{suffix}"
+        if tail.startswith(f"{old_project}_"):
+            return f"{stem[:9]}{new_project}{tail[len(old_project):]}{suffix}"
+    return None
+
+
+async def rename_project_storage(old_project_name: str, new_project_name: str) -> dict[str, int]:
+    safe_old = _sanitize_component(old_project_name, field="プロジェクト名")
+    safe_new = _sanitize_component(new_project_name, field="プロジェクト名")
+    if safe_old == safe_new:
+        return {"renamed_folders": 0, "renamed_files": 0}
+
+    def _rename() -> dict[str, int]:
+        renames: list[tuple[Path, Path]] = []
+        if TIFF_STORAGE_DIR.exists():
+            for path in sorted(TIFF_STORAGE_DIR.iterdir(), key=lambda item: item.name.lower()):
+                if not path.is_dir():
+                    continue
+                next_name = _renamed_scoped_name(path.name, safe_old, safe_new)
+                if next_name:
+                    renames.append((path, path.with_name(next_name)))
+        if DATABASE_DIR.exists():
+            for path in sorted(DATABASE_DIR.iterdir(), key=lambda item: item.name.lower()):
+                if not path.is_file():
+                    continue
+                next_name = _renamed_scoped_name(path.name, safe_old, safe_new)
+                if next_name:
+                    renames.append((path, path.with_name(next_name)))
+
+        conflicts = [target.name for _, target in renames if target.exists()]
+        if conflicts:
+            raise HTTPException(
+                status_code=409,
+                detail=f"リネーム先が既に存在します: {', '.join(conflicts[:5])}",
+            )
+
+        renamed_folders = 0
+        renamed_files = 0
+        for source, target in renames:
+            is_dir = source.is_dir()
+            source.rename(target)
+            if is_dir:
+                renamed_folders += 1
+            else:
+                renamed_files += 1
+        return {"renamed_folders": renamed_folders, "renamed_files": renamed_files}
+
+    return await asyncio.to_thread(_rename)
+
+
 def _project_export_display_name(folder_name: str, project_name: str) -> str:
     prefix = _project_prefix(project_name)
     if folder_name.startswith(prefix):

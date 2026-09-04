@@ -10,6 +10,7 @@ export type RealtimeWatchProject = {
   poll_interval_seconds: number;
   created_at: string;
   updated_at: string;
+  description: string | null;
   running: boolean;
   accessible: boolean;
   status: string;
@@ -60,26 +61,59 @@ export const saveRealtimeWatchProject = async (
     api_url: string | null;
     enabled: boolean;
     poll_interval_seconds?: number;
+    description?: string | null;
   },
 ): Promise<RealtimeWatchProject> => {
+  const requestBody: Record<string, unknown> = {
+    watch_path: payload.watch_path,
+    api_url: payload.api_url,
+    enabled: payload.enabled,
+    poll_interval_seconds: payload.poll_interval_seconds ?? 1,
+  };
+  if (payload.description !== undefined) {
+    requestBody.description = payload.description;
+  }
   const response = await fetch(endpoint(`realtime/watch-projects/${encodeURIComponent(projectName)}`), {
     method: "PUT",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      watch_path: payload.watch_path,
-      api_url: payload.api_url,
-      enabled: payload.enabled,
-      poll_interval_seconds: payload.poll_interval_seconds ?? 1,
-    }),
+    body: JSON.stringify(requestBody),
   });
   const body: RealtimeWatchProject & { detail?: string } = await response.json().catch(() => ({} as RealtimeWatchProject));
   if (!response.ok || !body.project_name) {
     throw new Error(body.detail || "Failed to save realtime watch project.");
   }
   return body;
+};
+
+export type RealtimeWatchProjectRenameResult = {
+  old_project_name: string;
+  new_project_name: string;
+  renamed_folders: number;
+  renamed_files: number;
+};
+
+export const renameRealtimeWatchProject = async (
+  projectName: string,
+  newProjectName: string,
+): Promise<RealtimeWatchProjectRenameResult> => {
+  const response = await fetch(endpoint(`realtime/watch-projects/${encodeURIComponent(projectName)}/rename`), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ new_project_name: newProjectName }),
+  });
+  const payload: RealtimeWatchProjectRenameResult & { detail?: string } = await response
+    .json()
+    .catch(() => ({} as RealtimeWatchProjectRenameResult));
+  if (!response.ok || !payload.new_project_name) {
+    throw new Error(payload.detail || "Failed to rename project.");
+  }
+  return payload;
 };
 
 export const deleteRealtimeWatchProject = async (projectName: string): Promise<void> => {

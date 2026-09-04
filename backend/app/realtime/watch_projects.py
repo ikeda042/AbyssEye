@@ -32,6 +32,7 @@ class WatchProjectConfig:
     poll_interval_seconds: float
     created_at: datetime
     updated_at: datetime
+    description: str | None = None
 
 
 @dataclass
@@ -56,6 +57,7 @@ class WatchProjectSnapshot:
     poll_interval_seconds: float
     created_at: datetime
     updated_at: datetime
+    description: str | None
     running: bool
     accessible: bool
     status: str
@@ -102,6 +104,11 @@ def _watch_project_config_path(project_name: str) -> Path:
     return WATCH_PROJECTS_DIR / f"{safe_project}.json"
 
 
+def _normalize_description(description: str | None) -> str | None:
+    cleaned = (description or "").strip()
+    return cleaned or None
+
+
 def _serialize_config(config: WatchProjectConfig) -> dict[str, object]:
     return {
         "project_name": config.project_name,
@@ -111,6 +118,7 @@ def _serialize_config(config: WatchProjectConfig) -> dict[str, object]:
         "poll_interval_seconds": config.poll_interval_seconds,
         "created_at": config.created_at.isoformat(),
         "updated_at": config.updated_at.isoformat(),
+        "description": config.description,
     }
 
 
@@ -129,6 +137,7 @@ def _deserialize_config(payload: dict[str, object], *, fallback_project_name: st
         poll_interval_seconds=_normalize_poll_interval(payload.get("poll_interval_seconds")),  # type: ignore[arg-type]
         created_at=created_at,
         updated_at=updated_at,
+        description=_normalize_description(payload.get("description") if isinstance(payload, dict) else None),  # type: ignore[arg-type]
     )
 
 
@@ -200,6 +209,7 @@ def _runtime_for_config(config: WatchProjectConfig) -> WatchProjectSnapshot:
         poll_interval_seconds=config.poll_interval_seconds,
         created_at=config.created_at,
         updated_at=config.updated_at,
+        description=config.description,
         running=running,
         accessible=accessible,
         status=status,
@@ -899,6 +909,8 @@ async def upsert_watch_project(
     api_url: str | None = None,
     enabled: bool,
     poll_interval_seconds: float | int | None = None,
+    description: str | None = None,
+    update_description: bool = False,
 ) -> WatchProjectSnapshot:
     safe_project = _sanitize_project_name(project_name)
     normalized_path = _normalize_watch_path(watch_path)
@@ -916,6 +928,11 @@ async def upsert_watch_project(
             raise
         created_at = now
 
+    if update_description:
+        next_description = _normalize_description(description)
+    else:
+        next_description = existing.description if existing else None
+
     config = WatchProjectConfig(
         project_name=safe_project,
         watch_path=normalized_path,
@@ -924,6 +941,7 @@ async def upsert_watch_project(
         poll_interval_seconds=_normalize_poll_interval(poll_interval_seconds),
         created_at=created_at,
         updated_at=now,
+        description=next_description,
     )
     await asyncio.to_thread(_write_config, config)
     should_initialize_session = bool(
@@ -947,3 +965,43 @@ async def delete_watch_project(project_name: str) -> str:
     await _restart_watch_task(safe_project)
     _watch_runtime.pop(safe_project, None)
     return safe_project
+
+
+async def rename_project(old_project_name: str, new_project_name: str) -> dict[str, object]:
+    """プロジェクト名を変更する。
+
+    監視設定ファイルと、tiff-bulk 側の `{project}__` プレフィックス付き
+    フォルダ・データベースファイルをまとめてリネームする。
+    """
+    safe_old = _sanitize_project_name(old_project_name)
+    safe_new = _sanitize_project_name(new_project_name)
+    if safe_old == safe_new:
+        return {"old_project_name": safe_old, "new_project_name": safe_new, "renamed_folders": 0, "renamed_files": 0}
+
+    if _watch_project_config_path(safe_new).exists():
+        raise HTTPException(status_code=409, detail=f"プロジェクト {safe_new} の監視設定が既に存在します。")
+
+    counts = await tiff_bulk_crud.rename_project_storage(safe_old, safe_new)
+
+    old_config: WatchProjectConfig | None = None
+    try:
+        old_config = _load_config(safe_old)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+
+    if old_config is not None:
+        old_config.project_name = safe_new
+        old_config.updated_at = datetime.now()
+        await asyncio.to_thread(_write_config, old_config)
+        await asyncio.to_thread(_delete_config, safe_old)
+        # 旧名のタスクを停止（設定ファイルは消えているので runtime も破棄される）
+        await _restart_watch_task(safe_old)
+        _watch_runtime.pop(safe_old, None)
+        await _restart_watch_task(safe_new)
+
+    return {
+        "old_project_name": safe_old,
+        "new_project_name": safe_new,
+        **counts,
+    }
